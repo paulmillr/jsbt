@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "description": "EDIT_ME",
-  "main": "index.js",
-  "module": "index.js",
-  "types": "index.d.ts",
+  "main": "lib/index.js",
+  "module": "lib/esm/index.js",
+  "types": "lib/index.d.ts",
   "devDependencies": {
     "@paulmillr/jsbt": "0.1.0",
     "micro-bmark": "0.3.1",
