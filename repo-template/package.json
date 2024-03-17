@@ -1,0 +1,30 @@
+{
+  "name": "EDIT_ME",
+  "private": true,
+  "version": "0.1.0",
+  "description": "EDIT_ME",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "devDependencies": {
+    "@paulmillr/jsbt": "0.1.0",
+    "micro-bmark": "0.3.1",
+    "micro-should": "0.4.0",
+    "prettier": "3.1.1",
+    "typescript": "5.3.2"
+  },
+  "scripts": {
+    "build": "tsc && tsc -p tsconfig.esm.json",
+    "build:release": "cd build; npm run build:release",
+    "lint": "prettier --print-width 100 --single-quote --check index.ts",
+    "format": "prettier --print-width 100 --single-quote --write index.ts",
+    "test": "node index.test.js"
+  },
+  "keywords": [],
+  "author": "Paul Miller (https://paulmillr.com)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paulmillr/EDIT_ME.git"
+  },
+  "license": "MIT"
+}

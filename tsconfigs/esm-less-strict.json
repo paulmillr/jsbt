@@ -1,0 +1,6 @@
+{
+  "extends": "./esm.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@paulmillr/jsbt",
+  "version": "0.1.0",
+  "description": "JS build tools. Includes tsconfigs, templates and CI workflows",
+  "type": "module",
+  "files": [
+    "jsbt.js",
+    "tsconfigs/cjs.json",
+    "tsconfigs/esm.json",
+    "tsconfigs/esm-less-strict.json"
+  ],
+  "main": "jsbt.js",
+  "bin": {
+    "jsbt": "jsbt.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paulmillr/jsbt.git"
+  },
+  "keywords": [
+    "js",
+    "tsconfig",
+    "build",
+    "tool",
+    "ci",
+    "esbuild"
+  ],
+  "author": "Paul Miller",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/paulmillr/jsbt/issues"
+  },
+  "homepage": "https://github.com/paulmillr/jsbt#readme"
+}

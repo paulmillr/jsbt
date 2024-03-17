@@ -1,0 +1,3 @@
+{
+  "extends": "@paulmillr/jsbt/tsconfigs/esm.json"
+}
