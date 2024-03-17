@@ -6,11 +6,9 @@
   "type": "module",
   "devDependencies": {
     "lib": "file:..",
-    "@paulmillr/jsbt": "0.1.0",
     "esbuild": "0.20.1"
   },
   "scripts": {
-    "build:release": "npx esbuild --bundle input.js --outfile=`npx jsbt outfile` --global-name=`npx jsbt global`",
-    "build:filename": "npx jsbt outfile"
+    "build:release": "npx esbuild --bundle input.js --outfile=`npx jsbt outfile` --global-name=`npx jsbt global`"
   }
 }
