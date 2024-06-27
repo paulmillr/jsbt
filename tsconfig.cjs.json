@@ -1,5 +1,5 @@
 {
-  "extends": "./esm.json",
+  "extends": "./tsconfig.esm.json",
   "compilerOptions": {
     "module": "commonjs",
     "moduleResolution": "node10"

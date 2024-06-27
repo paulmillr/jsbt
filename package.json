@@ -1,12 +1,12 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JS build tools. Includes tsconfigs, templates and CI workflows",
   "type": "module",
   "files": [
     "jsbt.js",
-    "tsconfigs/cjs.json",
-    "tsconfigs/esm.json"
+    "tsconfig.cjs.json",
+    "tsconfig.esm.json"
   ],
   "main": "jsbt.js",
   "bin": {

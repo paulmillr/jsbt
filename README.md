@@ -25,9 +25,9 @@ Make sure to adjust `package.json` steps: `lint`, `format`, `test`, `build` and 
     - `LICENSE` - MIT license
     - `build` - directory that uses `esbuild` to create a standalone build file
       that can be used in browsers etc
-- `tsconfigs` - typescript config files that can be loaded through NPM
-    - `@paulmillr/jsbt/tsconfigs/esm.json` - ESM base config
-    - `@paulmillr/jsbt/tsconfigs/cjs.json` - common.js base config
+- `tsconfig` - typescript config files that can be loaded through NPM
+    - `@paulmillr/jsbt/tsconfig.esm.json` - ESM base config
+    - `@paulmillr/jsbt/tsconfig.cjs.json` - common.js base config
 - `jsbt.js` - binary, provides helpers for `build` directory,
   such as reading `package.json` and transforming its package name into snake-cased or
   camelCased name. When installed through NPM, it can be used as `npx jsbt`. For example, for package
