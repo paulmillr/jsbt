@@ -1,9 +1,13 @@
 {
   "compilerOptions": {
-    "target": "es2020",
-    "lib": ["es2020"],
+    "target": "es2022",
+    "lib": [
+      "es2022"
+    ],
     "strict": true,
     "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
     "allowSyntheticDefaultImports": false,
     "allowUnreachableCode": false,
     "esModuleInterop": false,
@@ -12,11 +16,7 @@
     "noUncheckedIndexedAccess": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "baseUrl": ".",
     "module": "Node16",
-    "outDir": "esm",
     "moduleResolution": "Node16"
-  },
-  "include": ["src"],
-  "exclude": ["node_modules", "lib"]
+  }
 }

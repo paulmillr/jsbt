@@ -6,8 +6,7 @@
   "files": [
     "jsbt.js",
     "tsconfigs/cjs.json",
-    "tsconfigs/esm.json",
-    "tsconfigs/esm-less-strict.json"
+    "tsconfigs/esm.json"
   ],
   "main": "jsbt.js",
   "bin": {

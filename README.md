@@ -28,8 +28,6 @@ Make sure to adjust `package.json` steps: `lint`, `format`, `test`, `build` and 
 - `tsconfigs` - typescript config files that can be loaded through NPM
     - `@paulmillr/jsbt/tsconfigs/esm.json` - ESM base config
     - `@paulmillr/jsbt/tsconfigs/cjs.json` - common.js base config
-    - `@paulmillr/jsbt/tsconfigs/esm-less-strict.json` - ESM config that sets
-      `noUncheckedIndexedAccess` to `false` instead of `true`
 - `jsbt.js` - binary, provides helpers for `build` directory,
   such as reading `package.json` and transforming its package name into snake-cased or
   camelCased name. When installed through NPM, it can be used as `npx jsbt`. For example, for package
