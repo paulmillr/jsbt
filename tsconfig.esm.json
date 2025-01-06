@@ -11,6 +11,7 @@
     "allowSyntheticDefaultImports": false,
     "allowUnreachableCode": false,
     "esModuleInterop": false,
+    "isolatedDeclarations": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
     "noUncheckedIndexedAccess": false,
