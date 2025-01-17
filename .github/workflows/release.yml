@@ -10,6 +10,9 @@ on:
       build-output-path:
         required: false
         type: string
+      jsr-slow-types:
+        required: false
+        type: boolean
   workflow_dispatch:
 jobs:
   publish-npm:
@@ -39,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
       - run: npm install -g jsr
-      - run: jsr publish
+        run: jsr publish --allow-slow-types ${{ inputs.jsr-slow-types && '--allow-slow-types' }}
   standalone:
     name: Upload files to GitHub Releases
     runs-on: ubuntu-24.04-arm
