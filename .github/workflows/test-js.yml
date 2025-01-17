@@ -2,9 +2,6 @@ name: Run JS tests
 on:
   workflow_call:
     inputs:
-      skip-node18:
-        required: false
-        type: boolean
       clone-submodules:
         required: false
         type: boolean
