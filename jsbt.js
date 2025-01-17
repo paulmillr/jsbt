@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { exec } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join, join as pjoin } from "node:path";
+import { basename, join as pjoin } from "node:path";
 import { promisify } from "node:util";
 
 const exec_ = promisify(exec);
@@ -58,7 +58,7 @@ async function esbuild(root, noPrefix) {
 
   const names = getNames(process.cwd());
   const inp = `input.js`;
-  const inpFull = join(root, inp);
+  const inpFull = pjoin(root, inp);
 
   if (!existsSync(inpFull))
     throw new Error("jsbt expected input.js in dir: " + root);
@@ -66,9 +66,9 @@ async function esbuild(root, noPrefix) {
   // console.log(names);
   const sel = noPrefix ? names.noprefix.snake : names.snake;
   const outDir = "out";
-  const out = join(outDir, `${sel}.js`);
-  const min = join(outDir, `${sel}.min.js`);
-  const zip = join(outDir, `${sel}.min.js.gz`);
+  const out = pjoin(outDir, `${sel}.js`);
+  const min = pjoin(outDir, `${sel}.min.js`);
+  const zip = pjoin(outDir, `${sel}.min.js.gz`);
   const glb = noPrefix ? names.noprefix.camel : names.camel;
 
   process.chdir(root);
@@ -91,12 +91,12 @@ async function esbuild(root, noPrefix) {
   }
   const kb = (bytes) => (bytes / 1024).toFixed(2);
   console.log();
-  console.log(`# build done: ${inpFull} => ${join(root, outDir)}`);
+  console.log(`# build done: ${inpFull} => ${pjoin(root, outDir)}`);
   console.log("");
-  console.log(`${c.green}${wc_out}${c.reset} lines ${join(root, out)}`);
-  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${join(root, min)}`);
+  console.log(`${c.green}${wc_out}${c.reset} lines ${basename(out)}`);
+  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${basename(min)}`);
   if (wc_zip)
-    console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${join(root, zip)}`);
+    console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${basename(zip)}`);
   return true;
 }
 
