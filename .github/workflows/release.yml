@@ -2,18 +2,16 @@ name: Publish release
 on:
   release:
     types: [created]
+  workflow_call:
+    secrets:
+      NPM_PUBLISH_TOKEN:
+        required: true
+    inputs:
+      build-output-path:
+        required: false
+        type: string
   workflow_dispatch:
 jobs:
-  publish-jsr:
-    name: Publish to JSR.io
-    runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
-      - run: npm install -g jsr
-      - run: jsr publish
   publish-npm:
     name: Publish to NPM
     runs-on: ubuntu-24.04-arm
@@ -28,10 +26,20 @@ jobs:
           cache: npm
           node-version: 22.13.0
       - run: npm ci
-      - run: npm run build
+      - run: npm run build --if-present
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+  publish-jsr:
+    name: Publish to JSR.io
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
+      - run: npm install -g jsr
+      - run: jsr publish
   standalone:
     name: Upload files to GitHub Releases
     runs-on: ubuntu-24.04-arm
@@ -45,13 +53,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: 22.13.0
-      - run: npm ci
-      - run: npm run build
-      - run: |
-          cd build
-          npm ci
-          npm run build:release
-          cd ..
-      - run: gh release upload ${{ github.event.release.tag_name }} build/`npx jsbt outfile`
+      - if: ${{ inputs.build-output-path != '' }}
+        run: npm ci
+      - if: ${{ inputs.build-output-path != '' }}
+        run: npm run build:release --if-present
+      - if: ${{ inputs.build-output-path != '' }}
+        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-output-path }}
         env:
           GH_TOKEN: ${{ github.token }}

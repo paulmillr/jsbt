@@ -12,6 +12,11 @@
   "bin": {
     "jsbt": "jsbt.js"
   },
+  "scripts": {
+    "test": "echo 'No test'",
+    "test:bun": "echo 'No test'",
+    "test:deno": "echo 'No test'"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/paulmillr/jsbt.git"
