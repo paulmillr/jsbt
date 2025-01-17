@@ -41,6 +41,14 @@ function getNames(cwd) {
   return { snake, camel, noprefix };
 }
 
+const _c = String.fromCharCode(27); // x1b, control code for terminal colors
+const c = {
+  // colors
+  red: _c + "[31m",
+  green: _c + "[32m",
+  reset: _c + "[0m",
+};
+
 async function esbuild(directory, noPrefix) {
   // inp = input.js;
   // out = noble-hashes.js;
@@ -85,9 +93,9 @@ async function esbuild(directory, noPrefix) {
   console.log();
   console.log(`# build done: ${inpFull} => ${join(directory, outDir)}`);
   console.log("");
-  console.log(`${wc_out} lines ${out}`);
-  console.log(`${kb(wc_min)} kb ${min}`);
-  if (wc_zip) console.log(`${kb(wc_zip)} kb ${zip}`);
+  console.log(`${c.green}${wc_out}${c.reset} lines ${out}`);
+  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${min}`);
+  if (wc_zip) console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${zip}`);
   return true;
 }
 
