@@ -83,8 +83,8 @@ async function esbuild(directory, noPrefix) {
   }
   const kb = (bytes) => (bytes / 1024).toFixed(2);
   console.log();
-  console.log("# build completed:");
-  console.log(`${inpFull} => ${join(directory, outDir)}`);
+  console.log(`# build done: ${inpFull} => ${join(directory, outDir)}`);
+  console.log("");
   console.log(`${wc_out} lines ${out}`);
   console.log(`${kb(wc_min)} kb ${min}`);
   if (wc_zip) console.log(`${kb(wc_zip)} kb ${zip}`);
