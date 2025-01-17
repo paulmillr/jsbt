@@ -49,7 +49,7 @@ const c = {
   reset: _c + "[0m",
 };
 
-async function esbuild(directory, noPrefix) {
+async function esbuild(root, noPrefix) {
   // inp = input.js;
   // out = noble-hashes.js;
   // min = noble-hashes.min.js;
@@ -58,10 +58,10 @@ async function esbuild(directory, noPrefix) {
 
   const names = getNames(process.cwd());
   const inp = `input.js`;
-  const inpFull = join(directory, inp);
+  const inpFull = join(root, inp);
 
   if (!existsSync(inpFull))
-    throw new Error("jsbt expected input.js in dir: " + directory);
+    throw new Error("jsbt expected input.js in dir: " + root);
 
   // console.log(names);
   const sel = noPrefix ? names.noprefix.snake : names.snake;
@@ -71,8 +71,8 @@ async function esbuild(directory, noPrefix) {
   const zip = join(outDir, `${sel}.min.js.gz`);
   const glb = noPrefix ? names.noprefix.camel : names.camel;
 
-  process.chdir(directory);
-  console.log(`> cd ${directory}`);
+  process.chdir(root);
+  console.log(`> cd ${root}`);
   await ex(`npx esbuild --bundle ${inp} --outfile=${out} --global-name=${glb}`);
   await ex(
     `npx esbuild --bundle ${inp} --outfile=${min} --global-name=${glb} --minify`
@@ -91,11 +91,12 @@ async function esbuild(directory, noPrefix) {
   }
   const kb = (bytes) => (bytes / 1024).toFixed(2);
   console.log();
-  console.log(`# build done: ${inpFull} => ${join(directory, outDir)}`);
+  console.log(`# build done: ${inpFull} => ${join(root, outDir)}`);
   console.log("");
-  console.log(`${c.green}${wc_out}${c.reset} lines ${out}`);
-  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${min}`);
-  if (wc_zip) console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${zip}`);
+  console.log(`${c.green}${wc_out}${c.reset} lines ${join(root, out)}`);
+  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${join(root, min)}`);
+  if (wc_zip)
+    console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${join(root, zip)}`);
   return true;
 }
 
