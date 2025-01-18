@@ -1,6 +1,6 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "JS build tools. Includes tsconfigs, templates and CI workflows",
   "type": "module",
   "files": [
@@ -14,8 +14,8 @@
   },
   "scripts": {
     "test": "echo 'No test'",
-    "test:bun": "echo 'No test'",
-    "test:deno": "echo 'No test'"
+    "test:bun": "echo 'No bun'",
+    "test:deno": "echo 'No deno'"
   },
   "repository": {
     "type": "git",
