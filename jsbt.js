@@ -79,22 +79,30 @@ async function esbuild(root, noPrefix) {
     `npx esbuild --bundle ${inp} --outfile=${min} --global-name=${glb} --minify`
   );
 
-  const stdout = async (str) => Number.parseInt((await ex(str)).stdout.trim());
-  const wc_out = await stdout(`wc -l < ${out}`);
-  const wc_min = await stdout(`wc -c < ${min}`);
+  const stdout = async (cmd) => (await ex(cmd)).stdout.trim();
+  const parseNum = async (cmd) => Number.parseInt(await stdout(cmd));
+  const wc_out = await parseNum(`wc -l < ${out}`);
+  const wc_min = await parseNum(`wc -c < ${min}`);
 
   let wc_zip = "";
   try {
     await ex(`gzip -c8 < ${min} > ${zip}`);
-    wc_zip = await stdout(`wc -c < ${zip}`);
+    wc_zip = await parseNum(`wc -c < ${zip}`);
     await ex(`rm ${zip}`);
   } catch (error) {
     console.log("gzip failed: " + error);
   }
+  let sha;
+  try {
+    sha = await stdout(`shasum -a 256 ${pjoin(outDir, "*")}`);
+  } catch (error) {}
   const kb = (bytes) => (bytes / 1024).toFixed(2);
-  console.log();
   console.log(`# build done: ${inpFull} => ${pjoin(root, outDir)}`);
-  console.log("");
+  console.log();
+  if (sha) {
+    console.log(sha.replace(new RegExp(outDir + "/", "g"), ""));
+    console.log();
+  }
   console.log(`${c.green}${wc_out}${c.reset} lines ${basename(out)}`);
   console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${basename(min)}`);
   if (wc_zip)
