@@ -1,6 +1,6 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "JS build tools. Includes tsconfigs, templates and CI workflows",
   "type": "module",
   "files": [

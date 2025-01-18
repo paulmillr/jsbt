@@ -22,7 +22,7 @@ Contains two workflows:
 4. Runs linter (if lint exists)
 5. Calculates code coverage from tests using c8
 
-Options: `clone-submodules: true / false (default)` - whether to clone repo with submodules.
+Options: `submodules: true / false (default)` - whether to clone repo with submodules.
 
 `release.yml`:
 
