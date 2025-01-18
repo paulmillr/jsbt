@@ -61,6 +61,6 @@ jobs:
       - if: ${{ inputs.build-path != '' }}
         run: npm run build:release --if-present
       - if: ${{ inputs.build-path != '' }}
-        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out
+        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out/*
         env:
           GH_TOKEN: ${{ github.token }}
