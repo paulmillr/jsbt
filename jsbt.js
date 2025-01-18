@@ -87,6 +87,7 @@ async function esbuild(root, noPrefix) {
   try {
     await ex(`gzip -c8 < ${min} > ${zip}`);
     wc_zip = await stdout(`wc -c < ${zip}`);
+    await ex(`rm ${zip}`);
   } catch (error) {
     console.log("gzip failed: " + error);
   }
