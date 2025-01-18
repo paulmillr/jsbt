@@ -73,6 +73,7 @@ async function esbuild(root, noPrefix) {
 
   process.chdir(root);
   console.log(`> cd ${root}`);
+  await ex(`npm install`);
   await ex(`npx esbuild --bundle ${inp} --outfile=${out} --global-name=${glb}`);
   await ex(
     `npx esbuild --bundle ${inp} --outfile=${min} --global-name=${glb} --minify`
