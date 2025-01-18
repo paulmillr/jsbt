@@ -7,7 +7,7 @@ on:
       NPM_PUBLISH_TOKEN:
         required: true
     inputs:
-      build-output-path:
+      build-path:
         required: false
         type: string
       jsr-slow-types:
@@ -56,11 +56,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: 22.13.0
-      - if: ${{ inputs.build-output-path != '' }}
+      - if: ${{ inputs.build-path != '' }}
         run: npm ci
-      - if: ${{ inputs.build-output-path != '' }}
+      - if: ${{ inputs.build-path != '' }}
         run: npm run build:release --if-present
-      - if: ${{ inputs.build-output-path != '' }}
-        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-output-path }}
+      - if: ${{ inputs.build-path != '' }}
+        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out
         env:
           GH_TOKEN: ${{ github.token }}

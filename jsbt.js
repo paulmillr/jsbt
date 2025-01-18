@@ -110,7 +110,7 @@ async function esbuild(root, noPrefix) {
   return true;
 }
 
-// jsbt esbuild test/build/input.js --no-prefix
+// jsbt esbuild test/build --no-prefix
 function parseCli(argv) {
   const selected = argv[2];
   const directory = argv[3];
