@@ -10,7 +10,7 @@ on:
       build-path:
         required: false
         type: string
-      jsr-slow-types:
+      slow-types:
         required: false
         type: boolean
   workflow_dispatch:
@@ -42,7 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
       - run: npm install -g jsr
-      - run: jsr publish ${{ inputs.jsr-slow-types && '--allow-slow-types' || '' }}
+        if: ${{ hashFiles('jsr.json') != '' }}
+      - run: jsr publish ${{ inputs.slow-types && '--allow-slow-types' || '' }}
+        if: ${{ hashFiles('jsr.json') != '' }}
   standalone:
     name: Upload files to GitHub Releases
     runs-on: ubuntu-24.04-arm
@@ -56,11 +58,12 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: 22.13.0
-      - if: ${{ inputs.build-path != '' }}
-        run: npm ci
-      - if: ${{ inputs.build-path != '' }}
+      - run: npm ci
+        if: ${{ inputs.build-path != '' }}
+      - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
-      - if: ${{ inputs.build-path != '' }}
-        run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out/*
+        if: ${{ inputs.build-path != '' }}
+      - run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out/*
+        if: ${{ inputs.build-path != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
