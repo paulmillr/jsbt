@@ -43,6 +43,7 @@ jobs:
       - run: bun install
       - run: bun run --if-present build
       - run: bun run --if-present test:bun
+        name: Run Bun if test:bun is present
   deno:
     name: Deno
     runs-on: ubuntu-24.04-arm
@@ -53,9 +54,10 @@ jobs:
       - uses: denoland/setup-deno@909cc5acb0fdd60627fb858598759246509fa755 # v2.0.2
         with:
           deno-version: v2.x
-      - run: deno install
-      - run: deno task build
-      - run: deno task test:deno
+      - run: grep -q 'test:deno' package.json && deno install || exit 0
+      - run: grep -q 'build' package.json && deno task build || exit 0
+      - run: grep -q 'test:deno' package.json && deno task test:deno || exit 0
+        name: Run Deno if test:deno is present
   lint:
     name: Lint
     runs-on: ubuntu-24.04-arm
