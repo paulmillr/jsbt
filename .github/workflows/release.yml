@@ -65,6 +65,10 @@ jobs:
       - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
         if: ${{ inputs.build-path != '' }}
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ inputs.build-path != '' }}
+        with:
+          subject-path: ${{ inputs.build-path }}/out/*
       - run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out/*
         if: ${{ inputs.build-path != '' }}
         env:
