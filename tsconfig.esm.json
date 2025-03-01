@@ -18,6 +18,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
     "module": "Node16",
     "moduleResolution": "Node16"
   }
