@@ -16,9 +16,9 @@
   "scripts": {
     "build": "tsc && tsc -p tsconfig.esm.json",
     "build:release": "cd build; npm run build:release",
-    "lint": "prettier --check index.ts",
-    "format": "prettier --write index.ts",
-    "test": "node index.test.js"
+    "lint": "prettier --check index.ts test",
+    "format": "prettier --write index.ts test",
+    "test": "node test/index.test.js"
   },
   "keywords": [],
   "author": "Paul Miller (https://paulmillr.com)",

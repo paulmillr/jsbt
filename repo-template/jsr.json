@@ -1,0 +1,19 @@
+{
+  "name": "EDIT_ME",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "@noble/hashes": "jsr:@noble/hashes@1.7.1"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "jsr.json",
+      "LICENSE",
+      "README.md"
+    ]
+  },
+  "license": "MIT"
+}
