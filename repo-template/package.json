@@ -7,11 +7,11 @@
   "module": "lib/esm/index.js",
   "types": "lib/index.d.ts",
   "devDependencies": {
-    "@paulmillr/jsbt": "0.1.0",
-    "micro-bmark": "0.3.1",
-    "micro-should": "0.4.0",
-    "prettier": "3.1.1",
-    "typescript": "5.3.2"
+    "@paulmillr/jsbt": "0.3.3",
+    "micro-bmark": "0.4.0",
+    "micro-should": "0.5.1",
+    "prettier": "3.5.2",
+    "typescript": "5.8.2"
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.esm.json",
