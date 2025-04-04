@@ -1,81 +1,22 @@
 # @paulmillr/jsbt
 
-Build tools for js projects. Includes tsconfigs, templates and CI workflows
+Typescript configs, build tools and templates for JS projects.
 
-## tsconfigs
-
-There are two base strict tsconfig with a few interesting options:
-
-- isolatedDeclarations - ensures output is friendly to JSR.io
-- verbatimModuleSyntax - ensures files are friendly to "type erasure" / "type ignore"
-  node.js and others.
-
-## GitHub CI workflows
-
-Contains two workflows:
-
-`test-js.yml`:
-
-1. Runs node.js tests on LTS versions
-2. Runs Bun tests (if test:bun exists)
-3. Runs Deno tests (TODO: do not run if no test:bun)
-4. Runs linter (if lint exists)
-5. Calculates code coverage from tests using c8
-
-Options: `submodules: true / false (default)` - whether to clone repo with submodules.
-
-`release.yml`:
-
-1. Publishes release on NPM
-2. Publishes release on JSR if jsr.json exists
-
-Options:
-
-- `build-path: string` - path to build directory, which contains `out` dir, from which
-  files would be uploaded to github releases
-- `slow-types: true / false (default)` - whether to allow slow types on JSR.io. Check jsr docs
-
-## Usage
-
-Copy all files from `repo-template` when creating a new project.
-Then, edit `EDIT_ME` parts in copied files.
-
-Libraries can have different structure. Edit it to your needs:
-
-- A library can be single-file (`index.ts`), or multiple-files (`src` directory)
-- A library can be ESM-only (one tsconfig), or hybrid ESM+Common.js (two tsconfigs)
-
-Make sure to adjust `package.json` steps: `lint`, `format`, `test`, `build` and `tsconfig`
-
-## Structure
-
-- `repo-template` - files that should be copied when a new repo is created
-  - `.github` - github ci workflows:
-    - run npm tests on every commit
-    - publish npm package on every release, using GitHub CI and provenance
-    - upload standalone build files to github release, from `build` directory
-  - `.prettierrc.json`, `tsconfig.esm.json`: prettier and typescript configs
-  - `LICENSE` - MIT license
-  - `build` - directory that uses `esbuild` to create a standalone build file
-    that can be used in browsers etc
-- `tsconfig` - typescript config files that can be loaded through NPM
-  - `@paulmillr/jsbt/tsconfig.esm.json` - ESM base config
-  - `@paulmillr/jsbt/tsconfig.cjs.json` - common.js base config
-- `jsbt.js` - binary, provides helpers for `build` directory,
-  such as reading `package.json` and transforming its package name into snake-cased or
-  camelCased name. When installed through NPM, it can be used as `npx jsbt`. For example, for package
-  "@namespace/ab-cd", it would emit:
-  - `npx jsbt outfile` - `namespace-ab-cd`
-  - `npx jsbt global` - `namespaceAbCd`
-
-## Updates
-
-- When prettier, tsconfig, esbuild are updated, adjust
-  `repo-template/package.json` and `repo-template/build/package.json`
-- When node.js LTS is updated, adjust `repo-template/.github/workflows/*.yml`
-- When GitHub CI checkout action is updated, adjust `repo-template/.github/workflows/*.yml`
-  - contents with `actions/checkout@` will need to be set to new values
-  - ensure it's commit ids and not tags, because tags are mutable (less secure)
+* `jsbt.js` calls [esbuild](https://esbuild.github.io) to produce single-file package output
+* `.github/workflows` contains GitHub CI configs for testing & publishing JS packages:
+    * `test-js.yml` runs tests on LTS node.js, bun, deno, linter, and calculates coverage
+        * `submodules: true / false (default)` option determines whether to clone submodules
+    * `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
+        * `build-path: string` - path to build directory, which contains `out` dir, from which
+          files would be uploaded to github releases
+        * `slow-types: true / false (default)` - whether to allow [slow types](https://jsr.io/docs/about-slow-types) on JSR.io
+* `tsconfig.esm.json` and `tsconfig.cjs.json` allow inheritance with a few useful options:
+    * Overall they are quite strict
+    * `isolatedDeclarations` ensures types are "fast" and friendly to JSR.io
+    * `verbatimModuleSyntax` - ensures files are friendly to "type erasure" / "type ignore"
+  node.js and others
+* `repo-template` contains project skeleton, which can be used to create a new package
+    * Replace EDIT_ME with proper value
 
 ## License
 
