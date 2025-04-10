@@ -3,6 +3,7 @@ on:
   workflow_call:
     inputs:
       submodules:
+        default: false
         required: false
         type: boolean
   workflow_dispatch:
@@ -18,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
-          submodules: ${{ inputs.submodules || false }}
+          submodules: ${{ inputs.submodules }}
       - name: Use Node.js ${{ matrix.node }}
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4
         with:
@@ -36,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
-          submodules: ${{ inputs.submodules || false }}
+          submodules: ${{ inputs.submodules }}
       - uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: latest
@@ -50,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
-          submodules: ${{ inputs.submodules || false }}
+          submodules: ${{ inputs.submodules }}
       - uses: denoland/setup-deno@909cc5acb0fdd60627fb858598759246509fa755 # v2.0.2
         with:
           deno-version: v2.x
@@ -80,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
-          submodules: ${{ inputs.submodules || false }}
+          submodules: ${{ inputs.submodules }}
       - uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4
         with:
           registry-url: "https://registry.npmjs.org"
