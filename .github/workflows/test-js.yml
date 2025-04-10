@@ -5,11 +5,15 @@ on:
       submodules:
         required: false
         type: boolean
+      runs-on:
+        default: ubuntu-24.04-arm
+        required: false
+        type: string
   workflow_dispatch:
 jobs:
   node:
     name: Node v${{ matrix.node }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     env:
       MSHOULD_FAST: 1
     strategy:
@@ -30,7 +34,7 @@ jobs:
       - run: npm test
   bun:
     name: Bun
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     env:
       MSHOULD_FAST: 1
     steps:
@@ -46,7 +50,7 @@ jobs:
         name: Run test:bun if present
   deno:
     name: Deno
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
@@ -62,7 +66,7 @@ jobs:
         name: Run test:deno if present
   lint:
     name: Lint
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
       - uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4
@@ -74,7 +78,7 @@ jobs:
       - run: npm run lint --if-present
   coverage:
     name: Measure coverage
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     env:
       MSHOULD_FAST: 0
     steps:
