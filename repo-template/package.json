@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "description": "EDIT_ME",
-  "main": "lib/index.js",
-  "module": "lib/esm/index.js",
-  "types": "lib/index.d.ts",
+  "main": "./lib/index.js",
+  "module": "./lib/esm/index.js",
+  "types": "./lib/index.d.ts",
   "devDependencies": {
     "@paulmillr/jsbt": "0.3.3",
     "micro-bmark": "0.4.0",
@@ -15,16 +15,18 @@
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.esm.json",
-    "build:release": "cd build; npm run build:release",
+    "build:release": "npx jsbt esbuild test/build",
     "lint": "prettier --check index.ts test",
     "format": "prettier --write index.ts test",
     "test": "node test/index.test.js"
   },
   "keywords": [],
+  "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/paulmillr/EDIT_ME.git"
   },
+  "funding": "https://paulmillr.com/funding/",
   "license": "MIT"
 }
