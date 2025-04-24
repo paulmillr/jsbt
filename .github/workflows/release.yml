@@ -23,11 +23,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
-      - uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
-          cache: npm
-          node-version: 22.13.0
+          node-version: 22.15.0
       - run: npm ci
       - run: npm run build --if-present
       - run: npm publish --provenance --access public
@@ -54,11 +53,10 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
-      - uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
-          cache: npm
-          node-version: 22.13.0
+          node-version: 22.15.0 # Apr 2025
       - run: npm ci
         if: ${{ inputs.build-path != '' }}
       - run: npm run build --if-present
