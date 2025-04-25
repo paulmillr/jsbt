@@ -88,7 +88,6 @@ jobs:
       - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
         if: ${{ inputs.build-path != '' }}
         with:
-          subject-path: ./*.js
           subject-checksums: checksums.txt
       - run: gh release upload ${{ github.event.release.tag_name }} ./*.js
         if: ${{ inputs.build-path != '' }}
