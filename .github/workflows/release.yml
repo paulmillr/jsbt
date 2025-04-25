@@ -85,8 +85,8 @@ jobs:
       - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
         if: ${{ inputs.build-path != '' }}
         with:
-          subject-path: ${{ inputs.build-path }}/out/*
-      - run: gh release upload ${{ github.event.release.tag_name }} ${{ inputs.build-path }}/out/*
+          subject-path: standalone-build/*
+      - run: gh release upload ${{ github.event.release.tag_name }} standalone-build/*
         if: ${{ inputs.build-path != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
