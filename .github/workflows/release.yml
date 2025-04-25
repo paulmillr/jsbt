@@ -66,6 +66,9 @@ jobs:
       - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
         if: ${{ inputs.build-path != '' }}
+      - name: Write checksum
+        run: shasum -a 256 ${{ inputs.build-path }}/out/*.js > ${{ inputs.build-path }}/out/checksums.txt
+        if: ${{ inputs.build-path != '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-build
@@ -82,12 +85,12 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-build
-      - run: find .
       - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
         if: ${{ inputs.build-path != '' }}
         with:
-          subject-path: standalone-build/*
-      - run: gh release upload ${{ github.event.release.tag_name }} standalone-build/*
+          subject-path: ./*.js
+          subject-checksums: checksums.txt
+      - run: gh release upload ${{ github.event.release.tag_name }} ./*.js
         if: ${{ inputs.build-path != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
