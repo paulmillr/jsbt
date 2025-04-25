@@ -89,7 +89,10 @@ jobs:
         if: ${{ inputs.build-path != '' }}
         with:
           subject-checksums: checksums.txt
-      - run: gh release upload ${{ github.event.release.tag_name }} ./*.js
+      - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
+        with:
+          persist-credentials: false
+      - run: gh release upload ${{ github.event.release.tag_name }} ./*.js --repo $GITHUB_REPOSITORY
         if: ${{ inputs.build-path != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
