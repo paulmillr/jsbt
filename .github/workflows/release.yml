@@ -14,15 +14,18 @@ on:
         required: false
         type: boolean
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   publish-npm:
     name: Publish to NPM
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
+        with:
+          persist-credentials: false # Remove git token after fetch
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
@@ -36,23 +39,22 @@ jobs:
     name: Publish to JSR.io
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
+        with:
+          persist-credentials: false
       - run: npm install -g jsr
         if: ${{ hashFiles('jsr.json') != '' }}
       - run: jsr publish ${{ inputs.slow-types && '--allow-slow-types' || '' }}
         if: ${{ hashFiles('jsr.json') != '' }}
-  standalone:
-    name: Upload files to GitHub Releases
+  standalone-build:
+    name: Build files for GitHub Releases
     runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
@@ -64,6 +66,22 @@ jobs:
       - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
         if: ${{ inputs.build-path != '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: standalone-build
+          path: ${{ inputs.build-path }}/out/*
+  standalone-upload:
+    needs: standalone-build
+    name: Upload files to GitHub Releases
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: standalone-build
       - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
         if: ${{ inputs.build-path != '' }}
         with:
