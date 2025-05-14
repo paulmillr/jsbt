@@ -51,6 +51,7 @@ jobs:
   standalone-build: # Build standalone files using JSBT, calculate sha2-256 sum
     name: Build files for GitHub Releases
     runs-on: ubuntu-24.04-arm
+    if: ${{ inputs.build-path != '' }}
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
@@ -60,15 +61,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           node-version: 22.15.0 # Apr 2025
       - run: npm ci
-        if: ${{ inputs.build-path != '' }}
       - run: npm run build --if-present
-        if: ${{ inputs.build-path != '' }}
       - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
-        if: ${{ inputs.build-path != '' }}
       - name: Write checksum
         run: cd ${{ inputs.build-path }}/out; shasum -a 256 *.js > checksums.txt
-        if: ${{ inputs.build-path != '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-build
@@ -77,6 +74,7 @@ jobs:
     needs: standalone-build
     name: Upload files to GitHub Releases
     runs-on: ubuntu-24.04-arm
+    if: ${{ inputs.build-path != '' }}
     permissions:
       contents: write
       id-token: write
@@ -86,10 +84,8 @@ jobs:
         with:
           name: standalone-build
       - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
-        if: ${{ inputs.build-path != '' }}
         with:
           subject-checksums: checksums.txt
       - run: gh release upload ${{ github.event.release.tag_name }} ./*.js --repo $GITHUB_REPOSITORY
-        if: ${{ inputs.build-path != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
