@@ -17,7 +17,7 @@ on:
 permissions:
   contents: read
 jobs:
-  publish-npm:
+  publish-npm: # Publish to NPM, with transparent provenance statement
     name: Publish to NPM
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -35,7 +35,7 @@ jobs:
       - run: npm publish --provenance --access public # Won't work for 1st publish (no token exists)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-  publish-jsr:
+  publish-jsr: # Publish to JSR, if jsr.json exists; optional allow-slow-types
     name: Publish to JSR.io
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -48,7 +48,7 @@ jobs:
         if: ${{ hashFiles('jsr.json') != '' }}
       - run: jsr publish ${{ inputs.slow-types && '--allow-slow-types' || '' }}
         if: ${{ hashFiles('jsr.json') != '' }}
-  standalone-build:
+  standalone-build: # Build standalone files using JSBT, calculate sha2-256 sum
     name: Build files for GitHub Releases
     runs-on: ubuntu-24.04-arm
     steps:
@@ -73,7 +73,7 @@ jobs:
         with:
           name: standalone-build
           path: ${{ inputs.build-path }}/out/*
-  standalone-upload:
+  standalone-upload: # Separate (from "build") action for security
     needs: standalone-build
     name: Upload files to GitHub Releases
     runs-on: ubuntu-24.04-arm
