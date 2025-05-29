@@ -14,7 +14,7 @@
     "typescript": "5.8.2"
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.esm.json",
+    "build": "tsc && tsc -p tsconfig.cjs.json",
     "build:release": "npx jsbt esbuild test/build",
     "lint": "prettier --check index.ts test",
     "format": "prettier --write index.ts test",
