@@ -34,7 +34,7 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm test
-  node:
+  nodeold:
     name: Node v${{ matrix.node }}, typescript with compilation
     runs-on: ${{ inputs.runs-on }}
     env:
