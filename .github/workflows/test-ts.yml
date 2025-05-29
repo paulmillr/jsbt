@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 jobs:
   node:
-    name: Node v${{ matrix.node }} typescript
+    name: Node v${{ matrix.node }} ts
     runs-on: ${{ inputs.runs-on }}
     env:
       MSHOULD_FAST: 1
@@ -35,7 +35,7 @@ jobs:
       - run: npm run build --if-present
       - run: npm test
   nodeold:
-    name: Node v${{ matrix.node }}, typescript with compilation
+    name: Node v${{ matrix.node }} ts (compiled)
     runs-on: ${{ inputs.runs-on }}
     env:
       MSHOULD_FAST: 1
@@ -120,4 +120,4 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm install --no-save c8@10.1.2 # Don't want lockfiles. Any better way?
-      - run: npx c8 npm test
+      - run: npx c8 npm run test:node20 --if-present
