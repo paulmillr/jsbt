@@ -14,12 +14,13 @@ on:
 jobs:
   node:
     name: Node v${{ matrix.node }}
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ matrix.os }}
     env:
       MSHOULD_FAST: 1
     strategy:
       matrix: # May 2025 LTS versions. In release.yml, we hardcode specific v1.2.3 for determinism.
         node: [20, 22, 24] # In tests, it's better to have latest node updates instead.
+        os: [ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
