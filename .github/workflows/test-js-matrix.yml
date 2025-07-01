@@ -1,4 +1,4 @@
-name: Run TS tests
+name: Run JS tests
 on:
   workflow_call:
     inputs:
@@ -6,20 +6,17 @@ on:
         default: false
         required: false
         type: boolean
-      runs-on:
-        default: ubuntu-24.04-arm
-        required: false
-        type: string
   workflow_dispatch:
 jobs:
   node:
-    name: Node v${{ matrix.node }} ts
-    runs-on: ${{ inputs.runs-on }}
+    name: Node v${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
     env:
       MSHOULD_FAST: 1
     strategy:
       matrix: # May 2025 LTS versions. In release.yml, we hardcode specific v1.2.3 for determinism.
-        node: [22, 24] # In tests, it's better to have latest node updates instead.
+        node: [20, 22, 24] # In tests, it's better to have latest node updates instead.
+        os: [ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
@@ -34,31 +31,9 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm test
-  nodeold:
-    name: Node v${{ matrix.node }} ts (compiled)
-    runs-on: ${{ inputs.runs-on }}
-    env:
-      MSHOULD_FAST: 1
-    strategy:
-      matrix: # May 2025 LTS versions. In release.yml, we hardcode specific v1.2.3 for determinism.
-        node: [20]
-    steps:
-      - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
-        with:
-          persist-credentials: false
-          submodules: ${{ inputs.submodules }}
-      - name: Use Node.js ${{ matrix.node }}
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
-        with:
-          registry-url: "https://registry.npmjs.org"
-          cache: npm
-          node-version: ${{ matrix.node }}
-      - run: npm install
-      - run: npm run build --if-present
-      - run: npm run test:node20 --if-present
   bun:
     name: Bun
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ubuntu-24.04-arm
     env:
       MSHOULD_FAST: 1
     steps:
@@ -74,7 +49,7 @@ jobs:
       - run: bun run --if-present test:bun
   deno:
     name: Deno
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
@@ -91,7 +66,7 @@ jobs:
         name: Run test:deno if present
   lint:
     name: Lint
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 # v4
         with:
@@ -105,7 +80,7 @@ jobs:
       - run: npm run lint --if-present
   coverage:
     name: Measure coverage
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ubuntu-24.04-arm
     env:
       MSHOULD_FAST: 0 # Disable parallelism for coverage
     steps:
@@ -120,4 +95,4 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm install --no-save c8@10.1.2 # Don't want lockfiles. Any better way?
-      - run: npx c8 npm run test:node20 --if-present
+      - run: npx c8 npm test
