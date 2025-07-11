@@ -3,7 +3,7 @@ on:
   workflow_call:
     inputs:
       submodules:
-        default: false
+        default: true
         required: false
         type: boolean
       runs-on:
