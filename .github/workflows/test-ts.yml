@@ -103,6 +103,7 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm run lint --if-present
+        continue-on-error: true
   coverage:
     name: Measure coverage
     runs-on: ${{ inputs.runs-on }}

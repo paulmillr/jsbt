@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.cjs.json",
-    "build:release": "npx jsbt esbuild test/build",
+    "build:release": "npx --no @paulmillr/jsbt esbuild test/build",
     "lint": "prettier --check index.ts test",
     "format": "prettier --write index.ts test",
     "test": "node test/index.test.js"
