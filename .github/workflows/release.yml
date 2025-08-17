@@ -29,14 +29,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
-          node-version: 24.6.0 # Aug 2025
+          node-version: 24.6.0 # Relevant as per Aug 2025, must be specific for determinism.
       - run: npm ci # Built-in NPM version, do not install newer
       - run: npm run build --if-present
       - run: npm publish --provenance --access public # Won't work for 1st publish (no token exists)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
   publish-jsr: # Publish to JSR, if jsr.json exists; optional allow-slow-types
-    name: Publish to JSR.io
+    name: Publish to JSR
     runs-on: ubuntu-24.04-arm
     permissions:
       id-token: write
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
         with:
           registry-url: "https://registry.npmjs.org"
-          node-version: 24.6.0 # May 2025
+          node-version: 24.6.0 # Relevant as per Aug 2025, must be specific for determinism.
       - run: npm ci
       - run: npm run build --if-present
       - name: Build bundled and minified files, calculate checksums

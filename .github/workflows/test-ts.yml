@@ -18,8 +18,8 @@ jobs:
     env:
       MSHOULD_FAST: 1
     strategy:
-      matrix: # May 2025 LTS versions. In release.yml, we hardcode specific v1.2.3 for determinism.
-        node: [22, 24] # In tests, it's better to have latest node updates instead.
+      matrix:
+        node: [22, 24] # Aug 2025 LTS
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
@@ -40,8 +40,8 @@ jobs:
     env:
       MSHOULD_FAST: 1
     strategy:
-      matrix: # May 2025 LTS versions. In release.yml, we hardcode specific v1.2.3 for determinism.
-        node: [20]
+      matrix:
+        node: [20] # Aug 2025 LTS
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
