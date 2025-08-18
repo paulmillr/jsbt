@@ -17,6 +17,13 @@ Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 
 > `jsr add jsr:@paulmillr/jsbt`
 
+- [🏋🏻 bench](#bench)
+- [🏗️ jsbt.js](#jsbtjs)
+- [📝 test](#test)
+- [⚙️ tsconfig](#tsconfig)
+- [🤖 workflows](#workflows)
+- [repo-template](#repo-template)
+
 ## bench
 
 Benchmark JS projects with nanosecond resolution.
