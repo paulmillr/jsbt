@@ -1,26 +1,32 @@
 {
   "name": "@paulmillr/jsbt",
   "version": "0.4.2",
-  "description": "JS build tools: tsconfigs, templates, scripts and CI workflows",
-  "type": "module",
+  "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
     "jsbt.js",
+    "jsbt.d.ts",
+    "bench.js",
+    "bench.d.ts",
+    "bench-compare.js",
+    "bench-compare.d.ts",
+    "test.js",
+    "test.d.ts",
     "tsconfig.json",
     "tsconfig.cjs.json",
     "tsconfig.test.json"
   ],
-  "main": "jsbt.js",
   "bin": {
     "jsbt": "jsbt.js"
   },
+  "devDependencies": {
+    "@types/node": "24.2.1",
+    "typescript": "5.9.2"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.example.json",
     "test": "echo 'No test'",
     "test:bun": "echo 'No bun'",
     "test:deno": "echo 'No deno'"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/paulmillr/jsbt.git"
   },
   "keywords": [
     "js",
@@ -30,10 +36,15 @@
     "ci",
     "esbuild"
   ],
-  "author": "Paul Miller",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/paulmillr/jsbt/issues"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paulmillr/jsbt.git"
   },
-  "homepage": "https://github.com/paulmillr/jsbt#readme"
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "sideEffects": false,
+  "author": "Paul Miller (https://paulmillr.com)",
+  "license": "MIT"
 }

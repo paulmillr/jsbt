@@ -1,16 +1,40 @@
 #!/usr/bin/env node
+/**
+ * jsbt(1) helps to produce single-file package output for JS projects.
+ *
+ * Usage:
+ *   npx --no @paulmillr/jsbt esbuild test/build
+ * The command would execute following subcommands and produce several files:
+```
+> cd test/build
+> npm install
+> npx esbuild --bundle input.js --outfile=out/noble-hashes.js --global-name=nobleHashes
+> npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=nobleHashes --minify
+> wc -l < out/noble-hashes.js
+> wc -c < out/noble-hashes.min.js
+> gzip -c8 < out/noble-hashes.min.js > out/noble-hashes.min.js.gz
+> wc -c < out/noble-hashes.min.js.gz
+> rm out/noble-hashes.min.js.gz
+> shasum -a 256 out/*
+# build done: test/build/input.js => test/build/out
+
+64edcb68e6fe5924f37e65c9c38eee2a631f9aad6cba697675970bb4ca34fa41  noble-hashes.js
+798f32aa84880b3e4fd7db77a5e3dd680c1aa166cc431141e18f61b467e8db18  noble-hashes.min.js
+```
+ * @module
+ */
 import { exec } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join as pjoin } from "node:path";
 import { promisify } from "node:util";
 
 const exec_ = promisify(exec);
-const ex = (cmd) => {
+const ex = (cmd: string) => {
   console.log(`> ${cmd}`);
   return exec_(cmd);
 };
 
-function snakeToCamel(snakeCased) {
+function snakeToCamel(snakeCased: string) {
   return snakeCased
     .split("-")
     .map((words, index) => {
@@ -20,7 +44,7 @@ function snakeToCamel(snakeCased) {
 }
 
 // @namespace/ab-cd => namespace-ab-cd and namespaceAbCd
-function getNames(cwd) {
+function getNames(cwd: string) {
   // packageJsonName = '@space/test-runner'; // consider this value
   const curr = pjoin(cwd, "package.json");
   let packageJsonName;
@@ -49,7 +73,7 @@ const c = {
   reset: _c + "[0m",
 };
 
-async function esbuild(root, noPrefix) {
+async function esbuild(root: string, noPrefix: boolean) {
   // inp = input.js;
   // out = noble-hashes.js;
   // min = noble-hashes.min.js;
@@ -79,12 +103,12 @@ async function esbuild(root, noPrefix) {
     `npx esbuild --bundle ${inp} --outfile=${min} --global-name=${glb} --minify`
   );
 
-  const stdout = async (cmd) => (await ex(cmd)).stdout.trim();
-  const parseNum = async (cmd) => Number.parseInt(await stdout(cmd));
+  const stdout = async (cmd: string) => (await ex(cmd)).stdout.trim();
+  const parseNum = async (cmd: string) => Number.parseInt(await stdout(cmd));
   const wc_out = await parseNum(`wc -l < ${out}`);
   const wc_min = await parseNum(`wc -c < ${min}`);
 
-  let wc_zip = "";
+  let wc_zip = 0;
   try {
     await ex(`gzip -c8 < ${min} > ${zip}`);
     wc_zip = await parseNum(`wc -c < ${zip}`);
@@ -96,7 +120,7 @@ async function esbuild(root, noPrefix) {
   try {
     sha = await stdout(`shasum -a 256 ${pjoin(outDir, "*")}`);
   } catch (error) {}
-  const kb = (bytes) => (bytes / 1024).toFixed(2);
+  const kb = (bytes: number) => (bytes / 1024).toFixed(2);
   console.log(`# build done: ${inpFull} => ${pjoin(root, outDir)}`);
   console.log();
   if (sha) {
@@ -111,7 +135,7 @@ async function esbuild(root, noPrefix) {
 }
 
 // jsbt esbuild test/build --no-prefix
-function parseCli(argv) {
+function parseCli(argv: string[]) {
   const selected = argv[2];
   const directory = argv[3];
   const noPrefix = argv.includes("--no-prefix");
