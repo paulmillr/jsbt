@@ -87,15 +87,9 @@ Multi-env testing framework with familiar syntax & parallel execution.
 - Parallel: easily run in node.js and bun
 - Great UI: beautiful tree reporter, optional "quiet" dot reporter
 
-```js
-import { should } from 'micro-should';
-should.opts.STOP_AT_ERROR = false; // default=true
-should.opts.MSHOULD_QUIET = true; // same as env var
-```
+> `node a.test.js`
 
-To run the example in parallel / quiet setting, save it as a.test.js:
-
-    MSHOULD_FAST=1 MSHOULD_QUIET=1 node a.test.js
+> `MSHOULD_FAST=1 MSHOULD_QUIET=1 node a.test.js`
 
 ```js
 import { should } from 'micro-should';
@@ -124,6 +118,8 @@ describe('nested', () => {
 should.runWhen(import.meta.url);
 // or
 // should.run();
+// should.opts.STOP_AT_ERROR = false; // default=true
+// should.opts.MSHOULD_QUIET = true; // same as env var
 ```
 
 Usage:
