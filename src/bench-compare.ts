@@ -8,7 +8,7 @@
  */
 // @ts-nocheck
 // TODO: remove ^
-import { utils } from './index.js';
+import { utils } from './bench.ts';
 const { benchmarkRaw } = utils;
 
 const _c = String.fromCharCode(27);
@@ -248,7 +248,7 @@ async function compare(title: string, dimensions: any, libs: any, opts: any): vo
               perSecStr: '',
               perItemStr: '0ns',
             }
-          : await benchmarkRaw(currSamples, () => lib(...args));
+          : await benchmarkRaw(() => lib(...args), currSamples);
         if (baselineOps === undefined && baselinePerOps === undefined) {
           baselineOps = perSec;
           baselinePerOps = stats.mean;

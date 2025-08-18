@@ -23,11 +23,7 @@ export type BenchStats = {
   measurements: bigint[];
 };
 export type CbFn = (iter?: number) => {};
-export type BenchOpts = Partial<{
-  samples: number;
-  maxRunTimeSec: number;
-  optimizeGC: boolean;
-}>;
+const maxSamples = 2 ** 26;
 const _c = String.fromCharCode(27);
 const red = _c + '[31m';
 const green = _c + '[32m';
@@ -159,13 +155,12 @@ function getTime(): bigint {
   // @ts-ignore
   return process.hrtime.bigint();
 }
-const maxSamples = 2 ** 26;
 async function benchmarkRaw(callback: CbFn, samples: number): Promise<BenchStats> {
   if (typeof callback !== 'function') throw new Error('callback must be a function');
   if (typeof samples !== 'number' || samples <= 0 || samples > maxSamples)
     throw new Error('samples must be a number');
-  // List containing sample times
-  // pre-allocating using `new Array(1_000_000)` is in some cases more efficient for
+  // measurements contain sample timings
+  // `new Array(30_000_000)` pre-allocation is in some cases more efficient for
   // garbage collection than growing array size continuously.
   const measurements = [];
   let total = 0n;
@@ -186,7 +181,8 @@ async function benchmarkRaw(callback: CbFn, samples: number): Promise<BenchStats
   const perSecStr = formatter.format(sec / stats.mean);
   return { stats, perSecStr, perSec, perItemStr, measurements };
 }
-export async function mark(
+
+export async function bench(
   label: string,
   fn: CbFn,
   samples: number = maxSamples
@@ -206,7 +202,7 @@ export async function mark(
   return;
 }
 
-export default mark;
+export default bench;
 export const utils: {
   getTime: typeof getTime;
   setMaxRunTime: typeof setMaxRunTime;
