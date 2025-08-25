@@ -6,20 +6,25 @@
  *   npx --no @paulmillr/jsbt esbuild test/build
  * The command would execute following subcommands and produce several files:
 ```
+
+npx --no @paulmillr/jsbt --auto => gets package.json main field, uses auto-input.js
+npx --no @paulmillr/jsbt --bundle test/build-input.js
+
 > cd test/build
+> inputs/noble-hashes.js => outputs/noble-hashes.js
+> inputs/noble-hashes-sha256.js => outputs/noble-hashes-sha256.js
+> cd build
 > npm install
 > npx esbuild --bundle input.js --outfile=out/noble-hashes.js --global-name=nobleHashes
 > npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=nobleHashes --minify
-> wc -l < out/noble-hashes.js
-> wc -c < out/noble-hashes.min.js
-> gzip -c8 < out/noble-hashes.min.js > out/noble-hashes.min.js.gz
-> wc -c < out/noble-hashes.min.js.gz
-> rm out/noble-hashes.min.js.gz
-> shasum -a 256 out/*
-# build done: test/build/input.js => test/build/out
+# shasum -a 256, checksums
+64edcb68e6fe5924f37e65c9c38eee2a631f9aad6cba697675970bb4ca34fa41 test/build/out/noble-hashes.js
+798f32aa84880b3e4fd7db77a5e3dd680c1aa166cc431141e18f61b467e8db18 test/build/out/noble-hashes.min.js
 
-64edcb68e6fe5924f37e65c9c38eee2a631f9aad6cba697675970bb4ca34fa41  noble-hashes.js
-798f32aa84880b3e4fd7db77a5e3dd680c1aa166cc431141e18f61b467e8db18  noble-hashes.min.js
+3790 LOC noble-hashes.js
+58.19 KB noble-hashes.min.js
+21.23 KB +gzip
+19.56 KB +zstd
 ```
  * @module
  */
@@ -27,12 +32,18 @@ import { exec } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join as pjoin } from 'node:path';
 import { promisify } from 'node:util';
+import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
 
 const exec_ = promisify(exec);
 const ex = (cmd: string) => {
   console.log(`> ${cmd}`);
   return exec_(cmd);
 };
+
+async function sha256(buf: Uint8Array<ArrayBuffer>) {
+  const resb = await crypto.subtle.digest('SHA-256', buf.buffer);
+  return Buffer.from(resb).toString('hex');
+}
 
 function snakeToCamel(snakeCased: string) {
   return snakeCased
@@ -72,61 +83,47 @@ const c = {
   green: _c + '[32m',
   reset: _c + '[0m',
 };
+const kb = (bytes: number) => (bytes / 1024).toFixed(2);
 
-async function esbuild(root: string, noPrefix: boolean) {
-  // inp = input.js;
-  // out = noble-hashes.js;
-  // min = noble-hashes.min.js;
-  // gzp = noble-hashes.min.js.gz;
-  // glb = nobleHashes
-
+async function esbuild(root: string, noPrefix: boolean, _isAuto: boolean) {
   const names = getNames(process.cwd());
   const inp = `input.js`;
   const inpFull = pjoin(root, inp);
-
   if (!existsSync(inpFull)) throw new Error('jsbt expected input.js in dir: ' + root);
 
   // console.log(names);
-  const sel = noPrefix ? names.noprefix.snake : names.snake;
+  // out = noble-hashes.js;
+  // min = noble-hashes.min.js;
+  // glb = nobleHashes
+
+  const fname = noPrefix ? names.noprefix.snake : names.snake;
   const outDir = 'out';
-  const out = pjoin(outDir, `${sel}.js`);
-  const min = pjoin(outDir, `${sel}.min.js`);
-  const zip = pjoin(outDir, `${sel}.min.js.gz`);
-  const glb = noPrefix ? names.noprefix.camel : names.camel;
+  const outb = `${fname}.js`;
+  const minb = `${fname}.min.js`;
+  const outp = pjoin(outDir, outb);
+  const minp = pjoin(outDir, minb);
+  const glbName = noPrefix ? names.noprefix.camel : names.camel;
 
   process.chdir(root);
   console.log(`> cd ${root}`);
   await ex(`npm install`);
-  await ex(`npx esbuild --bundle ${inp} --outfile=${out} --global-name=${glb}`);
-  await ex(`npx esbuild --bundle ${inp} --outfile=${min} --global-name=${glb} --minify`);
+  await ex(`npx esbuild --bundle ${inp} --outfile=${outp} --global-name=${glbName}`);
+  await ex(`npx esbuild --bundle ${inp} --outfile=${minp} --global-name=${glbName} --minify`);
+  const outf = readFileSync(outp);
+  const minf = readFileSync(minp);
+  const cmpfgzip = gzipSync(minf, { level: 9 });
+  const cmpfzstd = zstdCompressSync(minf, { params: { [constants.ZSTD_c_compressionLevel]: 22 } });
 
-  const stdout = async (cmd: string) => (await ex(cmd)).stdout.trim();
-  const parseNum = async (cmd: string) => Number.parseInt(await stdout(cmd));
-  const wc_out = await parseNum(`wc -l < ${out}`);
-  const wc_min = await parseNum(`wc -c < ${min}`);
+  console.log('# shasum -a 256, checksums');
+  console.log(await sha256(outf), pjoin(root, outp));
+  console.log(await sha256(minf), pjoin(root, minp));
 
-  let wc_zip = 0;
-  try {
-    await ex(`gzip -c8 < ${min} > ${zip}`);
-    wc_zip = await parseNum(`wc -c < ${zip}`);
-    await ex(`rm ${zip}`);
-  } catch (error) {
-    console.log('gzip failed: ' + error);
-  }
-  let sha;
-  try {
-    sha = await stdout(`shasum -a 256 ${pjoin(outDir, '*')}`);
-  } catch (error) {}
-  const kb = (bytes: number) => (bytes / 1024).toFixed(2);
-  console.log(`# build done: ${inpFull} => ${pjoin(root, outDir)}`);
+  const loc = outf.toString('utf8').split('\n').length - 1;
   console.log();
-  if (sha) {
-    console.log(sha.replace(new RegExp(outDir + '/', 'g'), ''));
-    console.log();
-  }
-  console.log(`${c.green}${wc_out}${c.reset} lines ${basename(out)}`);
-  console.log(`${c.green}${kb(wc_min)}${c.reset} kb ${basename(min)}`);
-  if (wc_zip) console.log(`${c.green}${kb(wc_zip)}${c.reset} kb ${basename(zip)}`);
+  console.log(`${c.green}${loc}${c.reset} LOC ${basename(outp)}`);
+  console.log(`${c.green}${kb(minf.length)}${c.reset} KB ${basename(minp)}`);
+  console.log(`${c.green}${kb(cmpfgzip.length)}${c.reset} KB +gzip`);
+  console.log(`${c.green}${kb(cmpfzstd.length)}${c.reset} KB +zstd`);
   return true;
 }
 
@@ -134,10 +131,11 @@ async function esbuild(root: string, noPrefix: boolean) {
 function parseCli(argv: string[]) {
   const selected = argv[2];
   const directory = argv[3];
+  const isAuto = argv.includes('--auto');
   const noPrefix = argv.includes('--no-prefix');
   if (selected !== 'esbuild' || !existsSync(directory))
-    throw new Error(`usage: jsbt esbuild <build-dir> [--no-prefix]`);
-  return esbuild(directory, noPrefix);
+    throw new Error(`usage: jsbt esbuild <build-dir> [--auto / --no-prefix]`);
+  return esbuild(directory, noPrefix, isAuto);
 }
 
 parseCli(process.argv);
