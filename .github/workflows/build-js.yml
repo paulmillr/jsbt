@@ -1,0 +1,59 @@
+name: Publish release
+on:
+  release:
+    types: [created]
+  workflow_call:
+    inputs:
+      build-path:
+        required: false
+        type: string
+      slow-types:
+        required: false
+        type: boolean
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  standalone-build: # Build standalone files using JSBT, calculate sha2-256 sum
+    name: Build files for GitHub Releases
+    runs-on: ubuntu-24.04-arm
+    if: ${{ inputs.build-path != '' }}
+    permissions:
+      id-token: none
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          registry-url: "https://registry.npmjs.org"
+          node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
+      - run: npm ci
+      - run: npm run build --if-present
+      - name: Build bundled and minified files, calculate checksums
+        run: npm run build:release --if-present
+      - name: Write checksum
+        run: cd ${{ inputs.build-path }}/out; shasum -a 256 *.js > checksums.txt
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: standalone-build
+          path: ${{ inputs.build-path }}/out/*
+  standalone-upload: # Separate (from "build") action for security
+    needs: standalone-build
+    name: Upload files to GitHub Releases
+    runs-on: ubuntu-24.04-arm
+    if: ${{ inputs.build-path != '' }}
+    permissions:
+      contents: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: standalone-build
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-checksums: checksums.txt
+      - run: gh release upload ${{ github.event.release.tag_name }} ./*.js --repo $GITHUB_REPOSITORY
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -2,23 +2,12 @@ name: Publish release
 on:
   release:
     types: [created]
-  workflow_call:
-    secrets:
-      NPM_PUBLISH_TOKEN:
-        required: true
-    inputs:
-      build-path:
-        required: false
-        type: string
-      slow-types:
-        required: false
-        type: boolean
   workflow_dispatch:
 permissions:
   contents: read
-  id-token: write
+  id-token: write # For OIDC Trusted Publishing
 jobs:
-  publish-npm: # Publish to NPM, with transparent provenance statement
+  publish-npm: # Publish to NPM
     name: Publish to NPM
     runs-on: ubuntu-24.04-arm
     steps:
@@ -31,59 +20,20 @@ jobs:
           node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
       - run: npm ci # Built-in NPM version, do not install newer
       - run: npm run build --if-present
-      - run: npm publish --provenance --access public # Won't work for 1st publish (no token exists)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-  publish-jsr: # Publish to JSR, if jsr.json exists; optional allow-slow-types
+      - run: npm publish --access public
+  publish-jsr: # Publish to JSR, if jsr.json exists
     name: Publish to JSR
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:
           persist-credentials: false
+      - id: flags
+        run: | # Use flag --allow-slow-types if it's present in ./jsr.json
+          SLOW_TYPES=$(node -e 'process.exit(require("./jsr.json").allowSlowTypes ? 0 : 1)' && echo '--allow-slow-types')
+          echo "SLOW_TYPES=$SLOW_TYPES" >> $GITHUB_OUTPUT
+        if: ${{ hashFiles('jsr.json') != '' }}
       - run: npm install -g jsr
         if: ${{ hashFiles('jsr.json') != '' }}
-      - run: jsr publish ${{ inputs.slow-types && '--allow-slow-types' || '' }}
+      - run: jsr publish ${{ steps.flags.outputs.SLOW_TYPES }}
         if: ${{ hashFiles('jsr.json') != '' }}
-  standalone-build: # Build standalone files using JSBT, calculate sha2-256 sum
-    name: Build files for GitHub Releases
-    runs-on: ubuntu-24.04-arm
-    if: ${{ inputs.build-path != '' }}
-    permissions:
-      id-token: none
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
-        with:
-          registry-url: "https://registry.npmjs.org"
-          node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
-      - run: npm ci
-      - run: npm run build --if-present
-      - name: Build bundled and minified files, calculate checksums
-        run: npm run build:release --if-present
-      - name: Write checksum
-        run: cd ${{ inputs.build-path }}/out; shasum -a 256 *.js > checksums.txt
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: standalone-build
-          path: ${{ inputs.build-path }}/out/*
-  standalone-upload: # Separate (from "build") action for security
-    needs: standalone-build
-    name: Upload files to GitHub Releases
-    runs-on: ubuntu-24.04-arm
-    if: ${{ inputs.build-path != '' }}
-    permissions:
-      contents: write
-      attestations: write
-    steps:
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
-        with:
-          name: standalone-build
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with:
-          subject-checksums: checksums.txt
-      - run: gh release upload ${{ github.event.release.tag_name }} ./*.js --repo $GITHUB_REPOSITORY
-        env:
-          GH_TOKEN: ${{ github.token }}
