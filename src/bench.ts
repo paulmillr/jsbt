@@ -155,7 +155,7 @@ function getTime(): bigint {
   // @ts-ignore
   return process.hrtime.bigint();
 }
-async function benchmarkRaw(callback: CbFn, samples: number): Promise<BenchStats> {
+async function benchmarkRaw(callback: CbFn, samples: number = maxSamples): Promise<BenchStats> {
   if (typeof callback !== 'function') throw new Error('callback must be a function');
   if (typeof samples !== 'number' || samples <= 0 || samples > maxSamples)
     throw new Error('samples must be a number');
