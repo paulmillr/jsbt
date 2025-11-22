@@ -2,6 +2,7 @@ name: Publish release
 on:
   release:
     types: [created]
+  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
