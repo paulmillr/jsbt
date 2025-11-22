@@ -16,20 +16,19 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  id-token: write
 jobs:
   publish-npm: # Publish to NPM, with transparent provenance statement
     name: Publish to NPM
     runs-on: ubuntu-24.04-arm
-    permissions:
-      id-token: write
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:
           persist-credentials: false # Remove git token after fetch
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
           registry-url: "https://registry.npmjs.org"
-          node-version: 24.6.0 # Relevant as per Aug 2025, must be specific for determinism.
+          node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
       - run: npm ci # Built-in NPM version, do not install newer
       - run: npm run build --if-present
       - run: npm publish --provenance --access public # Won't work for 1st publish (no token exists)
@@ -38,10 +37,8 @@ jobs:
   publish-jsr: # Publish to JSR, if jsr.json exists; optional allow-slow-types
     name: Publish to JSR
     runs-on: ubuntu-24.04-arm
-    permissions:
-      id-token: write
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:
           persist-credentials: false
       - run: npm install -g jsr
@@ -52,21 +49,23 @@ jobs:
     name: Build files for GitHub Releases
     runs-on: ubuntu-24.04-arm
     if: ${{ inputs.build-path != '' }}
+    permissions:
+      id-token: none
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
           registry-url: "https://registry.npmjs.org"
-          node-version: 24.6.0 # Relevant as per Aug 2025, must be specific for determinism.
+          node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
       - run: npm ci
       - run: npm run build --if-present
       - name: Build bundled and minified files, calculate checksums
         run: npm run build:release --if-present
       - name: Write checksum
         run: cd ${{ inputs.build-path }}/out; shasum -a 256 *.js > checksums.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: standalone-build
           path: ${{ inputs.build-path }}/out/*
@@ -77,13 +76,12 @@ jobs:
     if: ${{ inputs.build-path != '' }}
     permissions:
       contents: write
-      id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: standalone-build
-      - uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # v2.2.2
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-checksums: checksums.txt
       - run: gh release upload ${{ github.event.release.tag_name }} ./*.js --repo $GITHUB_REPOSITORY
