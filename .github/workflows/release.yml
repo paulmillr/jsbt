@@ -23,9 +23,15 @@ jobs:
       - run: npm run build --if-present
       - name: Ensure the version has not been published yet
         run: npm publish --dry-run
+      - name: Ensure the version matches GitHub Release
+        run: |
+          VER=$(node -e 'console.log(require("./package.json").version)')
+          echo 'ver1 $VER'
+          echo 'ver2 ${{ github.event.release.tag_name }}'
+          ($VER == ${{ github.event.release.tag_name }}) | { echo "NPM-Git version mismatch, exiting..." && exit 1;
       - name: Publish to JSR if jsr.json exists
         run: | # Use flag --allow-slow-types if it's present in ./jsr.json
-          node -e 'process.exit(require("./package.json").version === require("./jsr.json").version ? 0 : 1)' || { echo "NPM-JSR version mismatch, exiting..." && echo 1; }
+          node -e 'process.exit(require("./package.json").version === require("./jsr.json").version ? 0 : 1)' || { echo "NPM-JSR version mismatch, exiting..." && exit 1; }
           SLOW_TYPES=$(node -e 'console.log(require("./jsr.json").allowSlowTypes ? "--allow-slow-types" : "")')
           npm install -g jsr
           jsr publish $SLOW_TYPES
