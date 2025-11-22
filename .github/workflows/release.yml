@@ -20,6 +20,8 @@ jobs:
           node-version: 24.11.0 # Relevant as per Nov 2025, must be specific for determinism.
       - run: npm ci # Built-in NPM version, do not install newer
       - run: npm run build --if-present
+      - name: Ensure the version has not been published yet
+        run: npm publish --dry-run
       - name: Publish to JSR if jsr.json exists
         run: | # Use flag --allow-slow-types if it's present in ./jsr.json
           node -e 'process.exit(require("./package.json").version === require("./jsr.json").version ? 0 : 1)' || { echo "NPM-JSR version mismatch, exiting..." && echo 1; }
