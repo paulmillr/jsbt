@@ -1,4 +1,4 @@
-name: Publish release
+name: Build files for GitHub Releases
 on:
   release:
     types: [created]

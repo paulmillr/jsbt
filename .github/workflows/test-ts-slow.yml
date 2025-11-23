@@ -1,0 +1,27 @@
+name: Run slow TS tests
+on:
+  workflow_call:
+    inputs:
+      npm-task:
+        default: test:slow
+        required: false
+        type: string
+env:
+  MSHOULD_FAST: 1
+jobs:
+  slow:
+    name: Run slow TS tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          node-version: 24
+      - run: npm install
+      - run: npm run build --if-present
+      - run: npm run ${{ inputs.npm-task }}
