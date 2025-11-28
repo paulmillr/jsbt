@@ -6,7 +6,7 @@ JS Build Tools: helpers for building, benchmarking & testing secure JS apps.
 - 🏗️ jsbt.js: Auto-produce single-file output for all package exports
 - 📝 test: Multi-env testing framework with familiar syntax & parallel execution
 - ⚙️ tsconfig: Strict typescript configs, friendly to type stripping
-- 🤖 workflows: Secure GitHub CI configs for testing & publishing JS packages.
+- 🤖 workflows: Secure GitHub CI configs for testing & token-less publishing of JS packages using OIDC.
 - 🪶 As minimal as possible, no dependencies
 
 Used by [noble cryptography](https://paulmillr.com/noble/) and others.
@@ -21,7 +21,7 @@ Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 - [🏗️ jsbt.js](#jsbtjs)
 - [📝 test](#test)
 - [⚙️ tsconfig](#tsconfig)
-- [🤖 workflows](#workflows)
+- [🤖 CI workflows](#workflows)
 - [repo-template](#repo-template)
 
 ## bench
@@ -149,7 +149,7 @@ Option descriptions:
 * `verbatimModuleSyntax` - ensures files are friendly to "type erasure" / "type ignore"
 node.js and others
 
-## workflows
+## CI workflows
 
 Secure GitHub CI configs for testing & publishing JS packages.
 
@@ -159,9 +159,8 @@ The files reside in `.github/workflows`:
 * `test-ts.yml`: the same, but runs typescript instead of js on supported node.js (v22+)
   On node.js v20, it executes `test:nodeold` to compile files instead.
 * `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
-    * `build-path: string` - path to build directory, which contains `out` dir, from which
-      files would be uploaded to github releases
-    * `slow-types: true / false (default)` - whether to allow [slow types](https://jsr.io/docs/about-slow-types) on JSR.io
+    * Uses brand new GitHub OIDC connector to NPM, ensure to link package in npm settings first
+    * It happens after GitHub release is created
 
 ## repo-template
 
