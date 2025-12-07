@@ -2,12 +2,12 @@
 
 JS Build Tools: helpers for building, benchmarking & testing secure JS apps.
 
+- 🤖 workflows: Secure GitHub CI actions for testing & token-less publishing of JS packages using OIDC.
 - 🏋🏻 bench: Benchmark JS projects with nanosecond resolution.
-- 🏗️ jsbt.js: Auto-produce single-file output for all package exports
 - 📝 test: Multi-env testing framework with familiar syntax & parallel execution
+- 🏗️ jsbt.js: Auto-produce single-file output for all package exports
 - ⚙️ tsconfig: Strict typescript configs, friendly to type stripping
-- 🤖 workflows: Secure GitHub CI configs for testing & token-less publishing of JS packages using OIDC.
-- 🪶 As minimal as possible, no dependencies
+- 🪶 No dependencies
 
 Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 
@@ -17,19 +17,32 @@ Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 
 > `jsr add jsr:@paulmillr/jsbt`
 
-- [🏋🏻 bench](#bench)
-- [🏗️ jsbt.js](#jsbtjs)
-- [📝 test](#test)
-- [⚙️ tsconfig](#tsconfig)
 - [🤖 CI workflows](#workflows)
+- [🏋🏻 bench](#bench)
+- [📝 test](#test)
+- [🏗️ jsbt.js](#jsbtjs)
+- [⚙️ tsconfig](#tsconfig)
 - [repo-template](#repo-template)
+
+## CI workflows
+
+Secure GitHub CI configs for testing & publishing JS packages.
+
+The files reside in `.github/workflows`:
+
+* `test-js.yml`: runs tests on LTS node.js, bun, deno, linter, and calculates coverage
+* `test-ts.yml`: the same, but runs typescript instead of js on supported node.js (v22+)
+  On node.js v20, it executes `test:nodeold` to compile files instead.
+* `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
+    * Uses brand new token-less GitHub OIDC connector to NPM, ensure to link package in npm settings first
+    * It happens after GitHub release is created
 
 ## bench
 
-Benchmark JS projects with nanosecond resolution.
+> Benchmark JS projects with nanosecond resolution
 
 - Precise: 1ns resolution using `process.hrtime`
-- Lightweight: ~200 lines of code, no dependencies - to not interfere with benchmarked code
+- Lightweight: ~200 lines of code
 - Readable: utilizes colors and nice units, shows rel. margin of error only if it's high
 
 ```js
@@ -49,32 +62,6 @@ sign x 4,980 ops/sec @ 200μs/op
 verify x 969 ops/sec @ 1ms/op
 recoverPublicKey x 890 ops/sec @ 1ms/op
 getSharedSecret x 585 ops/sec @ 1ms/op
-```
-
-## jsbt.js
-
-`jsbt.js` calls [esbuild](https://esbuild.github.io) to produce single-file package output.
-
-Usage (add this as `"build:release"` step in `package.json scripts` section):
-
-> `npx --no @paulmillr/jsbt esbuild test/build`
-
-The command would execute following subcommands and produce several files:
-
-```sh
-cd test/build
-npm install
-npx esbuild --bundle input.js --outfile=out/noble-hashes.js --global-name=nobleHashes
-npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=nobleHashes --minify
-wc -l < out/noble-hashes.js
-wc -c < out/noble-hashes.min.js
-gzip -c8 < out/noble-hashes.min.js > out/noble-hashes.min.js.gz
-wc -c < out/noble-hashes.min.js.gz
-rm out/noble-hashes.min.js.gz
-shasum -a 256 out/*
-# build done: test/build/input.js => test/build/out
-# 64edcb68e6fe5924f37e65c9c38eee2a631f9aad6cba697675970bb4ca34fa41  noble-hashes.js
-# 798f32aa84880b3e4fd7db77a5e3dd680c1aa166cc431141e18f61b467e8db18  noble-hashes.min.js
 ```
 
 ## test
@@ -137,6 +124,30 @@ ENV variables, specifiable via command line or through code:
 - `MSHOULD_FAST=1` enables parallel execution in node.js and Bun. Values >1 will set worker count.
 - `MSHOULD_QUIET=1` enables "quiet" dot reporter
 
+## jsbt.js
+
+`jsbt.js` calls [esbuild](https://esbuild.github.io) to produce single-file package output.
+
+Usage (add this as `"build:release"` step in `package.json scripts` section):
+
+> `npx --no @paulmillr/jsbt esbuild test/build`
+
+The command would execute following subcommands and produce several files:
+
+```sh
+cd test/build
+npm install
+npx esbuild --bundle input.js --outfile=out/noble-hashes.js --global-name=nobleHashes
+npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=nobleHashes --minify
+# 11d1900e99f3aa945603bb5e7d82bdd9ec6ddf5d30e2fcab69b836840cff76d2 test/build/out/noble-hashes.js
+# 0be3876ff0816c44d21a401e6572fdb76d06012c760a23a5cb771c6f612106f5 test/build/out/noble-hashes.min.js
+
+3790 LOC noble-hashes.js
+58.21 KB noble-hashes.min.js
+21.10 KB +gzip
+19.57 KB +zstd
+```
+
 ## tsconfig
 
 Strict typescript configs, friendly to type stripping.
@@ -148,19 +159,6 @@ Option descriptions:
 * `isolatedDeclarations` ensures types are "fast" and friendly to JSR.io
 * `verbatimModuleSyntax` - ensures files are friendly to "type erasure" / "type ignore"
 node.js and others
-
-## CI workflows
-
-Secure GitHub CI configs for testing & publishing JS packages.
-
-The files reside in `.github/workflows`:
-
-* `test-js.yml`: runs tests on LTS node.js, bun, deno, linter, and calculates coverage
-* `test-ts.yml`: the same, but runs typescript instead of js on supported node.js (v22+)
-  On node.js v20, it executes `test:nodeold` to compile files instead.
-* `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
-    * Uses brand new GitHub OIDC connector to NPM, ensure to link package in npm settings first
-    * It happens after GitHub release is created
 
 ## repo-template
 
