@@ -35,6 +35,7 @@ The files reside in `.github/workflows`:
   On node.js v20, it executes `test:nodeold` to compile files instead.
 * `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
     * Uses brand new token-less GitHub OIDC connector to NPM, ensure to link package in npm settings first
+    * The Trusted Publishing also provides provenance statements by default
     * It happens after GitHub release is created
 
 You can copy them, or depend on them directly:
