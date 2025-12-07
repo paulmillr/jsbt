@@ -37,6 +37,22 @@ The files reside in `.github/workflows`:
     * Uses brand new token-less GitHub OIDC connector to NPM, ensure to link package in npm settings first
     * It happens after GitHub release is created
 
+You can copy them, or depend on them directly:
+
+```yaml
+name: Publish release
+on:
+  release:
+    types: [created]
+jobs:
+  release-js:
+    name: 'jsbt v0.4.5'
+    uses: paulmillr/jsbt/.github/workflows/release.yml@570adcfe0ed96b477bb9b35400fb43fd9406fb47
+    permissions:
+      contents: read
+      id-token: write
+```
+
 ## bench
 
 > Benchmark JS projects with nanosecond resolution
