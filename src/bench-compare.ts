@@ -8,8 +8,8 @@
  */
 // @ts-nocheck
 // TODO: remove ^
-import { utils } from './bench.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { utils } from './bench.ts';
 const { benchmarkRaw } = utils;
 
 const _c = String.fromCharCode(27);
@@ -305,7 +305,6 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
           .map((i) => dimensions[i][obj[i]])
           .concat(options);
         if (patchArgs) args = patchArgs(args, obj);
-        const currSamples = typeof samples === 'function' ? samples(...args, lib) : samples;
         const { stats, perSecStr, perSec, perItemStr } = dryRun
           ? {
               stats: { mean: 0n },
@@ -313,7 +312,7 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
               perSecStr: '',
               perItemStr: '0ns',
             }
-          : await benchmarkRaw(() => lib(...args), currSamples);
+          : await benchmarkRaw(() => lib(...args));
         if (baselineOps === undefined && baselinePerOps === undefined) {
           baselineOps = perSec;
           baselinePerOps = stats.mean;

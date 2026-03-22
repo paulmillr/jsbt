@@ -11,10 +11,10 @@
 export type BenchStats = {
   stats: {
     rme: number;
-    min: number | bigint;
-    max: number | bigint;
-    mean: number | bigint;
-    median: number | bigint;
+    min: bigint;
+    max: bigint;
+    mean: bigint;
+    median: bigint;
     formatted: string;
   };
   perSecStr: string;
@@ -37,12 +37,6 @@ const units = [
   { symbol: 'ns', val: 0n, threshold: 1n },
 ];
 const SECOND = units[1].val;
-let MAX_RUN_TIME = 1n * SECOND; // 1 second
-function setMaxRunTime(val: number): void {
-  if (!val || val < 0.1 || val > 600) throw new Error('must be between 0.1 and 600 sec');
-  let tenth = BigInt(val * 10);
-  MAX_RUN_TIME = (tenth * SECOND) / 10n;
-}
 function printOutput(...str: any) {
   // @ts-ignore
   console.log(...str);
@@ -112,29 +106,18 @@ function calcDeviation<T extends number | bigint>(list: T[]): number {
   const variance = Number(calcSum(diffs, isBig)) / list.length - 1;
   return Math.sqrt(variance);
 }
-function calcCorrelation<T extends number | bigint>(x: T[], y: T[]): number {
-  const isBig = isFirstBig(x);
-  const checker = isBig ? (a: T) => typeof a === 'bigint' : (a: T) => typeof a === 'number';
-  const err = `expected array of ${isBig ? 'bigints' : 'numbers'}`;
-  if (!x.every(checker)) throw new Error('x: ' + err);
-  if (!y.every(checker)) throw new Error('y: ' + err);
-
-  const meanX = calcMean(x);
-  const meanY = calcMean(y);
-  const sum = calcSum(
-    x.map((val, i) => (val - meanX) * (y[i] - meanY)),
-    isBig
-  );
-  const observation = Number(sum) / (calcDeviation(x) * calcDeviation(y));
-  return observation / (x.length - 1);
-}
 // Mutates array by sorting it
-function calcStats<T extends number | bigint>(
-  list: T[]
-): { rme: number; min: T; max: T; mean: any; median: T; formatted: string } {
+function calcStats(list: bigint[]): {
+  rme: number;
+  min: bigint;
+  max: bigint;
+  mean: bigint;
+  median: bigint;
+  formatted: string;
+} {
   list.sort((a, b) => Number(a - b));
   const samples = list.length;
-  const mean: T = calcMean(list);
+  const mean: bigint = calcMean(list);
   const median = list[Math.floor(samples / 2)];
   const min = list[0];
   const max = list[samples - 1];
@@ -155,16 +138,14 @@ function getTime(): bigint {
   // @ts-ignore
   return process.hrtime.bigint();
 }
-async function benchmarkRaw(callback: CbFn, samples: number = maxSamples): Promise<BenchStats> {
+async function benchmarkRaw(callback: CbFn, maxRunTime: bigint = SECOND): Promise<BenchStats> {
   if (typeof callback !== 'function') throw new Error('callback must be a function');
-  if (typeof samples !== 'number' || samples <= 0 || samples > maxSamples)
-    throw new Error('samples must be a number');
   // measurements contain sample timings
   // `new Array(30_000_000)` pre-allocation is in some cases more efficient for
   // garbage collection than growing array size continuously.
   const measurements = [];
   let total = 0n;
-  for (let i = 0; i < samples; i++) {
+  for (let i = 0; i < maxSamples; i++) {
     const start = getTime();
     const val = callback(i);
     if (val instanceof Promise) await val;
@@ -172,32 +153,64 @@ async function benchmarkRaw(callback: CbFn, samples: number = maxSamples): Promi
     const diff = stop - start;
     measurements.push(diff);
     total += diff;
-    if (total >= MAX_RUN_TIME) break;
+    if (total >= maxRunTime) break;
   }
   const stats = calcStats(measurements);
-  const perItemStr = formatDuration(stats.mean);
-  const sec = units[1].val;
-  const perSec = sec / stats.mean;
-  const perSecStr = formatter.format(sec / stats.mean);
+  const { mean } = stats;
+  const perSec = SECOND / mean;
+  const perSecStr = formatter.format(perSec);
+  const perItemStr = formatDuration(mean);
   return { stats, perSecStr, perSec, perItemStr, measurements };
+}
+
+export type BenchOpts = {
+  unit?: string;
+  multiplier?: number;
+  maxRunTimeSec?: number;
+  mode?: 'normal' | 'runOnce';
+};
+
+function parseMaxRunTime(val: number | undefined) {
+  if (val === undefined) return;
+  if (typeof val !== 'number' || val < 0.1 || val > 60)
+    throw new Error('must be between 0.1 and 60 sec');
+  let tenth = BigInt(val * 10);
+  return (tenth * SECOND) / 10n;
 }
 
 export async function bench(
   label: string,
   fn: CbFn,
-  samples: number = maxSamples
+  opts: BenchOpts = {}
 ): Promise<BenchStats | undefined> {
-  if (typeof label !== 'string') throw new Error('label must be a string');
-  const { stats, perSecStr, perItemStr, measurements } = await benchmarkRaw(fn, samples);
-  let str = `${label} `;
-  let perItemStrClr = `${blue}${perItemStr}${reset}`;
-  if (samples === 1) {
-    str += perItemStrClr;
+  if (typeof label !== 'string') throw new Error('benchmark label must be a string');
+  if (typeof opts !== 'object')
+    throw new Error('benchmark opts must be an object, got: ' + typeof opts);
+  let { multiplier, unit, maxRunTimeSec, mode } = opts;
+  let { stats, perSecStr, perItemStr, measurements } = await benchmarkRaw(
+    fn,
+    parseMaxRunTime(maxRunTimeSec)
+  );
+  let OUTPUT = `${label} `;
+  if (mode === 'runOnce') {
+    OUTPUT += `${blue}${perItemStr}${reset}`;
   } else {
-    str += `x ${green}${perSecStr}${reset} ops/sec @ ${perItemStrClr}/op`;
+    if (multiplier) {
+      let perSec: bigint | number;
+      if (Number.isInteger(multiplier)) {
+        perSec = (SECOND * BigInt(multiplier)) / stats.mean;
+      } else {
+        perSec = Number(SECOND / stats.mean) * multiplier;
+      }
+      perSecStr = formatter.format(perSec);
+    }
+    OUTPUT += `x ${green}${perSecStr}${reset} ${unit ?? 'ops'}/sec`;
+    if (!unit) {
+      OUTPUT += ` @ ${blue}${perItemStr}${reset}/op`;
+      if (stats.rme >= 1) OUTPUT += ` ${stats.formatted}`;
+    }
   }
-  if (stats.rme >= 1) str += ` ${stats.formatted}`;
-  printOutput(str);
+  printOutput(OUTPUT);
   measurements.length = 0; // Destroy the list, simplify the life for garbage collector
   return;
 }
@@ -205,20 +218,14 @@ export async function bench(
 export default bench;
 export const utils: {
   getTime: typeof getTime;
-  setMaxRunTime: typeof setMaxRunTime;
   logMem: typeof logMem;
   formatDuration: typeof formatDuration;
   calcStats: typeof calcStats;
-  calcDeviation: typeof calcDeviation;
-  calcCorrelation: typeof calcCorrelation;
   benchmarkRaw: typeof benchmarkRaw;
 } = {
   getTime,
-  setMaxRunTime,
   logMem,
   formatDuration,
   calcStats,
-  calcDeviation,
-  calcCorrelation,
   benchmarkRaw,
 };
