@@ -186,7 +186,7 @@ npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=no
 
 ## tsconfig
 
-Strict typescript configs, friendly to type stripping.
+Strict typescript v6+ configs, friendly to type stripping.
 
 * `tsconfig.test.json` is for typescript tests, with looser checks
 
