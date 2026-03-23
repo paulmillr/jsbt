@@ -5,7 +5,7 @@ JS Build Tools: helpers for building, benchmarking & testing secure JS apps.
 - 🤖 workflows: Secure GitHub CI actions for testing & token-less publishing of JS packages using OIDC.
 - 🏋🏻 bench: Benchmark JS projects with nanosecond resolution.
 - 📝 test: Multi-env testing framework with familiar syntax & parallel execution
-- 🏗️ jsbt.js: Auto-produce single-file output for all package exports
+- 🏗️ jsbt: Single CLI for release builds and shared doc/tree-shaking audits
 - ⚙️ tsconfig: Strict typescript configs, friendly to type stripping
 - 🪶 No dependencies
 
@@ -20,7 +20,7 @@ Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 - [🤖 CI workflows](#workflows)
 - [🏋🏻 bench](#bench)
 - [📝 test](#test)
-- [🏗️ jsbt.js](#jsbtjs)
+- [🏗️ jsbt](#jsbt)
 - [⚙️ tsconfig](#tsconfig)
 - [repo-template](#repo-template)
 
@@ -141,13 +141,32 @@ ENV variables, specifiable via command line or through code:
 - `MSHOULD_FAST=1` enables parallel execution in node.js and Bun. Values >1 will set worker count.
 - `MSHOULD_QUIET=1` enables "quiet" dot reporter
 
-## jsbt.js
+## jsbt
 
-`jsbt.js` calls [esbuild](https://esbuild.github.io) to produce single-file package output.
+`jsbt` dispatches the release build and shared audit helpers shipped by the package.
+
+Current subcommands:
+
+- `jsbt esbuild`: bundle one repo's `test/build` input via [esbuild](https://esbuild.github.io)
+- `jsbt readme`: typecheck and execute fenced README examples
+- `jsbt treeshake`: audit release bundles for locals that survive bundling
+- `jsbt tsdoc`: audit built public declarations and examples
+
+The published package exposes a single bin, so all of these work through:
+
+> `npx --no @paulmillr/jsbt <subcommand> ...`
 
 Usage (add this as `"build:release"` step in `package.json scripts` section):
 
 > `npx --no @paulmillr/jsbt esbuild test/build`
+
+Shared checker usage:
+
+> `jsbt readme package.json`
+
+> `jsbt treeshake package.json test/build/out-treeshake`
+
+> `jsbt tsdoc package.json`
 
 The command would execute following subcommands and produce several files:
 
@@ -181,6 +200,8 @@ node.js and others
 
 Contains project skeleton, which can be used to create a new package.
 Replace `EDIT_ME` with proper value.
+
+The template ships with `npm run check`, which runs `jsbt readme`, `jsbt treeshake`, and `jsbt tsdoc`.
 
 ## License
 

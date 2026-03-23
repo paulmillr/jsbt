@@ -1,141 +1,92 @@
-#!/usr/bin/env node
+// Destructive ops and `npm install` SHOULD use only `fs-modify.ts`; do not call `rmSync`, `rmdirSync`,
+// `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
 /**
- * jsbt(1) helps to produce single-file package output for JS projects.
+ * `jsbt` dispatches the shared build and audit helpers shipped by `@paulmillr/jsbt`.
  *
  * Usage:
- *   npx --no @paulmillr/jsbt esbuild test/build
- * The command would execute following subcommands and produce several files:
-```
-
-npx --no @paulmillr/jsbt --auto => gets package.json main field, uses auto-input.js
-npx --no @paulmillr/jsbt --bundle test/build-input.js
-
-> cd test/build
-> inputs/noble-hashes.js => outputs/noble-hashes.js
-> inputs/noble-hashes-sha256.js => outputs/noble-hashes-sha256.js
-> cd build
-> npm install
-> npx esbuild --bundle input.js --outfile=out/noble-hashes.js --global-name=nobleHashes
-> npx esbuild --bundle input.js --outfile=out/noble-hashes.min.js --global-name=nobleHashes --minify
-# shasum -a 256, checksums
-64edcb68e6fe5924f37e65c9c38eee2a631f9aad6cba697675970bb4ca34fa41 test/build/out/noble-hashes.js
-798f32aa84880b3e4fd7db77a5e3dd680c1aa166cc431141e18f61b467e8db18 test/build/out/noble-hashes.min.js
-
-3790 LOC noble-hashes.js
-58.19 KB noble-hashes.min.js
-21.23 KB +gzip
-19.56 KB +zstd
-```
+ *   `jsbt esbuild test/build`
+ *   `jsbt readme package.json`
+ *   `jsbt treeshake package.json test/build/out-treeshake`
+ *   `jsbt tsdoc package.json`
  * @module
  */
-import { exec } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, join as pjoin } from 'node:path';
-import { promisify } from 'node:util';
-import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
+import * as TSDoc from '@microsoft/tsdoc';
+import { runCli as runBuild } from './jsbt-esbuild.ts';
+import { runCli as runTSDoc } from './jsbt-jsdoc.ts';
+import { runCli as runReadme } from './jsbt-readme.ts';
+import { runCli as runTreeShaking } from './jsbt-treeshake.ts';
 
-const exec_ = promisify(exec);
-const ex = (cmd: string) => {
-  console.log(`> ${cmd}`);
-  return exec_(cmd);
-};
+type Cmd =
+  | 'build'
+  | 'check-jsdoc'
+  | 'check-readme'
+  | 'check-tree-shaking'
+  | 'esbuild'
+  | 'readme'
+  | 'treeshake'
+  | 'tsdoc';
 
-async function sha256(buf: Uint8Array<ArrayBuffer>) {
-  const resb = await crypto.subtle.digest('SHA-256', buf.buffer);
-  return Buffer.from(resb).toString('hex');
-}
+const usage = `usage:
+  jsbt esbuild <build-dir> [--auto] [--no-prefix]
+  jsbt readme <package.json>
+  jsbt treeshake <package.json> <out-dir>
+  jsbt tsdoc <package.json>
 
-function snakeToCamel(snakeCased: string) {
-  return snakeCased
-    .split('-')
-    .map((words, index) => {
-      return index === 0 ? words : words[0].toUpperCase() + words.slice(1);
-    })
-    .join('');
-}
+aliases:
+  jsbt build <build-dir> ...
+  jsbt check-readme <package.json>
+  jsbt check-tree-shaking <package.json> <out-dir>
+  jsbt check-jsdoc <package.json>
 
-// @namespace/ab-cd => namespace-ab-cd and namespaceAbCd
-function getNames(cwd: string) {
-  // packageJsonName = '@space/test-runner'; // consider this value
-  const curr = pjoin(cwd, 'package.json');
-  let packageJsonName;
-  try {
-    packageJsonName = JSON.parse(readFileSync(curr, 'utf8')).name;
-  } catch (error) {
-    throw new Error('package.json read error: ' + error);
+examples:
+  npx --no @paulmillr/jsbt esbuild test/build
+  npx --no @paulmillr/jsbt readme package.json
+  npx --no @paulmillr/jsbt treeshake package.json test/build/out-treeshake
+  npx --no @paulmillr/jsbt tsdoc package.json`;
+
+const cmd = (name: string): Cmd | undefined => {
+  switch (name) {
+    case 'build':
+    case 'check-jsdoc':
+    case 'check-readme':
+    case 'check-tree-shaking':
+    case 'esbuild':
+    case 'readme':
+    case 'treeshake':
+    case 'tsdoc':
+      return name;
   }
-
-  const hasNs = packageJsonName.startsWith('@'); // true
-  const snake = packageJsonName.replace(/^@/, '').replace(/\//, '-'); // space-test-runner
-  const camel = snakeToCamel(snake); // spaceTestRunner
-  const spl = snake.split('-'); // ["space", "test", "runner"]
-  const parts = hasNs ? spl.slice(1) : spl; // ["test", "runner"]
-  const snakeNp = parts.join('-'); // test-runner
-  const camelNp = snakeToCamel(snakeNp); // testRunner
-  const noprefix = { snake: snakeNp, camel: camelNp };
-  return { snake, camel, noprefix };
-}
-
-const _c = String.fromCharCode(27); // x1b, control code for terminal colors
-const c = {
-  // colors
-  red: _c + '[31m',
-  green: _c + '[32m',
-  reset: _c + '[0m',
+  return undefined;
 };
-const kb = (bytes: number) => (bytes / 1024).toFixed(2);
 
-async function esbuild(root: string, noPrefix: boolean, _isAuto: boolean) {
-  const names = getNames(process.cwd());
-  const inp = `input.js`;
-  const inpFull = pjoin(root, inp);
-  if (!existsSync(inpFull)) throw new Error('jsbt expected input.js in dir: ' + root);
+export const runCli = async (argv: string[]): Promise<void> => {
+  const [head, ...rest] = argv;
+  if (!head || head === '--help' || head === '-h') return console.log(usage);
+  const sub = cmd(head);
+  if (!sub) throw new Error(`unknown jsbt command: ${head}\n\n${usage}`);
+  switch (sub) {
+    case 'build':
+    case 'esbuild':
+      return runBuild(rest);
+    case 'check-readme':
+    case 'readme':
+      return runReadme(rest);
+    case 'check-tree-shaking':
+    case 'treeshake':
+      return runTreeShaking(rest);
+    case 'check-jsdoc':
+    case 'tsdoc':
+      return runTSDoc(rest, { loadTSDoc: () => TSDoc as any });
+  }
+};
 
-  // console.log(names);
-  // out = noble-hashes.js;
-  // min = noble-hashes.min.js;
-  // glb = nobleHashes
+const main = async (): Promise<void> => {
+  try {
+    await runCli(process.argv.slice(2));
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+  }
+};
 
-  const fname = noPrefix ? names.noprefix.snake : names.snake;
-  const outDir = 'out';
-  const outb = `${fname}.js`;
-  const minb = `${fname}.min.js`;
-  const outp = pjoin(outDir, outb);
-  const minp = pjoin(outDir, minb);
-  const glbName = noPrefix ? names.noprefix.camel : names.camel;
-
-  process.chdir(root);
-  console.log(`> cd ${root}`);
-  await ex(`npm install`);
-  await ex(`npx esbuild --bundle ${inp} --outfile=${outp} --global-name=${glbName}`);
-  await ex(`npx esbuild --bundle ${inp} --outfile=${minp} --global-name=${glbName} --minify`);
-  const outf = readFileSync(outp);
-  const minf = readFileSync(minp);
-  const cmpfgzip = gzipSync(minf, { level: 9 });
-  const cmpfzstd = zstdCompressSync(minf, { params: { [constants.ZSTD_c_compressionLevel]: 22 } });
-
-  console.log('# shasum -a 256, checksums');
-  console.log(await sha256(outf), pjoin(root, outp));
-  console.log(await sha256(minf), pjoin(root, minp));
-
-  const loc = outf.toString('utf8').split('\n').length - 1;
-  console.log();
-  console.log(`${c.green}${loc}${c.reset} LOC ${basename(outp)}`);
-  console.log(`${c.green}${kb(minf.length)}${c.reset} KB ${basename(minp)}`);
-  console.log(`${c.green}${kb(cmpfgzip.length)}${c.reset} KB +gzip`);
-  console.log(`${c.green}${kb(cmpfzstd.length)}${c.reset} KB +zstd`);
-  return true;
-}
-
-// jsbt esbuild test/build --no-prefix
-function parseCli(argv: string[]) {
-  const selected = argv[2];
-  const directory = argv[3];
-  const isAuto = argv.includes('--auto');
-  const noPrefix = argv.includes('--no-prefix');
-  if (selected !== 'esbuild' || !existsSync(directory))
-    throw new Error(`usage: jsbt esbuild <build-dir> [--auto / --no-prefix]`);
-  return esbuild(directory, noPrefix, isAuto);
-}
-
-parseCli(process.argv);
+void main();

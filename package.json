@@ -1,10 +1,10 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
-    "jsbt.js",
-    "jsbt.d.ts",
+    "jsbt.bin.js",
+    "jsbt.bin.d.ts",
     "bench.js",
     "bench.d.ts",
     "bench-compare.js",
@@ -16,15 +16,17 @@
     "tsconfig.test.json"
   ],
   "bin": {
-    "jsbt": "jsbt.js"
+    "jsbt": "jsbt.bin.js"
   },
   "devDependencies": {
+    "@microsoft/tsdoc": "0.16.0",
     "@types/node": "24.2.1",
+    "esbuild": "0.25.10",
     "prettier": "3.6.2",
     "typescript": "5.9.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.example.json",
+    "build": "tsc -p tsconfig.example.json && esbuild src/jsbt.ts --bundle --platform=node --format=esm --target=node22 --define:__JSBT_BUNDLE__=true --banner:js='#!/usr/bin/env node' --outfile=jsbt.bin.js",
     "format": "npx prettier --write src",
     "test": "echo 'No test'",
     "test:bun": "echo 'No bun'",
@@ -43,9 +45,9 @@
     "url": "git+https://github.com/paulmillr/jsbt.git"
   },
   "type": "module",
-  "main": "index.js",
-  "module": "index.js",
-  "types": "index.d.ts",
+  "main": "jsbt.bin.js",
+  "module": "jsbt.bin.js",
+  "types": "jsbt.d.ts",
   "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "license": "MIT"

@@ -16,6 +16,10 @@
   "scripts": {
     "build": "tsc && tsc -p tsconfig.cjs.json",
     "build:release": "npx --no @paulmillr/jsbt esbuild test/build",
+    "check": "npm run check:readme && npm run check:tree-shaking && npm run check:jsdoc",
+    "check:readme": "npx --no @paulmillr/jsbt readme package.json",
+    "check:tree-shaking": "npx --no @paulmillr/jsbt tree-shaking package.json test/build/out-tree-shaking",
+    "check:jsdoc": "npx --no @paulmillr/jsbt tsdoc package.json",
     "lint": "prettier --check index.ts test",
     "format": "prettier --write index.ts test",
     "test": "node test/index.test.js"
