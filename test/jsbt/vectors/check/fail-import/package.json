@@ -1,0 +1,18 @@
+{
+  "name": "@jsbt-test/check-import-fail",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "types": "index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.js"
+    },
+    "./slow.js": {
+      "types": "./slow.d.mts",
+      "default": "./slow.js"
+    }
+  },
+  "sideEffects": false
+}

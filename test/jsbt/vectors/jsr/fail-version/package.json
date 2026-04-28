@@ -1,0 +1,20 @@
+{
+  "name": "micro-jsr-version",
+  "private": true,
+  "version": "1.2.3",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "default": "./src/index.js"
+    }
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.2.0",
+    "micro-packed": "^0.8.0"
+  },
+  "sideEffects": false
+}

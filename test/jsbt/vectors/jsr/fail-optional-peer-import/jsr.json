@@ -1,0 +1,10 @@
+{
+  "name": "@paulmillr/micro-jsr-optional-peer",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publish": {
+    "include": ["src", "jsr.json", "LICENSE", "README.md"]
+  }
+}

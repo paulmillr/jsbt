@@ -1,0 +1,19 @@
+{
+  "name": "micro-jsr-typeonly-dev",
+  "private": true,
+  "version": "1.2.3",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "default": "./src/index.js"
+    }
+  },
+  "devDependencies": {
+    "@awasm/compiler": "0.1.1"
+  },
+  "sideEffects": false
+}

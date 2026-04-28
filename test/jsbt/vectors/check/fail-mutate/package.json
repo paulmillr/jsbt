@@ -1,0 +1,20 @@
+{
+  "name": "@jsbt-test/check-mutate",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.js"
+    },
+    "./sub.js": {
+      "types": "./sub.d.mts",
+      "default": "./sub.js"
+    }
+  },
+  "sideEffects": false
+}

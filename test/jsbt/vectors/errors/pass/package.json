@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-pass",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./source.js": "./source.js"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@jsbt-test/check-skip-import",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./sub": "./sub.js"
+  },
+  "types": "./index.d.mts"
+}

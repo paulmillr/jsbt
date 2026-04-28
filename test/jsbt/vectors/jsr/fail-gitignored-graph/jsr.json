@@ -1,0 +1,10 @@
+{
+  "name": "@paulmillr/micro-jsr-gitignored-graph",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publish": {
+    "include": ["src", "jsr.json", "LICENSE", "README.md"]
+  }
+}

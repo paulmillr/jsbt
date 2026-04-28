@@ -1,0 +1,11 @@
+{
+  "name": "@jsbt-test/check-src",
+  "version": "1.0.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./alpha.js": "./src/alpha.ts"
+  },
+  "publish": {
+    "include": ["src", "jsr.json", "LICENSE", "README.md"]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@jsbt-test/check-src",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "default": "./src/index.js"
+    },
+    "./alpha.js": {
+      "types": "./src/alpha.d.mts",
+      "default": "./src/alpha.js"
+    },
+    "./broken.js": {
+      "types": "./src/broken.d.mts",
+      "default": "./src/broken.js"
+    }
+  },
+  "sideEffects": false
+}

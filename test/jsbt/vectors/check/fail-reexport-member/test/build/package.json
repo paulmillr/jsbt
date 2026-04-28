@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jsbt-test/fail-reexport-member": "file:../.."
+  }
+}

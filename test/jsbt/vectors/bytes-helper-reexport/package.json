@@ -1,0 +1,7 @@
+{
+  "name": "bytes-helper-reexport",
+  "type": "module",
+  "exports": {
+    ".": "./utils.ts"
+  }
+}

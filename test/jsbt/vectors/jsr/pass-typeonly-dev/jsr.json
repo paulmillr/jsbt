@@ -1,0 +1,13 @@
+{
+  "name": "@paulmillr/micro-jsr-typeonly-dev",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "@awasm/compiler": "jsr:@awasm/compiler@0.1.1"
+  },
+  "publish": {
+    "include": ["src", "jsr.json", "LICENSE", "README.md"]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "private": true,
+  "devDependencies": {
+    "typescript": "5.6.3"
+  },
+  "scripts": {
+    "check:args": "tsc --noEmit --pretty false --strict --lib es2022,dom ../args.ts",
+    "check:convert": "tsc --noEmit --pretty false --strict --lib es2022,dom ../convert.ts",
+    "check:example1": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example1.ts",
+    "check:example2": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example2.ts",
+    "check:example3": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example3.ts",
+    "check:example4": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example4.ts",
+    "check:example5": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example5.ts",
+    "check:example6": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example6.ts",
+    "check:example7": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example7.ts",
+    "check:example8": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example8.ts",
+    "check:example9": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example9.ts",
+    "check:example10": "tsc --noEmit --pretty false --strict --lib es2022,dom ../example10.ts"
+  }
+}

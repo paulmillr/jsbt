@@ -1,0 +1,10 @@
+{
+  "name": "@jsbt-test/fail-nested-wrapper-link",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.mts",
+  "sideEffects": false
+}

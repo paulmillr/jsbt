@@ -1,0 +1,11 @@
+{
+  "name": "@jsbt-test/check-import",
+  "version": "1.0.0",
+  "exports": {
+    ".": "./index.ts",
+    "./slow.js": "./slow.ts"
+  },
+  "publish": {
+    "include": ["index.ts", "slow.ts", "jsr.json", "LICENSE", "README.md"]
+  }
+}

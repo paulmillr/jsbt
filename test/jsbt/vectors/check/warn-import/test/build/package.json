@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jsbt-test/check-import": "file:../.."
+  }
+}

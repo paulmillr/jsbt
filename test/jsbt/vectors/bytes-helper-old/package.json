@@ -1,0 +1,7 @@
+{
+  "name": "bytes-helper-old",
+  "type": "module",
+  "exports": {
+    ".": "./utils.ts"
+  }
+}

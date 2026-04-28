@@ -1,0 +1,19 @@
+{
+  "name": "@paulmillr/micro-jsr-version",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "@noble/hashes": "jsr:@noble/hashes@^2.0.0",
+    "micro-packed": "jsr:@paulmillr/micro-packed@^0.7.0"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "jsr.json",
+      "LICENSE",
+      "README.md"
+    ]
+  }
+}

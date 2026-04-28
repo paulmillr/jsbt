@@ -1,0 +1,7 @@
+{
+  "name": "bytes-opaque",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  }
+}

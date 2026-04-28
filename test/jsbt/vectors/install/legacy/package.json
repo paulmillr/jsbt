@@ -1,0 +1,15 @@
+{
+  "name": "@jsbt-test/check-install",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "build:release": "npx --no @paulmillr/jsbt esbuild test/build",
+    "check": "npm run check:readme && npm run check:treeshake && npm run check:jsdoc",
+    "check:readme": "npx --no @paulmillr/jsbt readme package.json",
+    "check:treeshake": "npx --no @paulmillr/jsbt treeshake package.json test/build/out-treeshake",
+    "check:jsdoc": "npx --no @paulmillr/jsbt tsdoc package.json",
+    "bench": "node test/benchmark.ts",
+    "format": "prettier --write 'index.ts' 'test/*.{js,ts}'",
+    "test": "node --experimental-strip-types test/index.ts"
+  }
+}

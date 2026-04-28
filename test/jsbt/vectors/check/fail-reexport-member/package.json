@@ -1,0 +1,20 @@
+{
+  "name": "@jsbt-test/fail-reexport-member",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.js"
+    },
+    "./web.js": {
+      "types": "./web.d.mts",
+      "default": "./web.js"
+    }
+  },
+  "sideEffects": false
+}

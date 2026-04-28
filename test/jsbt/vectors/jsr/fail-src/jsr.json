@@ -1,0 +1,16 @@
+{
+  "name": "@paulmillr/micro-jsr-wrong",
+  "version": "9.9.9",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extra.js": "./src/extra.ts"
+  },
+  "imports": {
+    "@noble/hashes": "jsr:@paulmillr/micro-packed@^0.8.0",
+    "micro-packed": "jsr:@noble/hashes@^2.0.0",
+    "unused": "jsr:@paulmillr/unused@^1.0.0"
+  },
+  "publish": {
+    "include": ["src/index.ts", "util.js", "jsr.json"]
+  }
+}

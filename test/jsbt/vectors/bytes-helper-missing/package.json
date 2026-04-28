@@ -1,0 +1,7 @@
+{
+  "name": "bytes-helper-missing",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  }
+}

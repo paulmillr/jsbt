@@ -1,0 +1,5 @@
+{
+  "name": "@jsbt-test/bytes",
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@paulmillr/micro-jsr-pass",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/index.ts",
+    "./util.js": "./src/util.ts"
+  },
+  "imports": {
+    "micro-packed": "jsr:@paulmillr/micro-packed@^0.8.0"
+  },
+  "publish": {
+    "include": ["src", "jsr.json", "LICENSE", "README.md"]
+  }
+}

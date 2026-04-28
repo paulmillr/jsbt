@@ -1,0 +1,24 @@
+{
+  "name": "micro-jsr-fail",
+  "private": true,
+  "version": "1.2.3",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "default": "./src/index.js"
+    },
+    "./util.js": {
+      "types": "./src/util.d.mts",
+      "default": "./src/util.js"
+    }
+  },
+  "dependencies": {
+    "@noble/hashes": "file:../noble-hashes",
+    "micro-packed": "file:../micro-packed"
+  },
+  "sideEffects": false
+}
