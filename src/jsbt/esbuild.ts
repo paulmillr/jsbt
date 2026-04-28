@@ -17,7 +17,7 @@ import { basename, join as pjoin, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
-import { npmInstall } from './fs-modify.ts';
+import { npmInstall } from '../fs-modify.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 

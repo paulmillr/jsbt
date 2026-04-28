@@ -26,7 +26,7 @@
     "typescript": "5.9.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.example.json && esbuild src/jsbt.ts --bundle --platform=node --format=esm --target=node22 --define:__JSBT_BUNDLE__=true --banner:js='#!/usr/bin/env node' --outfile=jsbt.bin.js",
+    "build": "tsc -p tsconfig.example.json && esbuild src/jsbt/index.ts --bundle --platform=node --format=esm --target=node22 --define:__JSBT_BUNDLE__=true --banner:js='#!/usr/bin/env node' --outfile=jsbt.bin.js",
     "format": "npx prettier --write src",
     "test": "echo 'No test'",
     "test:bun": "echo 'No bun'",
@@ -47,7 +47,7 @@
   "type": "module",
   "main": "jsbt.bin.js",
   "module": "jsbt.bin.js",
-  "types": "jsbt.d.ts",
+  "types": "jsbt/index.d.ts",
   "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "license": "MIT"

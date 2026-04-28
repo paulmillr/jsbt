@@ -4,12 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
-const LOG_LEVEL = +(process.env.JSBT_LOG_LEVEL || 1);
 const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
-const PREFIXES = ['.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
+const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
 const err = (msg: string): never => {
   throw new Error(msg);
 };
+const logLevel = (): number => +(process.env.JSBT_LOG_LEVEL || 1);
 const inBuild = (path: string): boolean =>
   path.endsWith('/test/build') || path.includes('/test/build/');
 export const assertAllowed = (file: string): string => {
@@ -24,19 +24,27 @@ export const assertAllowed = (file: string): string => {
 export const write = (file: string, data: string | Uint8Array): string => (
   mkdirSync(dirname(assertAllowed(file)), { recursive: true }),
   writeFileSync(file, data),
-  LOG_LEVEL > 1 && console.log(`write\t${file}`),
+  logLevel() > 1 && console.log(`write\t${file}`),
   file
 );
+export const writePkg = (file: string, data: string | Uint8Array): string => {
+  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
+  if (basename(file) !== 'package.json') err(`expected package.json path: ${file}`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, data);
+  if (logLevel() > 0) console.log(`write\t${file}`);
+  return file;
+};
 export const rm = (file: string): boolean => (
   rmSync(assertAllowed(file), { force: true }),
-  LOG_LEVEL > 0 && console.log(`delete\t${file}`),
+  logLevel() > 0 && console.log(`delete\t${file}`),
   true
 );
 export const npmInstall = (dir: string): void => {
   if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
   if (!inBuild(dir)) err(`expected test/build path: ${dir}`);
-  if (LOG_LEVEL > 0) console.log(`> cd ${dir}`);
-  if (LOG_LEVEL > 0) console.log('> npm install');
+  if (logLevel() > 0) console.log(`> cd ${dir}`);
+  if (logLevel() > 0) console.log('> npm install');
   execFileSync('npm', ['install'], { cwd: dir, stdio: 'inherit' });
 };
 export const sweep = (dir: string): string[] => {

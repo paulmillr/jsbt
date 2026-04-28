@@ -3,11 +3,11 @@
 Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
 do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
 
-Canonical shared copy: keep this file in `@paulmillr/jsbt/src`, then run it after a fresh build.
+Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
 Like `jsbt esbuild`, it runs `npm install` in the selected build directory before checking.
 File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
 
-It prints `unused\t...` lines for locals that still survive bundling.
+It prints grouped `unused` issues for locals that still survive bundling.
 All writes and any other modifications from this script MUST stay under the selected build/output directories.
 Cleanup rule: keep diffs minimal. Prefer `/* @__PURE__ *\/` on the exact offending call/expression
 first, instead of structural refactors. In practice esbuild can keep parents alive through
@@ -20,7 +20,16 @@ import { createRequire } from 'node:module';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
-import { npmInstall, sweep, write } from './fs-modify.ts';
+import { npmInstall, sweep, write } from '../fs-modify.ts';
+import {
+  color,
+  groupIssues,
+  issueKind,
+  paint,
+  stripAnsi,
+  type Issue as LogIssue,
+  wantColor,
+} from './utils.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 
@@ -31,6 +40,8 @@ type Log = (line: string) => void;
 type TsLike = {
   ModuleKind: { ESNext: unknown };
   ScriptTarget: { ESNext: unknown };
+  SyntaxKind: Record<string, number>;
+  createSourceFile: (file: string, text: string, target: unknown, setParents?: boolean) => any;
   createProgram: (
     files: string[],
     opts: {
@@ -42,15 +53,15 @@ type TsLike = {
       skipLibCheck?: boolean;
       target: unknown;
     }
-  ) => {
-    getSourceFile: (
-      file: string
-    ) => { fileName: string; symbol?: unknown; text: string } | undefined;
-    getTypeChecker: () => {
-      getExportsOfModule: (sym: unknown) => { getName: () => string }[];
-      getSymbolAtLocation: (node: unknown) => unknown;
-    };
-  };
+  ) => {};
+  isClassDeclaration: (node: any) => boolean;
+  isExportDeclaration: (node: any) => boolean;
+  isFunctionDeclaration: (node: any) => boolean;
+  isIdentifier: (node: any) => boolean;
+  isNamedExports: (node: any) => boolean;
+  isNamespaceExport?: (node: any) => boolean;
+  isStringLiteral: (node: any) => boolean;
+  isVariableStatement: (node: any) => boolean;
   getPreEmitDiagnostics: (prog: unknown) => {
     code: number;
     file?: {
@@ -92,6 +103,7 @@ type Item = {
 };
 type Built = Item & { file: string; min: Uint8Array; minFile: string; plain: Uint8Array };
 type AuditItem = { code: number; line: number; text: string };
+type TreeIssue = { file: string; id: string; line: number; text: string };
 type TableApi = {
   drawHeader: (sizes: number[], fields: string[]) => void;
   drawSeparator: (sizes: number[], changed: boolean[]) => void;
@@ -123,11 +135,6 @@ examples:
 const bundled = (): boolean => typeof __JSBT_BUNDLE__ !== 'undefined' && __JSBT_BUNDLE__;
 
 const decoder = new TextDecoder();
-const color = {
-  dim: '\x1b[2m',
-  green: '\x1b[32m',
-  reset: '\x1b[0m',
-};
 const CH = '─';
 const NN = '│';
 const LR = '┼';
@@ -140,18 +147,17 @@ const UNUSED_IGNORE = new Set(['__require', '__toESM']);
 const err = (msg: string): never => {
   throw new Error(msg);
 };
-const paint = (s: string, c = color.green) => `${c}${s}${color.reset}`;
+const _paint = (text: string, code: string = color.green) => paint(text, code);
 const kb = (bytes: number) => (bytes / 1024).toFixed(2);
 const diff = (cur: number, base: number) => `${((cur / base - 1) * 100).toFixed(2)}%`;
 const size = (cur: number, base: number) =>
-  `${paint(kb(cur))} ${paint(`(${diff(cur, base)})`, color.dim)}`;
+  `${_paint(kb(cur))} ${_paint(`(${diff(cur, base)})`, color.dim)}`;
 const camel = (s: string) =>
   s
     .split(/[^a-zA-Z0-9]+/)
     .filter(Boolean)
     .map((part, i) => (i ? part[0].toUpperCase() + part.slice(1) : part))
     .join('');
-const stripAnsi = (str: string) => str.replace(/\x1b\[\d+(;\d+)*m/g, '');
 const sweepTemps = (cwd: string): void => {
   sweep(cwd);
 };
@@ -294,28 +300,46 @@ const exportPath = (value: unknown): string => {
   }
   return '';
 };
-const listExports = (ts: TsLike, files: string[]) => {
-  const prog = ts.createProgram(files, {
-    allowJs: true,
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ESNext,
-  });
-  const checker = prog.getTypeChecker();
-  const res = new Map<string, string[]>();
-  for (const file of files) {
-    const sf = prog.getSourceFile(file);
-    const sym = sf?.symbol || (sf && checker.getSymbolAtLocation(sf));
-    if (!sf || !sym) err(`cannot inspect exports of ${file}`);
-    res.set(
-      file,
-      checker
-        .getExportsOfModule(sym)
-        .map((entry) => entry.getName())
-        .filter((name) => name !== 'default' && name !== '__esModule')
-        .sort()
-    );
+const textOf = (node: any): string => (typeof node?.text === 'string' ? node.text : '');
+const exported = (ts: TsLike, node: any): boolean =>
+  !!node.modifiers?.some((mod: any) => mod.kind === ts.SyntaxKind.ExportKeyword);
+const localSpec = (from: string, spec: string): string | undefined => {
+  if (!spec.startsWith('.')) return;
+  const base = resolve(dirname(from), spec);
+  if (existsSync(base)) return base;
+  for (const ext of ['.js', '.mjs', '.cjs']) if (existsSync(base + ext)) return base + ext;
+  return;
+};
+const runtimeExports = (ts: TsLike, file: string, seen = new Set<string>()): string[] => {
+  if (seen.has(file)) return [];
+  seen.add(file);
+  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true);
+  const out = new Set<string>();
+  const add = (name: string): void => {
+    if (name && name !== 'default' && name !== '__esModule') out.add(name);
+  };
+  for (const stmt of sf.statements || []) {
+    if ((ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) && exported(ts, stmt))
+      add(textOf(stmt.name));
+    else if (ts.isVariableStatement(stmt) && exported(ts, stmt)) {
+      for (const decl of stmt.declarationList?.declarations || [])
+        if (ts.isIdentifier(decl.name)) add(textOf(decl.name));
+    } else if (ts.isExportDeclaration(stmt)) {
+      const clause = stmt.exportClause;
+      if (clause && ts.isNamedExports(clause)) {
+        for (const el of clause.elements || []) if (!el.isTypeOnly) add(textOf(el.name));
+      } else if (clause && ts.isNamespaceExport?.(clause)) add(textOf(clause.name));
+      else if (
+        !stmt.isTypeOnly &&
+        stmt.moduleSpecifier &&
+        ts.isStringLiteral(stmt.moduleSpecifier)
+      ) {
+        const next = localSpec(file, stmt.moduleSpecifier.text);
+        if (next) for (const name of runtimeExports(ts, next, seen)) add(name);
+      }
+    }
   }
-  return res;
+  return [...out].sort();
 };
 const readModules = (ctx: Ctx, ts: TsLike): Mod[] => {
   const res: Mod[] = [];
@@ -333,11 +357,7 @@ const readModules = (ctx: Ctx, ts: TsLike): Mod[] => {
       spec: exportSpec(ctx.pkg, key, file),
     });
   }
-  const names = listExports(
-    ts,
-    res.map((mod) => mod.file)
-  );
-  for (const mod of res) mod.exports = names.get(mod.file) || [];
+  for (const mod of res) mod.exports = runtimeExports(ts, mod.file);
   return res;
 };
 const fullSource = (mods: Mod[]) =>
@@ -452,8 +472,8 @@ const row = (ctx: Ctx, item: Item, out: Pick<Built, 'min' | 'minFile' | 'plain'>
     item.module,
     item.export,
     relative(ctx.outDir, out.minFile) || basename(out.minFile),
-    paint(String(decoder.decode(out.plain).split('\n').length)),
-    paint(kb(out.min.length)),
+    _paint(String(decoder.decode(out.plain).split('\n').length)),
+    _paint(kb(out.min.length)),
     size(gz.length, out.min.length),
     size(zstd.length, out.min.length),
   ];
@@ -461,7 +481,12 @@ const row = (ctx: Ctx, item: Item, out: Pick<Built, 'min' | 'minFile' | 'plain'>
 
 export const runCli = async (
   argv: string[],
-  opts: { cwd?: string; load?: (pkgFile: string) => Deps } = {}
+  opts: {
+    cwd?: string;
+    load?: (pkgFile: string) => Deps;
+    onIssue?: (issue: TreeIssue) => void;
+    quiet?: boolean;
+  } = {}
 ): Promise<void> => {
   const args = parseArgs(argv);
   if (args.help) {
@@ -486,33 +511,47 @@ export const runCli = async (
     Math.max(headers[6].length, 18),
   ];
   const print = table(console.log);
-  print.drawHeader(sizes, headers);
+  if (!opts.quiet) print.drawHeader(sizes, headers);
   let prev: string[] | undefined;
   const built: Built[] = [];
   for (const item of items) {
     const out = await writeCase(ctx, build, item);
     built.push(out);
-    prev = print.printRow(row(ctx, item, out), prev, sizes, headers.slice(0, 2));
+    if (!opts.quiet) prev = print.printRow(row(ctx, item, out), prev, sizes, headers.slice(0, 2));
   }
-  print.drawSeparator(
-    sizes,
-    sizes.map(() => true)
-  );
+  if (!opts.quiet)
+    print.drawSeparator(
+      sizes,
+      sizes.map(() => true)
+    );
   const issues = audit(
     ts,
     built.map((item) => item.file)
   );
   if (!issues.size) return;
+  const logs: LogIssue[] = [];
   for (const item of built) {
     const list = issues.get(item.file);
     if (!list?.length) continue;
-    const names = list
-      .slice(0, 6)
-      .map((entry) => `${entry.text}@L${entry.line}`)
-      .join(', ');
-    const more = list.length > 6 ? `, +${list.length - 6} more` : '';
-    console.error(`unused\t${itemId(ctx.pkg, item)}\t${names}${more}`);
+    for (const entry of list)
+      opts.onIssue?.({
+        file: item.file,
+        id: itemId(ctx.pkg, item),
+        line: entry.line,
+        text: entry.text,
+      });
+    for (const entry of list)
+      logs.push({
+        level: 'ERROR',
+        ref: {
+          file: relative(ctx.cwd, item.file) || item.file,
+          issue: issueKind(`unused (${itemId(ctx.pkg, item)})`, 'treeshake'),
+          sym: `${entry.line}/${entry.text}`,
+        },
+      });
   }
+  if (!opts.quiet)
+    for (const line of groupIssues('treeshake', logs, wantColor())) console.error(line);
   err(`found unused locals in ${issues.size} release bundles`);
 };
 

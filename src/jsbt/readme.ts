@@ -3,7 +3,7 @@
 Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
 do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
 
-Canonical shared copy: keep this file in `@paulmillr/jsbt/src`, then run it after a fresh build.
+Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
 Like `jsbt esbuild`, it runs `npm install` in the selected run/build directory before checking.
 File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
 
@@ -17,7 +17,16 @@ import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { npmInstall, rm, sweep, write } from './fs-modify.ts';
+import { npmInstall, rm, sweep, write } from '../fs-modify.ts';
+import {
+  issueKind,
+  printIssues,
+  status,
+  summary,
+  type Issue as LogIssue,
+  type Result,
+  wantColor,
+} from './utils.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 
@@ -51,7 +60,6 @@ type ExecRes = {
   stderr: string;
   stdout: string;
 };
-type Log = (line: string) => void;
 type Msg = string | { messageText?: Msg; next?: Msg[] };
 type DiagnosticLike = {
   file?: { getLineAndCharacterOfPosition: (pos: number) => { line: number }; fileName: string };
@@ -111,7 +119,6 @@ type TsLike = {
     useCaseSensitiveFileNames: boolean;
   };
 };
-type Result = { failures: number; passed: number; skipped: number; warnings: number };
 type TestApi = {
   compact: typeof compact;
   decide: typeof decide;
@@ -136,12 +143,6 @@ examples:
 
 const bundled = (): boolean => typeof __JSBT_BUNDLE__ !== 'undefined' && __JSBT_BUNDLE__;
 
-const color = {
-  green: '\x1b[32m',
-  red: '\x1b[31m',
-  reset: '\x1b[0m',
-  yellow: '\x1b[33m',
-};
 const JS = new Set(['cjs', 'javascript', 'js', 'mjs', 'node']);
 const SKIP = new Set(['kotlin', 'md', 'markdown', 'plaintext', 'text', 'txt']);
 const TS = new Set(['cts', 'mts', 'ts', 'tsx', 'typescript']);
@@ -159,27 +160,6 @@ const guardChild = (cwd: string, file: string, label: string) => {
   const rel = relative(cwd, file);
   if (!rel || rel === '.' || rel.startsWith('..') || isAbsolute(rel))
     err(`refusing unsafe ${label} path ${file}; expected a child path of ${cwd}`);
-};
-const paint = (text: string, code: string, on: boolean) =>
-  on ? `${code}${text}${color.reset}` : text;
-const wantColor = (
-  env: NodeJS.ProcessEnv = process.env,
-  tty: boolean = !!process.stdout.isTTY
-): boolean => {
-  if (env.NO_COLOR) return false;
-  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
-  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
-  if (env.FORCE_COLOR === '0') return false;
-  if (env.CLICOLOR === '0') return false;
-  return tty;
-};
-const status = (name: 'error' | 'pass' | 'warn', on: boolean) => {
-  const word = paint(
-    name,
-    name === 'error' ? color.red : name === 'warn' ? color.yellow : color.green,
-    on
-  );
-  return `[${word}]`;
 };
 const parseArgs = (argv: string[]): Args => {
   if (argv.includes('--help') || argv.includes('-h')) return { help: true, pkgArg: '' };
@@ -455,20 +435,20 @@ const runCode = async (code: string, cwd: string, mode: Mode): Promise<ExecRes> 
     rm(file);
   }
 };
-const ref = (file: string, block: Block): string =>
-  `${basename(file)}:${block.head} (${block.line})`;
-const logIssue = (
-  log: Log,
-  colorOn: boolean,
+const issueOf = (
   level: 'error' | 'warn',
   file: string,
   block: Block,
   text: string,
   kind: string
-) => log(`${status(level, colorOn)} ${ref(file, block)}: ${text} (${kind})`);
-const summary = (res: Result) =>
-  `${res.passed} passed, ${res.warnings} warning${res.warnings === 1 ? '' : 's'}, ${res.failures} failure${res.failures === 1 ? '' : 's'}, ${res.skipped} skipped`;
-
+): LogIssue => ({
+  level: level === 'warn' ? 'WARNING' : 'ERROR',
+  ref: {
+    file: basename(file),
+    issue: issueKind(text, kind),
+    sym: block.head ? `${block.line}/${block.head}` : String(block.line),
+  },
+});
 export const runCli = async (
   argv: string[],
   opts: {
@@ -490,6 +470,7 @@ export const runCli = async (
   const text = readFileSync(ctx.readmeFile, 'utf8');
   const blocks = parseReadme(text);
   const out: Result = { failures: 0, passed: 0, skipped: 0, warnings: 0 };
+  const issues: LogIssue[] = [];
   let ts: TsLike | undefined;
   for (const block of blocks) {
     if (!block.runnable || !block.kind) {
@@ -505,7 +486,7 @@ export const runCli = async (
       if (errs.length) {
         failed = true;
         out.failures += 1;
-        logIssue(console.error, colorOn, 'error', ctx.readmeFile, block, compact(errs), 'type');
+        issues.push(issueOf('error', ctx.readmeFile, block, compact(errs), 'type'));
       }
       const exec = await Promise.resolve((opts.runCode || runCode)(block.code, ctx.runDir, 'ts'));
       if (!exec.ok) {
@@ -516,7 +497,7 @@ export const runCli = async (
           firstText(exec.stderr) ||
           firstText(exec.stdout) ||
           `exit ${exec.status}`;
-        logIssue(console.error, colorOn, 'error', ctx.readmeFile, block, msg, 'exec');
+        issues.push(issueOf('error', ctx.readmeFile, block, msg, 'exec'));
       }
       if (!failed) out.passed += 1;
       continue;
@@ -536,25 +517,20 @@ export const runCli = async (
         : undefined;
       if (!errs.length && tsExec?.ok) {
         out.warnings += 1;
-        logIssue(
-          console.error,
-          colorOn,
-          'warn',
-          ctx.readmeFile,
-          block,
-          `${block.label || 'js'}->ts`,
-          'fence-mismatch'
+        issues.push(
+          issueOf('warn', ctx.readmeFile, block, `${block.label || 'js'}->ts`, 'fence-mismatch')
         );
       } else {
         failed = true;
         out.failures += 1;
         const msg =
           js.error?.message || firstText(js.stderr) || firstText(js.stdout) || `exit ${js.status}`;
-        logIssue(console.error, colorOn, 'error', ctx.readmeFile, block, msg, 'exec');
+        issues.push(issueOf('error', ctx.readmeFile, block, msg, 'exec'));
       }
     }
     if (!failed) out.passed += 1;
   }
+  printIssues('readme', issues, colorOn);
   (out.failures || out.warnings ? console.error : console.log)(
     `${status(out.failures || out.warnings ? 'error' : 'pass', colorOn)} summary: ${summary(out)}`
   );
