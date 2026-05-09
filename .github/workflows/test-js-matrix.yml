@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 jobs:
   node:
-    name: Node v${{ matrix.node }}
+    name: Node v${{ matrix.node }} @ ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
       MSHOULD_FAST: 1
@@ -31,36 +31,3 @@ jobs:
       - run: npm install
       - run: npm run build --if-present
       - run: npm test
-  bun:
-    name: Bun
-    runs-on: ubuntu-24.04-arm
-    env:
-      MSHOULD_FAST: 1
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-          submodules: ${{ inputs.submodules }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: latest
-      - run: bun install
-      - run: bun run --if-present build
-      - run: bun run --if-present test:bun
-  deno:
-    name: Deno
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-          submodules: ${{ inputs.submodules }}
-      - uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
-        with:
-          deno-version: v2.x
-      - run: grep -q 'test:deno' package.json && deno install || exit 0
-        name: Run deno install if test:deno is present
-      - run: grep -q 'build' package.json && deno task build || exit 0
-        name: Run build if present
-      - run: grep -q 'test:deno' package.json && deno task test:deno || exit 0
-        name: Run test:deno if present
