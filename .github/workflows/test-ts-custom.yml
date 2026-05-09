@@ -1,4 +1,4 @@
-name: Run slow TS tests
+name: Run custom TS tests
 on:
   workflow_call:
     inputs:
@@ -10,7 +10,7 @@ env:
   MSHOULD_FAST: 1
 jobs:
   slow:
-    name: Run slow TS tests
+    name: Run custom TS tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -21,7 +21,7 @@ jobs:
         with:
           registry-url: "https://registry.npmjs.org"
           cache: npm
-          node-version: 24
+          node-version: 26
       - run: npm install
       - run: npm run build --if-present
       - run: npm run ${{ inputs.npm-task }}
