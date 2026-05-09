@@ -1,4 +1,4 @@
-name: Run JS tests
+name: Run TS tests
 on:
   workflow_call:
     inputs:
