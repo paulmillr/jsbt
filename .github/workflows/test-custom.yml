@@ -4,7 +4,7 @@ on:
     inputs:
       npm-task:
         default: test:slow
-        required: false
+        required: true
         type: string
 env:
   MSHOULD_FAST: 1
