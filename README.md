@@ -22,7 +22,6 @@ Used by [noble cryptography](https://paulmillr.com/noble/) and others.
 - [📝 test](#test)
 - [🏗️ jsbt](#jsbt)
 - [⚙️ tsconfig](#tsconfig)
-- [repo-template](#repo-template)
 
 ## CI workflows
 
@@ -147,26 +146,30 @@ ENV variables, specifiable via command line or through code:
 
 Current subcommands:
 
-- `jsbt esbuild`: bundle one repo's `test/build` input via [esbuild](https://esbuild.github.io)
-- `jsbt readme`: typecheck and execute fenced README examples
-- `jsbt treeshake`: audit release bundles for locals that survive bundling
-- `jsbt tsdoc`: audit built public declarations and examples
+`jsbt esbuild`: bundle one repo's `test/build` input via [esbuild](https://esbuild.github.io)
+
+```
+jsbt esbuild <build-dir> [--auto] [--no-prefix]
+jsbt check <package.json> [check-name|out-dir] [out-dir]
+jsbt check-install <package.json>
+jsbt bigint <package.json>
+jsbt bytes <package.json>
+jsbt comments <package.json>
+jsbt errors <package.json>
+jsbt importtime <package.json>
+jsbt jsr <package.json>
+jsbt jsrpublish <package.json>
+jsbt mutate <package.json>
+jsbt readme <package.json>
+jsbt tests <package.json>
+jsbt treeshake <package.json> <out-dir>
+jsbt typeimport <package.json>
+jsbt tsdoc <package.json>
+```
 
 The published package exposes a single bin, so all of these work through:
 
 > `npx --no @paulmillr/jsbt <subcommand> ...`
-
-Usage (add this as `"build:release"` step in `package.json scripts` section):
-
-> `npx --no @paulmillr/jsbt esbuild test/build`
-
-Shared checker usage:
-
-> `jsbt readme package.json`
-
-> `jsbt treeshake package.json test/build/out-treeshake`
-
-> `jsbt tsdoc package.json`
 
 The command would execute following subcommands and produce several files:
 
@@ -195,13 +198,6 @@ Option descriptions:
 * `isolatedDeclarations` ensures types are "fast" and friendly to JSR.io
 * `verbatimModuleSyntax` - ensures files are friendly to "type erasure" / "type ignore"
 node.js and others
-
-## repo-template
-
-Contains project skeleton, which can be used to create a new package.
-Replace `EDIT_ME` with proper value.
-
-The template ships with `npm run check`, which runs `jsbt readme`, `jsbt treeshake`, and `jsbt tsdoc`.
 
 ## License
 
