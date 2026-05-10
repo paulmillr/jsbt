@@ -31,7 +31,7 @@ The files reside in `.github/workflows`:
 
 * `test-js.yml`: runs tests on LTS node.js, bun, deno, linter, and calculates coverage
 * `test-ts.yml`: the same, but runs typescript instead of js on supported node.js (v22+)
-  On node.js v20, it executes `test:nodeold` to compile files instead.
+  On node.js v26, it executes `test:tsc` to compile files instead.
 * `release.yml` publishes package on NPM, JSR and creates single-file output if it exists
     * Uses brand new token-less GitHub OIDC connector to NPM, ensure to link package in npm settings first
     * The Trusted Publishing also provides provenance statements by default
