@@ -19,6 +19,7 @@ jobs:
         with:
           registry-url: "https://registry.npmjs.org"
           node-version: 24.15.0 # Relevant as per May 2026, must be specific for determinism.
+          package-manager-cache: false # Mitigate cache poisoning
       - run: npm ci # Built-in NPM version, do not install newer
       - run: npm run build --if-present
       - name: Ensure NPM version has not been published yet
