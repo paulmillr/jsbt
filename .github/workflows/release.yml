@@ -20,7 +20,8 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           node-version: 24.15.0 # Relevant as per May 2026, must be specific for determinism.
           package-manager-cache: false # Mitigate cache poisoning
-      - run: npm ci # Built-in NPM version, do not install newer
+      - run: npm install -g npm@11.15.0 # For staged publishing
+      - run: npm ci
       - run: npm run build --if-present
       - name: Ensure NPM version has not been published yet
         run: npm publish --dry-run
@@ -40,4 +41,4 @@ jobs:
           npm install -g jsr
           jsr publish $SLOW_TYPES
         if: ${{ hashFiles('jsr.json') != '' }}
-      - run: npm publish --access public
+      - run: npm stage publish --access public
