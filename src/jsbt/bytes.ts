@@ -10,25 +10,30 @@ Rules:
   - class fields should stay plain typed arrays, not wrapped output helper types
   - generic typed arrays such as `Uint8Array<ArrayBuffer>` are rejected everywhere
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, dirname } from 'node:path';
 import {
-  bundled,
-  groupIssues,
-  guardChild,
-  issueKind,
+  cliArgs,
+  emptyResult,
+  ident,
+  loadTypeScriptApi,
+  makeIssue,
+  nodeLine,
+  nodeStart,
   pickTSFiles,
-  status,
-  summary,
+  pkgTarget,
+  readText,
+  relName,
+  reportIssues,
+  resolveLocalImport,
+  runSelf,
   type Issue as LogIssue,
-  type Result,
+  usageText,
   wantTSFile,
-  wantColor,
+  walkAst,
 } from './utils.ts';
 
-type Args = { help: boolean; pkgArg: string };
 type FileCtx = {
   decls: Map<string, unknown>;
   file: string;
@@ -99,12 +104,9 @@ type CheckerLike = {
   getSymbolAtLocation: (node: unknown) => SymLike | undefined;
 };
 type SymLike = { declarations?: any[]; flags?: number };
-const usage = `usage:
-  jsbt bytes <package.json>
-
-examples:
-  jsbt bytes package.json
-  node /path/to/check-bytes.ts package.json`;
+type CtxDecl = { ctx: FileCtx; node: any };
+type RefTarget = { ctx: FileCtx; local: boolean; node: any; subs?: Subs };
+const usage = usageText('bytes', 'check-bytes.ts');
 
 const TYPED = [
   'BigInt64Array',
@@ -135,6 +137,19 @@ const SHORT: Record<Typed, string> = {
   Uint8ClampedArray: 'RetU8CA',
 };
 const TYPED_SET = new Set<string>(TYPED);
+const CANON_TYPED = [
+  'BigInt64Array',
+  'BigUint64Array',
+  'Float32Array',
+  'Float64Array',
+  'Int16Array',
+  'Int32Array',
+  'Int8Array',
+  'Uint16Array',
+  'Uint32Array',
+  'Uint8ClampedArray',
+  'Uint8Array',
+] as const satisfies readonly Typed[];
 const HELPER_DOC = [
   'Bytes API type helpers for old + new TypeScript.',
   '',
@@ -148,8 +163,12 @@ const HELPER_DOC = [
   '- `TArg` keeps byte inputs broad.',
   '- `TRet` marks byte outputs for TS 5.6 and TS 5.9+ compatibility.',
 ] as const;
-const TARG_DOC = ['Recursively adapts byte-carrying API input types. See {@link TypedArg}.'] as const;
-const TRET_DOC = ['Recursively adapts byte-carrying API output types. See {@link TypedArg}.'] as const;
+const TARG_DOC = [
+  'Recursively adapts byte-carrying API input types. See {@link TypedArg}.',
+] as const;
+const TRET_DOC = [
+  'Recursively adapts byte-carrying API output types. See {@link TypedArg}.',
+] as const;
 const jsdoc = (lines: string[]): string =>
   lines.length === 1
     ? `/** ${lines[0]} */`
@@ -160,52 +179,16 @@ const CANON_DOC = new Map<string, string>([
   ['TArg', jsdoc([...TARG_DOC])],
   ['TRet', jsdoc([...TRET_DOC])],
 ]);
-const CANON_TYPED_ARG = `T extends BigInt64Array
-  ? BigInt64Array
-  : T extends BigUint64Array
-    ? BigUint64Array
-    : T extends Float32Array
-      ? Float32Array
-      : T extends Float64Array
-        ? Float64Array
-        : T extends Int16Array
-          ? Int16Array
-          : T extends Int32Array
-            ? Int32Array
-            : T extends Int8Array
-              ? Int8Array
-              : T extends Uint16Array
-                ? Uint16Array
-                : T extends Uint32Array
-                  ? Uint32Array
-                  : T extends Uint8ClampedArray
-                    ? Uint8ClampedArray
-                    : T extends Uint8Array
-                      ? Uint8Array
-                      : never`;
-const CANON_TYPED_RET = `T extends BigInt64Array
-  ? ReturnType<typeof BigInt64Array.of>
-  : T extends BigUint64Array
-    ? ReturnType<typeof BigUint64Array.of>
-    : T extends Float32Array
-      ? ReturnType<typeof Float32Array.of>
-      : T extends Float64Array
-        ? ReturnType<typeof Float64Array.of>
-        : T extends Int16Array
-          ? ReturnType<typeof Int16Array.of>
-          : T extends Int32Array
-            ? ReturnType<typeof Int32Array.of>
-            : T extends Int8Array
-              ? ReturnType<typeof Int8Array.of>
-              : T extends Uint16Array
-                ? ReturnType<typeof Uint16Array.of>
-                : T extends Uint32Array
-                  ? ReturnType<typeof Uint32Array.of>
-                  : T extends Uint8ClampedArray
-                    ? ReturnType<typeof Uint8ClampedArray.of>
-                    : T extends Uint8Array
-                      ? ReturnType<typeof Uint8Array.of>
-                      : never`;
+const canonTyped = (leaf: (typed: Typed) => string): string =>
+  [
+    ...CANON_TYPED.flatMap((typed, i) => [
+      `${'  '.repeat(i)}${i ? ': ' : ''}T extends ${typed}`,
+      `${'  '.repeat(i + 1)}? ${leaf(typed)}`,
+    ]),
+    `${'  '.repeat(CANON_TYPED.length)}: never`,
+  ].join('\n');
+const CANON_TYPED_ARG = canonTyped((typed) => typed);
+const CANON_TYPED_RET = canonTyped((typed) => `ReturnType<typeof ${typed}.of>`);
 const CANON_TARG = `T | ([TypedArg<T>] extends [never]
   ? T extends (...args: infer A) => infer R
     ? ((...args: { [K in keyof A]: TRet<A[K]> }) => TArg<R>) & {
@@ -261,17 +244,8 @@ const helperBlock = (): string =>
     .split('\n')
     .map((line) => `  ${line}`)
     .join('\n');
-const wantHelperFile = (file: string): boolean =>
-  /\.(?:d\.[cm]?ts|[cm]?ts|tsx)$/.test(file);
+const HELPER_FILE = /\.(?:d\.[cm]?ts|[cm]?ts|tsx)$/;
 
-const err = (msg: string): never => {
-  throw new Error(msg);
-};
-const parseArgs = (argv: string[]): Args => {
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true, pkgArg: '' };
-  if (argv.length !== 1) err('expected <package.json>');
-  return { help: false, pkgArg: argv[0] };
-};
 const tsOpts = (ts: TsLike, cwd: string) => {
   const file = ts.findConfigFile?.(cwd, ts.sys.fileExists, 'tsconfig.json');
   const base = (() => {
@@ -297,76 +271,50 @@ const tsOpts = (ts: TsLike, cwd: string) => {
     target: base.target || ts.ScriptTarget.ESNext,
   };
 };
-const resolveImportFile = (from: string, spec: string, files: Set<string>): string | undefined => {
-  if (!spec.startsWith('.')) return;
-  const raw = resolve(dirname(from), spec);
-  const tries = [
-    raw,
-    `${raw}.ts`,
-    `${raw}.mts`,
-    `${raw}.cts`,
-    `${raw}.tsx`,
-    join(raw, 'index.ts'),
-    join(raw, 'index.mts'),
-    join(raw, 'index.cts'),
-    join(raw, 'index.tsx'),
-  ];
-  if (/\.[cm]?js$/.test(raw))
-    tries.push(
-      raw.replace(/\.js$/, '.ts'),
-      raw.replace(/\.js$/, '.mts'),
-      raw.replace(/\.js$/, '.cts'),
-      raw.replace(/\.mjs$/, '.mts'),
-      raw.replace(/\.cjs$/, '.cts')
-    );
-  for (const file of tries)
-    if (files.has(file) || (existsSync(file) && wantTSFile(file))) return file;
-  return;
-};
+const resolveImportFile = (from: string, spec: string, files: Set<string>): string | undefined =>
+  resolveLocalImport(from, spec, {
+    accept: (file) => files.has(file) || (existsSync(file) && wantTSFile(file)),
+  });
 const loadTS = (pkgFile: string): TsLike => {
-  const req = createRequire(pkgFile);
-  const rawTs = (() => {
-    try {
-      return req('typescript') as TsLike | { default?: TsLike };
-    } catch {
-      return err(`missing typescript near ${pkgFile}; run npm install in the target repo first`);
-    }
-  })();
-  const ts = ('default' in rawTs && rawTs.default ? rawTs.default : rawTs) as TsLike;
-  if (
-    typeof ts.createProgram !== 'function' ||
-    typeof ts.createSourceFile !== 'function' ||
-    typeof ts.forEachChild !== 'function'
-  )
-    err(`expected TypeScript parser API near ${pkgFile}`);
-  return ts;
+  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript parser API', [
+    'createProgram',
+    'createSourceFile',
+    'forEachChild',
+  ]);
 };
-const textOf = (file: FileCtx, node: any): string => file.text.slice(node.pos, node.end).trim();
+const nodeText = (file: FileCtx, node: any): string => file.text.slice(node.pos, node.end).trim();
 const normType = (text: string): string => text.replace(/\s+/g, '');
-const posOf = (file: FileCtx, node: any): number =>
-  typeof node.getStart === 'function' ? node.getStart(file.source as any) : node.pos;
-const lineOf = (file: FileCtx, node: any): number =>
-  file.source.getLineAndCharacterOfPosition(posOf(file, node)).line + 1;
-const nameOf = (file: FileCtx, node: any): string => {
+const normText = (file: FileCtx, node: any): string => normType(nodeText(file, node));
+const flatText = (file: FileCtx, node: any): string => nodeText(file, node).replace(/\s+/g, ' ');
+const nodePos = (file: FileCtx, node: any): number => nodeStart(file.source as any, node);
+const nodeLineNo = (file: FileCtx, node: any): number => nodeLine(file.source, node);
+const nodeName = (file: FileCtx, node: any): string => {
   if (!node) return '';
   if (typeof node.escapedText === 'string') return node.escapedText;
-  return textOf(file, node);
+  return nodeText(file, node);
 };
-const ident = (name: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
-const typedOf = (file: FileCtx, node: any): Typed | undefined => {
-  if (!node || node.kind !== KIND.TypeReference) return;
-  const name = nameOf(file, node.typeName);
+const refLike = (node: any): boolean =>
+  node?.kind === KIND.TypeReference || node?.kind === KIND.ImportType;
+const typeRefName = (file: FileCtx, node: any): string =>
+  node?.kind === KIND.TypeReference ? nodeName(file, node.typeName) : '';
+const refName = (file: FileCtx, node: any): string =>
+  node?.kind === KIND.ImportType ? nodeName(file, node.qualifier) : nodeName(file, node?.typeName);
+const typedAlias = (state: State, file: FileCtx, name: string): Typed | undefined =>
+  file.imports.get(name) || state.aliasByName.get(name);
+const typedKind = (file: FileCtx, node: any): Typed | undefined => {
+  const name = typeRefName(file, node);
   if (!TYPED_SET.has(name)) return;
   return name as Typed;
 };
-const canonicalOf = (file: FileCtx, node: any): Typed | undefined => {
-  if (!node || node.kind !== KIND.TypeReference) return;
-  if (nameOf(file, node.typeName) !== 'ReturnType' || node.typeArguments?.length !== 1) return;
-  const raw = textOf(file, node).replace(/\s+/g, '');
+const canonicalKind = (file: FileCtx, node: any): Typed | undefined => {
+  if (typeRefName(file, node) !== 'ReturnType' || typeArgs(node).length !== 1) return;
+  const raw = normText(file, node);
   const hit = raw.match(/^ReturnType<typeof([A-Za-z0-9_]+)\.of>$/);
   if (!hit || !TYPED_SET.has(hit[1])) return;
   return hit[1] as Typed;
 };
+const byteLeaf = (file: FileCtx, node: any): boolean =>
+  !!(typedKind(file, node) || canonicalKind(file, node));
 const aliasDef = (name: Typed, alias: string = SHORT[name]): string =>
   `type ${alias} = ReturnType<typeof ${name}.of>`;
 const canonDef = (name: Typed): string => `ReturnType<typeof ${name}.of>`;
@@ -377,18 +325,20 @@ const labelIn = (name: Typed, alias: string): string =>
     ? `${alias} (return-only type)`
     : `${alias} (${aliasDef(name, alias)}; return-only type)`;
 const outMsg = (raw: string): string => `wrap output type with TRet<${raw}>`;
-const genMsg = (_state: State, name: Typed, raw: string, mode: Mode): string => {
-  if (mode === 'input') return `avoid generic ${raw}; use TArg<${name}> in input types`;
-  if (mode === 'field') return `avoid generic ${raw}; use ${name} in field types`;
-  if (mode === 'output') return `avoid generic ${raw}; use TRet<${name}> in output types`;
-  return `avoid generic ${raw}; use TArg<${name}> in input types or TRet<${name}> in output types`;
+const modeUse = (name: string, mode: Mode): string => {
+  if (mode === 'input') return `use TArg<${name}> in input types`;
+  if (mode === 'field') return `use ${name} in field types`;
+  if (mode === 'output') return `use TRet<${name}> in output types`;
+  return `use TArg<${name}> in input types or TRet<${name}> in output types`;
 };
+const genMsg = (name: Typed, raw: string, mode: Mode): string =>
+  `avoid generic ${raw}; ${modeUse(name, mode)}`;
 const genAliasMsg = (name: Typed, alias: string, raw: string, mode: Mode): string => {
-  const base = `avoid generic typed-array alias ${alias} (${genericDef(alias, raw)}); define ${rawDef(name, alias)}, then `;
-  if (mode === 'input') return `${base}use TArg<${alias}> in input types`;
-  if (mode === 'field') return `${base}use ${alias} in field types`;
-  if (mode === 'output') return `${base}use TRet<${alias}> in output types`;
-  return `${base}use TArg<${alias}> in input types or TRet<${alias}> in output types`;
+  const base = [
+    `avoid generic typed-array alias ${alias} (${genericDef(alias, raw)});`,
+    `define ${rawDef(name, alias)}, then`,
+  ].join(' ');
+  return `${base}${modeUse(alias, mode)}`;
 };
 const inMsg = (name: Typed, alias: string): string =>
   `use ${name} in input types instead of ${labelIn(name, alias)}`;
@@ -396,21 +346,38 @@ const fieldMsg = (name: Typed, alias: string): string =>
   `use ${name} in field types instead of ${labelIn(name, alias)}`;
 const defaultMsg = (typed: Typed, role: 'raw' | 'ret', name: string): string => {
   const chosen = role === 'raw' ? typed : canonDef(typed);
-  return `avoid default byte generic parameter ${chosen} on ${name}; spell ${typed} or ${canonDef(typed)} explicitly at use sites`;
+  return [
+    `avoid default byte generic parameter ${chosen} on ${name};`,
+    `spell ${typed} or ${canonDef(typed)} explicitly at use sites`,
+  ].join(' ');
 };
 const helperMsg = (action: 'add' | 'update', target: string): string =>
-  `${action} canonical bytes helper types ${action === 'add' ? 'to' : 'in'} ${target}; use this block:\n${helperBlock()}`;
+  [
+    `${action} canonical bytes helper types ${action === 'add' ? 'to' : 'in'} ${target};`,
+    `use this block:\n${helperBlock()}`,
+  ].join(' ');
 const wrapName = (mode: Mode): 'TArg' | 'TRet' | undefined => {
   if (mode === 'input') return 'TArg';
   if (mode === 'output') return 'TRet';
   return;
 };
 const isWrapped = (file: FileCtx, node: any, wrap: 'TArg' | 'TRet'): boolean =>
-  node?.kind === KIND.TypeReference && nameOf(file, node.typeName) === wrap;
+  typeRefName(file, node) === wrap;
+const typeArgs = (node: any): any[] => node?.typeArguments || [];
+type NodeVisit = (node: any) => boolean | void;
+type PartVisit<T> = (part: T) => boolean | void;
+const visitNodes = (nodes: any[], visit: NodeVisit): boolean => {
+  for (const node of nodes) if (visit(node) === true) return true;
+  return false;
+};
+const visitParts = <T>(parts: T[] | undefined, visit: PartVisit<T>): boolean | undefined => {
+  if (!parts) return;
+  for (const part of parts) if (visit(part) === true) return true;
+  return false;
+};
+const visitTypeArgs = (node: any, visit: NodeVisit): boolean => visitNodes(typeArgs(node), visit);
 const typeArg = (file: FileCtx, node: any, name: string): any | undefined =>
-  node?.kind === KIND.TypeReference && nameOf(file, node.typeName) === name
-    ? node.typeArguments?.[0]
-    : undefined;
+  typeRefName(file, node) === name ? typeArgs(node)[0] : undefined;
 const promiseArg = (file: FileCtx, node: any): any | undefined => typeArg(file, node, 'Promise');
 const badPromiseRet = (file: FileCtx, node: any): any | undefined => {
   const arg = typeArg(file, node, 'TRet');
@@ -419,22 +386,21 @@ const badPromiseRet = (file: FileCtx, node: any): any | undefined => {
 // Explicit async return annotations must stay Promise<...>, not TRet<Promise<...>>.
 const wrapMsg = (file: FileCtx, node: any, mode: 'input' | 'output'): string => {
   const promise = mode === 'output' ? promiseArg(file, node) : undefined;
-  if (promise)
-    return `wrap output type with Promise<TRet<${textOf(file, promise).replace(/\s+/g, ' ')}>>`;
+  if (promise) return `wrap output type with Promise<TRet<${flatText(file, promise)}>>`;
   const wrap = mode === 'input' ? 'TArg' : 'TRet';
-  return `wrap ${mode} type with ${wrap}<${textOf(file, node).replace(/\s+/g, ' ')}>`;
+  return `wrap ${mode} type with ${wrap}<${flatText(file, node)}>`;
 };
 const badPromiseRetMsg = (file: FileCtx, node: any): string => {
-  const raw = textOf(file, node).replace(/\s+/g, ' ');
+  const raw = flatText(file, node);
   return `use Promise<TRet<${raw}>> instead of TRet<Promise<${raw}>>`;
 };
 const bindSubs = (file: FileCtx, decl: any, args?: any[]): Subs | undefined => {
-  const params = decl?.typeParameters || [];
+  const params = typeParams(decl);
   if (!params.length) return;
   const subs: Subs = new Map();
   for (let i = 0; i < params.length; i++) {
     const param = params[i];
-    const name = nameOf(file, param.name);
+    const name = nodeName(file, param.name);
     const arg = args?.[i] || param.default;
     if (name && arg) subs.set(name, arg);
   }
@@ -444,18 +410,97 @@ const subKey = (subs?: Subs): string =>
   !subs || !subs.size
     ? ''
     : [...subs].map(([name, node]) => `${name}:${node?.pos || 0}:${node?.end || 0}`).join(',');
+const spanKey = (file: FileCtx, node: any, ...parts: string[]): string =>
+  [file.file, node?.pos || 0, node?.end || 0, ...parts].join(':');
+const seenAdd = (seen: Set<string>, key: string): boolean => {
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+};
 const subNode = (file: FileCtx, node: any, subs?: Subs): any => {
-  if (!subs || !node || node.kind !== KIND.TypeReference || node.typeArguments?.length) return node;
-  const name = nameOf(file, node.typeName);
+  if (!subs || !node || node.kind !== KIND.TypeReference || typeArgs(node).length) return node;
+  const name = typeRefName(file, node);
   return subs.get(name) || node;
 };
-const flowOf = (mode: Mode): Flow | undefined => {
+const enterType = (
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs,
+  ...parts: string[]
+): any => {
+  node = subNode(file, node, subs);
+  if (!node) return;
+  // Recursive mapped generics can re-enter the same type-argument node before a decl guard runs.
+  if (!seenAdd(seen, spanKey(file, node, ...parts, subKey(subs)))) return;
+  return node;
+};
+const refBody = (item: RefTarget): any => subNode(item.ctx, item.node?.type, item.subs);
+const refArgs = (file: FileCtx, node: any, subs?: Subs): any[] | undefined =>
+  typeArgs(node).map((arg: any) => subNode(file, arg, subs));
+const typeCallable = (node: any): boolean =>
+  node?.kind === KIND.FunctionType || node?.kind === KIND.ConstructorType;
+const constructLike = (node: any): boolean =>
+  node?.kind === KIND.ConstructorType || node?.kind === KIND.ConstructSignature;
+const functionLike = (node: any): boolean =>
+  node?.kind === KIND.FunctionDeclaration ||
+  node?.kind === KIND.MethodDeclaration ||
+  node?.kind === KIND.FunctionExpression ||
+  node?.kind === KIND.ArrowFunction;
+const accessor = (node: any): boolean =>
+  node?.kind === KIND.GetAccessor || node?.kind === KIND.SetAccessor;
+const memberCallable = (node: any): boolean =>
+  node?.kind === KIND.MethodDeclaration ||
+  node?.kind === KIND.MethodSignature ||
+  node?.kind === KIND.CallSignature ||
+  node?.kind === KIND.ConstructSignature ||
+  typeCallable(node);
+const runtimeCallable = (node: any): boolean =>
+  functionLike(node) || node?.kind === KIND.Constructor || accessor(node);
+const classRuntimeMember = (node: any): boolean =>
+  !!classDecl(node?.parent) &&
+  (node.kind === KIND.MethodDeclaration || node.kind === KIND.Constructor || accessor(node));
+const classStorageMember = (node: any): boolean =>
+  node?.kind === KIND.PropertyDeclaration || node?.kind === KIND.IndexSignature;
+const members = (node: any): any[] => node?.members || [];
+const paramTypes = (node: any): any[] => (node?.parameters || []).map((item: any) => item.type);
+const visitParamTypes = (node: any, visit: NodeVisit): boolean =>
+  visitNodes(paramTypes(node), visit);
+const typeParams = (node: any): any[] => node?.typeParameters || [];
+const stmts = (source: SourceLike): any[] => (source.statements || []) as any[];
+const typeAlias = (node: any): any => (node?.kind === KIND.TypeAliasDeclaration ? node : undefined);
+const interfaceDecl = (node: any): any =>
+  node?.kind === KIND.InterfaceDeclaration ? node : undefined;
+const classDecl = (node: any): any => (node?.kind === KIND.ClassDeclaration ? node : undefined);
+const variableDecl = (node: any): any =>
+  node?.kind === KIND.VariableDeclaration ? node : undefined;
+const typeQuery = (node: any): any => (node?.kind === KIND.TypeQuery ? node : undefined);
+const declLike = (node: any): boolean =>
+  !!(typeAlias(node) || interfaceDecl(node) || classDecl(node));
+const importDecl = (node: any): any => (node?.kind === KIND.ImportDeclaration ? node : undefined);
+const modSpec = (node: any): string | undefined => {
+  const spec = node?.moduleSpecifier?.text;
+  return typeof spec === 'string' ? spec : undefined;
+};
+const importElements = (node: any): any[] =>
+  importDecl(node)?.importClause?.namedBindings?.elements || [];
+const namedElements = (node: any): any[] => {
+  if (node?.kind === KIND.ExportDeclaration) return node.exportClause?.elements || [];
+  return importElements(node);
+};
+const heritageTypes = (node: any): any[] => {
+  const out: any[] = [];
+  for (const item of node?.heritageClauses || [])
+    for (const part of item.types || []) out.push(part);
+  return out;
+};
+const flowFor = (mode: Mode): Flow | undefined => {
   if (mode === 'output') return 'output';
   if (mode === 'input' || mode === 'field') return 'input';
   return;
 };
 const markFlow = (uses: Map<string, Set<Flow>>, name: string, mode: Mode) => {
-  const flow = flowOf(mode);
+  const flow = flowFor(mode);
   if (!flow) return;
   let set = uses.get(name);
   if (!set) {
@@ -463,6 +508,157 @@ const markFlow = (uses: Map<string, Set<Flow>>, name: string, mode: Mode) => {
     uses.set(name, set);
   }
   set.add(flow);
+};
+type TypePart = { kind: 'callable' | 'member' | 'type'; mode: Mode; node: any };
+type TypeVisit = (node: any, mode: Mode) => boolean | void;
+type CallablePart = { kind: 'params' | 'type'; mode: Mode; node: any };
+type CallableVisit = (node: any, mode: Mode) => boolean | void;
+type MemberPart = { kind: 'callable' | 'opaque' | 'params' | 'type'; mode: Mode; node: any };
+type MemberVisit = (node: any, mode: Mode) => boolean | void;
+type DeclPart = { kind: 'member' | 'type'; node: any; owner?: 'class' | 'interface' };
+type DeclVisit = (node: any) => boolean | void;
+const declType = (node: any): DeclPart => ({ kind: 'type', node });
+const declMember = (node: any, owner: DeclPart['owner']): DeclPart => ({
+  kind: 'member',
+  node,
+  owner,
+});
+const callableParts = (node: any, mode: Mode): CallablePart[] => {
+  const out: CallablePart[] = [{ kind: 'params', mode: 'input', node }];
+  if (node?.kind !== KIND.SetAccessor && node?.type)
+    out.push({ kind: 'type', mode: fnOutMode(mode), node: node.type });
+  return out;
+};
+const visitCallableParts = (
+  node: any,
+  mode: Mode,
+  params: CallableVisit,
+  type: CallableVisit
+): boolean => {
+  return (
+    visitParts(callableParts(node, mode), (part) =>
+      part.kind === 'params' ? params(part.node, part.mode) : type(part.node, part.mode)
+    ) === true
+  );
+};
+const memberParts = (
+  node: any,
+  mode: Mode,
+  construct: 'callable' | 'opaque' = 'callable'
+): MemberPart[] | undefined => {
+  const type = (part: any, next = mode): MemberPart => ({ kind: 'type', mode: next, node: part });
+  if (!node) return;
+  if (construct === 'opaque' && constructLike(node)) return [{ kind: 'opaque', mode, node }];
+  if (node.kind === KIND.PropertySignature || node.kind === KIND.IndexSignature) {
+    // Returned object/interface members are part of the API surface, unlike class storage fields.
+    return [type(node.type)];
+  }
+  if (node.kind === KIND.PropertyDeclaration) return [type(node.type, 'field')];
+  if (memberCallable(node)) return [{ kind: 'callable', mode, node }];
+  if (node.kind === KIND.GetAccessor) return [type(node.type, fnOutMode(mode))];
+  if (node.kind === KIND.SetAccessor) return [{ kind: 'params', mode: 'input', node }];
+  return;
+};
+const visitMemberParts = (
+  node: any,
+  mode: Mode,
+  construct: 'callable' | 'opaque',
+  type: MemberVisit,
+  callable: MemberVisit,
+  params: MemberVisit,
+  opaque: MemberVisit = () => undefined
+): boolean => {
+  return (
+    visitParts(memberParts(node, mode, construct), (part) =>
+      part.kind === 'type'
+        ? type(part.node, part.mode)
+        : part.kind === 'callable'
+          ? callable(part.node, part.mode)
+          : part.kind === 'params'
+            ? params(part.node, part.mode)
+            : opaque(part.node, part.mode)
+    ) === true
+  );
+};
+const typeParts = (node: any, mode: Mode): TypePart[] | undefined => {
+  const type = (part: any, next = mode): TypePart => ({ kind: 'type', mode: next, node: part });
+  if (node.kind === KIND.ArrayType) return [type(node.elementType)];
+  if (node.kind === KIND.ParenthesizedType || node.kind === KIND.TypeOperator)
+    return [type(node.type)];
+  if (node.kind === KIND.IndexedAccessType)
+    return [type(node.objectType), type(node.indexType, 'neutral')];
+  if (node.kind === KIND.UnionType || node.kind === KIND.IntersectionType)
+    return (node.types || []).map((item: any) => type(item));
+  if (node.kind === KIND.TupleType) return (node.elements || []).map((item: any) => type(item));
+  if (node.kind === KIND.ConditionalType) {
+    return [
+      type(node.checkType, 'neutral'),
+      type(node.extendsType, 'neutral'),
+      type(node.trueType),
+      type(node.falseType),
+    ];
+  }
+  if (node.kind === KIND.MappedType)
+    return [type(node.typeParameter?.constraint, 'neutral'), type(node.type)];
+  if (node.kind === KIND.TypeLiteral)
+    return members(node).map((item) => ({ kind: 'member', mode, node: item }));
+  if (typeCallable(node)) return [{ kind: 'callable', mode, node }];
+  return;
+};
+const visitTypeParts = (
+  node: any,
+  mode: Mode,
+  visit: TypeVisit,
+  member: TypeVisit,
+  callable: TypeVisit
+): boolean | undefined => {
+  return visitParts(typeParts(node, mode), (part) =>
+    part.kind === 'member'
+      ? member(part.node, part.mode)
+      : part.kind === 'callable'
+        ? callable(part.node, part.mode)
+        : visit(part.node, part.mode)
+  );
+};
+const walkTypeParts = (
+  node: any,
+  mode: Mode,
+  visit: TypeVisit,
+  member: TypeVisit,
+  callable: TypeVisit
+): boolean => visitTypeParts(node, mode, visit, member, callable) !== undefined;
+const declParts = (node: any): DeclPart[] | undefined => {
+  if (!node) return;
+  if (typeAlias(node)) return [declType(node.type)];
+  if (interfaceDecl(node)) {
+    return [
+      ...heritageTypes(node).map(declType),
+      ...members(node).map((part) => declMember(part, 'interface')),
+    ];
+  }
+  if (classDecl(node)) {
+    return [
+      ...heritageTypes(node).map(declType),
+      ...members(node).map((part) => declMember(part, 'class')),
+    ];
+  }
+  return;
+};
+const visitDeclParts = (
+  node: any,
+  type: DeclVisit,
+  member: DeclVisit,
+  classMember: DeclVisit = member
+): boolean => {
+  return (
+    visitParts(declParts(node), (part) =>
+      part.kind === 'type'
+        ? type(part.node)
+        : part.owner === 'class'
+          ? classMember(part.node)
+          : member(part.node)
+    ) === true
+  );
 };
 const collectParamUse = (
   file: FileCtx,
@@ -472,53 +668,44 @@ const collectParamUse = (
   uses: Map<string, Set<Flow>>
 ) => {
   if (!node) return;
-  if (node.kind === KIND.TypeReference) {
-    const name = nameOf(file, node.typeName);
-    if (names.has(name) && !node.typeArguments?.length) {
+  const name = typeRefName(file, node);
+  if (name) {
+    if (names.has(name) && !typeArgs(node).length) {
       markFlow(uses, name, mode);
       return;
     }
-    for (const item of node.typeArguments || []) collectParamUse(file, item, mode, names, uses);
+    visitTypeArgs(node, (item) => collectParamUse(file, item, mode, names, uses));
     return;
   }
-  if (node.kind === KIND.ArrayType)
-    return collectParamUse(file, node.elementType, mode, names, uses);
-  if (node.kind === KIND.ParenthesizedType || node.kind === KIND.TypeOperator)
-    return collectParamUse(file, node.type, mode, names, uses);
-  if (node.kind === KIND.IndexedAccessType) {
-    collectParamUse(file, node.objectType, mode, names, uses);
-    collectParamUse(file, node.indexType, 'neutral', names, uses);
-    return;
-  }
-  if (node.kind === KIND.UnionType || node.kind === KIND.IntersectionType) {
-    for (const item of node.types || []) collectParamUse(file, item, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.TupleType) {
-    for (const item of node.elements || []) collectParamUse(file, item, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.ConditionalType) {
-    collectParamUse(file, node.checkType, 'neutral', names, uses);
-    collectParamUse(file, node.extendsType, 'neutral', names, uses);
-    collectParamUse(file, node.trueType, mode, names, uses);
-    collectParamUse(file, node.falseType, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.MappedType) {
-    collectParamUse(file, node.typeParameter?.constraint, 'neutral', names, uses);
-    collectParamUse(file, node.type, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.TypeLiteral) {
-    for (const item of node.members || []) collectMemberParamUse(file, item, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.FunctionType || node.kind === KIND.ConstructorType) {
-    for (const item of node.parameters || [])
-      collectParamUse(file, item.type, 'input', names, uses);
-    collectParamUse(file, node.type, fnOutMode(mode), names, uses);
-  }
+  walkTypeParts(
+    node,
+    mode,
+    (item, next) => collectParamUse(file, item, next, names, uses),
+    (item, next) => collectMemberParamUse(file, item, next, names, uses),
+    (item, next) => collectCallableParamUse(file, item, next, names, uses)
+  );
+};
+const collectParamTypes = (
+  file: FileCtx,
+  node: any,
+  names: Set<string>,
+  uses: Map<string, Set<Flow>>
+) => {
+  visitParamTypes(node, (type) => collectParamUse(file, type, 'input', names, uses));
+};
+const collectCallableParamUse = (
+  file: FileCtx,
+  node: any,
+  mode: Mode,
+  names: Set<string>,
+  uses: Map<string, Set<Flow>>
+) => {
+  visitCallableParts(
+    node,
+    mode,
+    (item) => collectParamTypes(file, item, names, uses),
+    (item, next) => collectParamUse(file, item, next, names, uses)
+  );
 };
 const collectMemberParamUse = (
   file: FileCtx,
@@ -527,49 +714,25 @@ const collectMemberParamUse = (
   names: Set<string>,
   uses: Map<string, Set<Flow>>
 ) => {
-  if (!node) return;
-  if (node.kind === KIND.PropertySignature || node.kind === KIND.IndexSignature) {
-    collectParamUse(file, node.type, mode, names, uses);
-    return;
-  }
-  if (node.kind === KIND.PropertyDeclaration) {
-    collectParamUse(file, node.type, 'field', names, uses);
-    return;
-  }
-  if (
-    node.kind === KIND.MethodDeclaration ||
-    node.kind === KIND.MethodSignature ||
-    node.kind === KIND.CallSignature ||
-    node.kind === KIND.ConstructSignature ||
-    node.kind === KIND.FunctionType ||
-    node.kind === KIND.ConstructorType
-  ) {
-    for (const item of node.parameters || [])
-      collectParamUse(file, item.type, 'input', names, uses);
-    collectParamUse(file, node.type, fnOutMode(mode), names, uses);
-    return;
-  }
-  if (node.kind === KIND.GetAccessor)
-    collectParamUse(file, node.type, fnOutMode(mode), names, uses);
-  if (node.kind === KIND.SetAccessor)
-    for (const item of node.parameters || [])
-      collectParamUse(file, item.type, 'input', names, uses);
+  visitMemberParts(
+    node,
+    mode,
+    'callable',
+    (item, next) => collectParamUse(file, item, next, names, uses),
+    (item, next) => collectCallableParamUse(file, item, next, names, uses),
+    (item) => collectParamTypes(file, item, names, uses)
+  );
 };
 const collectDeclParamUse = (file: FileCtx, node: any, mode: Mode, names: Set<string>) => {
   const uses = new Map<string, Set<Flow>>();
-  if (!node) return uses;
-  if (node.kind === KIND.TypeAliasDeclaration) collectParamUse(file, node.type, mode, names, uses);
-  else if (node.kind === KIND.InterfaceDeclaration) {
-    for (const item of node.heritageClauses || [])
-      for (const part of item.types || []) collectParamUse(file, part, mode, names, uses);
-    for (const item of node.members || []) collectMemberParamUse(file, item, mode, names, uses);
-  } else if (node.kind === KIND.ClassDeclaration) {
-    for (const item of node.heritageClauses || [])
-      for (const part of item.types || []) collectParamUse(file, part, mode, names, uses);
-    for (const item of node.members || [])
-      if (item.kind === KIND.PropertyDeclaration || item.kind === KIND.IndexSignature)
-        collectParamUse(file, item.type, 'field', names, uses);
-  }
+  visitDeclParts(
+    node,
+    (item) => collectParamUse(file, item, mode, names, uses),
+    (item) => collectMemberParamUse(file, item, mode, names, uses),
+    (item) => {
+      if (classStorageMember(item)) collectParamUse(file, item.type, 'field', names, uses);
+    }
+  );
   return uses;
 };
 const filterSubs = (file: FileCtx, decl: any, mode: Mode, subs?: Subs): Subs | undefined => {
@@ -579,39 +742,37 @@ const filterSubs = (file: FileCtx, decl: any, mode: Mode, subs?: Subs): Subs | u
   let out: Subs | undefined;
   for (const [name, node] of subs) {
     const seen = uses.get(name);
-    // Mixed generic parameters are invariant: forcing Ret* or raw would break one side of Coder-like APIs.
+    // Mixed generic parameters are invariant: Ret* or raw would break Coder-like APIs.
     if (seen?.has('input') && seen.has('output')) continue;
     if (!out) out = new Map();
     out.set(name, node);
   }
   return out;
 };
-const ctxOf = (state: State, file: string): FileCtx => {
-  const hit = state.files.get(file);
-  if (hit) return hit;
-  const source =
-    state.prog.getSourceFile(file) ||
-    state.ts.createSourceFile(file, readFileSync(file, 'utf8'), state.ts.ScriptTarget.ESNext, true);
-  const text = (source as any).text || readFileSync(file, 'utf8');
+const makeFileCtx = (ts: TsLike, prog: ProgLike, cwd: string, file: string): FileCtx => {
+  const hit = prog.getSourceFile(file);
+  const text = (hit as any)?.text || readText(file);
+  const source = hit || ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true);
   const decls = new Map<string, unknown>();
   const ctx: FileCtx = {
     decls,
     file,
     imports: new Map(),
-    rel: relative(state.cwd, file) || basename(file),
+    rel: relName(cwd, file),
     source,
     text,
   };
-  for (const stmt of source.statements || []) {
-    const name = nameOf(ctx, (stmt as any).name);
+  for (const stmt of stmts(source)) {
+    const name = nodeName(ctx, (stmt as any).name);
     if (!name) continue;
-    if (
-      (stmt as any).kind === KIND.TypeAliasDeclaration ||
-      (stmt as any).kind === KIND.InterfaceDeclaration ||
-      (stmt as any).kind === KIND.ClassDeclaration
-    )
-      decls.set(name, stmt);
+    if (declLike(stmt)) decls.set(name, stmt);
   }
+  return ctx;
+};
+const getFileCtx = (state: State, file: string): FileCtx => {
+  const hit = state.files.get(file);
+  if (hit) return hit;
+  const ctx = makeFileCtx(state.ts, state.prog, state.cwd, file);
   state.files.set(file, ctx);
   return ctx;
 };
@@ -619,7 +780,7 @@ const symDecls = (
   state: State,
   part: any,
   wantFile: (file: string) => boolean = wantTSFile
-) => {
+): CtxDecl[] => {
   let sym = state.checker.getSymbolAtLocation(part);
   const aliasFlag = state.ts.SymbolFlags?.Alias || 0;
   while (sym && aliasFlag && !!state.checker.getAliasedSymbol && (sym.flags || 0) & aliasFlag) {
@@ -632,14 +793,42 @@ const symDecls = (
       const sf = decl?.getSourceFile?.();
       const fileName = sf?.fileName;
       if (!fileName || !existsSync(fileName) || !wantFile(fileName)) return;
-      return { ctx: ctxOf(state, fileName), node: decl };
+      return { ctx: getFileCtx(state, fileName), node: decl };
     })
-    .filter((item): item is { ctx: FileCtx; node: any } => !!item);
+    .filter((item): item is CtxDecl => !!item);
 };
-const refDecls = (state: State, node: any) => {
-  const part = node?.typeName || node?.qualifier || node;
-  if (!part) return [] as { ctx: FileCtx; node: any }[];
-  return symDecls(state, part);
+const ctxDecls = (state: State, part: any): CtxDecl[] => (part ? symDecls(state, part) : []);
+const refDecls = (state: State, node: any): CtxDecl[] =>
+  ctxDecls(state, node?.typeName || node?.qualifier || node);
+const targetKey = (target: RefTarget, ...parts: string[]): string =>
+  [target.ctx.file, target.node?.pos || 0, ...parts].join(':');
+const makeRefTarget = (
+  ctx: FileCtx,
+  local: boolean,
+  node: any,
+  args: any[] | undefined,
+  mapSubs: (ctx: FileCtx, decl: any, subs?: Subs) => Subs | undefined
+): RefTarget => ({
+  ctx,
+  local,
+  node,
+  subs: mapSubs(ctx, node, bindSubs(ctx, node, args)),
+});
+const refTargets = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  subs?: Subs,
+  mapSubs: (ctx: FileCtx, decl: any, subs?: Subs) => Subs | undefined = (_ctx, _decl, cur) => cur
+): RefTarget[] => {
+  const args = refArgs(file, node, subs);
+  const out: RefTarget[] = [];
+  for (const item of refDecls(state, node))
+    out.push(makeRefTarget(item.ctx, false, item.node, args, mapSubs));
+  const name = refName(file, node);
+  const decl = file.decls.get(name);
+  if (decl) out.push(makeRefTarget(file, true, decl, args, mapSubs));
+  return out;
 };
 const resolveByteType = (
   state: State,
@@ -648,72 +837,159 @@ const resolveByteType = (
   seen: Set<string> = new Set()
 ): { role: 'raw' | 'ret'; typed: Typed } | undefined => {
   if (!node) return;
-  const typed = typedOf(file, node);
-  if (typed && !node.typeArguments?.length) return { role: 'raw', typed };
-  const canon = canonicalOf(file, node);
+  const typed = typedKind(file, node);
+  if (typed && !typeArgs(node).length) return { role: 'raw', typed };
+  const canon = canonicalKind(file, node);
   if (canon) return { role: 'ret', typed: canon };
-  if (node.kind !== KIND.TypeReference && node.kind !== KIND.ImportType) return;
-  const name =
-    node.kind === KIND.ImportType ? nameOf(file, node.qualifier) : nameOf(file, node.typeName);
-  const aliased = file.imports.get(name) || state.aliasByName.get(name);
+  if (!refLike(node)) return;
+  const name = refName(file, node);
+  const aliased = typedAlias(state, file, name);
   if (aliased) return { role: 'ret', typed: aliased };
-  for (const item of refDecls(state, node)) {
-    const key = `${item.ctx.file}:${item.node?.pos || 0}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const declSubs = bindSubs(item.ctx, item.node, node.typeArguments);
-    const body = subNode(item.ctx, item.node?.type, declSubs);
+  for (const item of refTargets(state, file, node)) {
+    if (!seenAdd(seen, targetKey(item))) continue;
+    const body = refBody(item);
     const resolved = resolveByteType(state, item.ctx, body, seen);
     if (resolved) return resolved;
   }
-  const decl = file.decls.get(name);
-  if (decl) {
-    const key = `${file.file}:${(decl as any)?.pos || 0}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      const declSubs = bindSubs(file, decl, node.typeArguments);
-      const body = subNode(file, (decl as any)?.type, declSubs);
-      return resolveByteType(state, file, body, seen);
-    }
-  }
   return;
 };
-const refValueDecls = (state: State, node: any) => {
-  const part = node?.exprName || node;
-  if (!part) return [] as { ctx: FileCtx; node: any }[];
-  return symDecls(state, part);
+const refValueDecls = (state: State, node: any): CtxDecl[] =>
+  ctxDecls(state, node?.exprName || node);
+const typeQueryRefs = (state: State, node: any) =>
+  typeQuery(node) ? refValueDecls(state, node) : [];
+const returnTypeRefs = (state: State, file: FileCtx, node: any, subs?: Subs) => {
+  if (typeRefName(file, node) !== 'ReturnType') return [];
+  const arg = subNode(file, typeArgs(node)[0], subs);
+  return typeQueryRefs(state, arg);
 };
+type TypeProbe = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+) => boolean;
+const probeIn = (
+  probe: TypeProbe,
+  state: State,
+  file: FileCtx,
+  seen: Set<string>,
+  subs?: Subs
+): ((node: any) => boolean) => {
+  return (node: any): boolean => probe(state, file, node, seen, subs);
+};
+const probeTarget = (
+  probe: TypeProbe,
+  state: State,
+  seen: Set<string>
+): ((target: RefTarget) => boolean) => {
+  return (target: RefTarget): boolean => probe(state, target.ctx, target.node, seen, target.subs);
+};
+const hasParamTypes = (
+  probe: TypeProbe,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => {
+  return visitParamTypes(node, probeIn(probe, state, file, seen, subs));
+};
+const hasTypeArgs = (
+  probe: TypeProbe,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => {
+  return visitTypeArgs(node, probeIn(probe, state, file, seen, subs));
+};
+const hasRefTargetDecls = (
+  probe: TypeProbe,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => {
+  const has = probeTarget(probe, state, seen);
+  for (const item of refTargets(state, file, node, subs)) if (has(item)) return true;
+  return false;
+};
+const hasRefParts = (
+  probe: TypeProbe,
+  decl: TypeProbe,
+  aliasMatch: boolean,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => {
+  const name = refName(file, node);
+  if (typedAlias(state, file, name)) return aliasMatch;
+  if (hasTypeArgs(probe, state, file, node, seen, subs)) return true;
+  if (hasRefTargetDecls(decl, state, file, node, seen, subs)) return true;
+  return false;
+};
+const hasMemberTypes = (
+  probe: TypeProbe,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean =>
+  probeIn(probe, state, file, seen, subs)(node?.type) ||
+  hasParamTypes(probe, state, file, node, seen, subs);
 const hasByteMember = (
   state: State,
   file: FileCtx,
   node: any,
   seen: Set<string>,
   subs?: Subs
-): boolean => {
-  if (!node) return false;
-  if (node.type && hasByteType(state, file, node.type, seen, subs)) return true;
-  for (const item of node.parameters || [])
-    if (hasByteType(state, file, item.type, seen, subs)) return true;
-  return false;
-};
+): boolean => hasMemberTypes(hasByteType, state, file, node, seen, subs);
+const hasOpaqueParamTypes = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => hasParamTypes(hasOpaqueDomain, state, file, node, seen, subs);
+const hasOpaqueCallable = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
+): boolean => hasMemberTypes(hasOpaqueDomain, state, file, node, seen, subs);
 const hasByteDecl = (
   state: State,
   file: FileCtx,
   node: any,
   seen: Set<string>,
   subs?: Subs
+): boolean =>
+  visitDeclParts(
+    node,
+    (item) => hasByteType(state, file, item, seen, subs),
+    (item) => hasByteMember(state, file, item, seen, subs)
+  );
+const hasTypeParts = (
+  probe: TypeProbe,
+  member: TypeProbe,
+  callable: TypeProbe,
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs
 ): boolean => {
-  if (!node) return false;
-  if (node.kind === KIND.TypeAliasDeclaration)
-    return hasByteType(state, file, node.type, seen, subs);
-  if (node.kind === KIND.InterfaceDeclaration || node.kind === KIND.ClassDeclaration) {
-    for (const item of node.heritageClauses || [])
-      for (const part of item.types || [])
-        if (hasByteType(state, file, part, seen, subs)) return true;
-    for (const item of node.members || [])
-      if (hasByteMember(state, file, item, seen, subs)) return true;
-  }
-  return false;
+  const typeHere = probeIn(probe, state, file, seen, subs);
+  const memberHere = probeIn(member, state, file, seen, subs);
+  const callableHere = probeIn(callable, state, file, seen, subs);
+  return visitTypeParts(node, 'neutral', typeHere, memberHere, callableHere) === true;
 };
 const hasByteType = (
   state: State,
@@ -722,66 +998,16 @@ const hasByteType = (
   seen: Set<string>,
   subs?: Subs
 ): boolean => {
-  node = subNode(file, node, subs);
+  node = enterType(file, node, seen, subs);
   if (!node) return false;
-  const key = `${file.file}:${node.pos || 0}:${node.end || 0}:${subKey(subs)}`;
-  if (seen.has(key)) return false;
-  seen.add(key);
-  if (typedOf(file, node) || canonicalOf(file, node)) return true;
-  if (node.kind === KIND.TypeReference && nameOf(file, node.typeName) === 'ReturnType') {
-    const arg = subNode(file, node.typeArguments?.[0], subs);
-    if (arg?.kind === KIND.TypeQuery) {
-      for (const item of refValueDecls(state, arg))
-        if (hasByteType(state, item.ctx, item.node?.type, seen, subs)) return true;
-    }
+  if (byteLeaf(file, node)) return true;
+  for (const item of returnTypeRefs(state, file, node, subs))
+    if (hasByteType(state, item.ctx, item.node?.type, seen, subs)) return true;
+  if (refLike(node)) {
+    return hasRefParts(hasByteType, hasByteDecl, true, state, file, node, seen, subs);
   }
-  if (node.kind === KIND.TypeReference || node.kind === KIND.ImportType) {
-    const name =
-      node.kind === KIND.ImportType ? nameOf(file, node.qualifier) : nameOf(file, node.typeName);
-    if (file.imports.has(name) || state.aliasByName.has(name)) return true;
-    for (const item of node.typeArguments || [])
-      if (hasByteType(state, file, item, seen, subs)) return true;
-    for (const item of refDecls(state, node)) {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = bindSubs(item.ctx, item.node, args);
-      if (hasByteDecl(state, item.ctx, item.node, seen, declSubs)) return true;
-    }
-    const decl = file.decls.get(name);
-    if (decl) {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = bindSubs(file, decl, args);
-      if (hasByteDecl(state, file, decl, seen, declSubs)) return true;
-    }
-    return false;
-  }
-  if (node.kind === KIND.ArrayType) return hasByteType(state, file, node.elementType, seen, subs);
-  if (node.kind === KIND.ParenthesizedType || node.kind === KIND.TypeOperator)
-    return hasByteType(state, file, node.type, seen, subs);
-  if (node.kind === KIND.IndexedAccessType)
-    return (
-      hasByteType(state, file, node.objectType, seen, subs) ||
-      hasByteType(state, file, node.indexType, seen, subs)
-    );
-  if (node.kind === KIND.UnionType || node.kind === KIND.IntersectionType)
-    return (node.types || []).some((item: any) => hasByteType(state, file, item, seen, subs));
-  if (node.kind === KIND.TupleType)
-    return (node.elements || []).some((item: any) => hasByteType(state, file, item, seen, subs));
-  if (node.kind === KIND.ConditionalType)
-    return (
-      hasByteType(state, file, node.checkType, seen, subs) ||
-      hasByteType(state, file, node.extendsType, seen, subs) ||
-      hasByteType(state, file, node.trueType, seen, subs) ||
-      hasByteType(state, file, node.falseType, seen, subs)
-    );
-  if (node.kind === KIND.MappedType)
-    return (
-      hasByteType(state, file, node.typeParameter?.constraint, seen, subs) ||
-      hasByteType(state, file, node.type, seen, subs)
-    );
-  if (node.kind === KIND.TypeLiteral)
-    return (node.members || []).some((item: any) => hasByteMember(state, file, item, seen, subs));
-  if (node.kind === KIND.FunctionType || node.kind === KIND.ConstructorType)
-    return hasByteMember(state, file, node, seen, subs);
+  if (hasTypeParts(hasByteType, hasByteMember, hasByteMember, state, file, node, seen, subs))
+    return true;
   return false;
 };
 const hasOpaqueDomainMember = (
@@ -791,39 +1017,44 @@ const hasOpaqueDomainMember = (
   seen: Set<string>,
   subs?: Subs
 ): boolean => {
-  if (!node) return false;
-  if (node.kind === KIND.ConstructSignature || node.kind === KIND.ConstructorType) return true;
-  if (
-    node.kind === KIND.PropertySignature ||
-    node.kind === KIND.IndexSignature ||
-    node.kind === KIND.PropertyDeclaration
-  )
-    return hasOpaqueDomain(state, file, node.type, seen, subs);
-  if (
-    node.kind === KIND.MethodDeclaration ||
-    node.kind === KIND.MethodSignature ||
-    node.kind === KIND.CallSignature ||
-    node.kind === KIND.FunctionType ||
-    node.kind === KIND.GetAccessor
-  ) {
-    if (hasOpaqueDomain(state, file, node.type, seen, subs)) return true;
-    for (const item of node.parameters || [])
-      if (hasOpaqueDomain(state, file, item.type, seen, subs)) return true;
-  }
-  if (node.kind === KIND.SetAccessor)
-    for (const item of node.parameters || [])
-      if (hasOpaqueDomain(state, file, item.type, seen, subs)) return true;
-  return false;
+  return visitMemberParts(
+    node,
+    'neutral',
+    'opaque',
+    (item) => hasOpaqueDomain(state, file, item, seen, subs),
+    (item) => hasOpaqueCallable(state, file, item, seen, subs),
+    (item) => hasOpaqueParamTypes(state, file, item, seen, subs),
+    () => true
+  );
 };
 const hasSelfBound = (file: FileCtx, node: any): boolean => {
-  for (const param of node?.typeParameters || []) {
-    const name = nameOf(file, param.name);
+  for (const param of typeParams(node)) {
+    const name = nodeName(file, param.name);
     if (
       name &&
       param.constraint &&
-      new RegExp(`\\b${name}\\b`).test(textOf(file, param.constraint))
-    )
+      new RegExp(`\\b${name}\\b`).test(nodeText(file, param.constraint))
+    ) {
       return true;
+    }
+  }
+  return false;
+};
+const hasOpaqueMembers = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs,
+  skipStorage = false
+): boolean => {
+  for (const item of members(node)) {
+    if (
+      (!skipStorage || !classStorageMember(item)) &&
+      hasOpaqueDomainMember(state, file, item, seen, subs)
+    ) {
+      return true;
+    }
   }
   return false;
 };
@@ -839,23 +1070,15 @@ const hasOpaqueDomainDecl = (
     const constraint = subNode(file, node.constraint, subs);
     return hasOpaqueDomain(state, file, constraint, seen, subs);
   }
-  if (node.kind === KIND.TypeAliasDeclaration)
-    return hasOpaqueDomain(state, file, node.type, seen, subs);
-  if (node.kind === KIND.InterfaceDeclaration) {
+  if (typeAlias(node)) return hasOpaqueDomain(state, file, node.type, seen, subs);
+  if (interfaceDecl(node)) {
     if (hasSelfBound(file, node)) return true;
     if (node.heritageClauses?.length) return true;
-    for (const item of node.members || [])
-      if (hasOpaqueDomainMember(state, file, item, seen, subs)) return true;
+    if (hasOpaqueMembers(state, file, node, seen, subs)) return true;
   }
-  if (node.kind === KIND.ClassDeclaration) {
+  if (classDecl(node)) {
     if (hasSelfBound(file, node)) return true;
-    for (const item of node.members || [])
-      if (
-        item.kind !== KIND.PropertyDeclaration &&
-        item.kind !== KIND.IndexSignature &&
-        hasOpaqueDomainMember(state, file, item, seen, subs)
-      )
-        return true;
+    if (hasOpaqueMembers(state, file, node, seen, subs, true)) return true;
   }
   return false;
 };
@@ -866,77 +1089,36 @@ const hasOpaqueDomain = (
   seen: Set<string>,
   subs?: Subs
 ): boolean => {
-  node = subNode(file, node, subs);
+  node = enterType(file, node, seen, subs, 'opaque');
   if (!node) return false;
-  const key = `${file.file}:${node.pos || 0}:${node.end || 0}:opaque:${subKey(subs)}`;
-  if (seen.has(key)) return false;
-  seen.add(key);
-  if (typedOf(file, node) || canonicalOf(file, node)) return false;
+  if (byteLeaf(file, node)) return false;
   // Whole-object wrappers are unsafe when they would recurse into domain objects such as
   // F-bounded points or point constructors; those need explicit method-level fixes instead.
-  if (node.kind === KIND.ConstructorType || node.kind === KIND.ConstructSignature) return true;
-  if (node.kind === KIND.TypeQuery) {
+  if (constructLike(node)) return true;
+  if (typeQuery(node)) {
     // `typeof PointClass` is a constructor surface even though it reaches us as a type query.
-    for (const item of refValueDecls(state, node)) {
-      if (item.node?.kind === KIND.ClassDeclaration) return true;
+    for (const item of typeQueryRefs(state, node)) {
+      if (classDecl(item.node)) return true;
       if (hasOpaqueDomain(state, item.ctx, item.node?.type, seen, subs)) return true;
     }
     return false;
   }
-  if (node.kind === KIND.TypeReference || node.kind === KIND.ImportType) {
-    const name =
-      node.kind === KIND.ImportType ? nameOf(file, node.qualifier) : nameOf(file, node.typeName);
-    if (file.imports.has(name) || state.aliasByName.has(name)) return false;
-    for (const item of node.typeArguments || [])
-      if (hasOpaqueDomain(state, file, item, seen, subs)) return true;
-    for (const item of refDecls(state, node)) {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = bindSubs(item.ctx, item.node, args);
-      if (hasOpaqueDomainDecl(state, item.ctx, item.node, seen, declSubs)) return true;
-    }
-    const decl = file.decls.get(name);
-    if (decl) {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = bindSubs(file, decl, args);
-      if (hasOpaqueDomainDecl(state, file, decl, seen, declSubs)) return true;
-    }
-    return false;
+  if (refLike(node)) {
+    return hasRefParts(hasOpaqueDomain, hasOpaqueDomainDecl, false, state, file, node, seen, subs);
   }
-  if (node.kind === KIND.ArrayType)
-    return hasOpaqueDomain(state, file, node.elementType, seen, subs);
-  if (node.kind === KIND.ParenthesizedType || node.kind === KIND.TypeOperator)
-    return hasOpaqueDomain(state, file, node.type, seen, subs);
-  if (node.kind === KIND.IndexedAccessType)
-    return (
-      hasOpaqueDomain(state, file, node.objectType, seen, subs) ||
-      hasOpaqueDomain(state, file, node.indexType, seen, subs)
-    );
-  if (node.kind === KIND.UnionType || node.kind === KIND.IntersectionType)
-    return (node.types || []).some((item: any) => hasOpaqueDomain(state, file, item, seen, subs));
-  if (node.kind === KIND.TupleType)
-    return (node.elements || []).some((item: any) =>
-      hasOpaqueDomain(state, file, item, seen, subs)
-    );
-  if (node.kind === KIND.ConditionalType)
-    return (
-      hasOpaqueDomain(state, file, node.checkType, seen, subs) ||
-      hasOpaqueDomain(state, file, node.extendsType, seen, subs) ||
-      hasOpaqueDomain(state, file, node.trueType, seen, subs) ||
-      hasOpaqueDomain(state, file, node.falseType, seen, subs)
-    );
-  if (node.kind === KIND.MappedType)
-    return (
-      hasOpaqueDomain(state, file, node.typeParameter?.constraint, seen, subs) ||
-      hasOpaqueDomain(state, file, node.type, seen, subs)
-    );
-  if (node.kind === KIND.TypeLiteral)
-    return (node.members || []).some((item: any) =>
-      hasOpaqueDomainMember(state, file, item, seen, subs)
-    );
-  if (node.kind === KIND.FunctionType) {
-    if (hasOpaqueDomain(state, file, node.type, seen, subs)) return true;
-    for (const item of node.parameters || [])
-      if (hasOpaqueDomain(state, file, item.type, seen, subs)) return true;
+  if (
+    hasTypeParts(
+      hasOpaqueDomain,
+      hasOpaqueDomainMember,
+      hasOpaqueCallable,
+      state,
+      file,
+      node,
+      seen,
+      subs
+    )
+  ) {
+    return true;
   }
   return false;
 };
@@ -950,30 +1132,19 @@ const walkReturnDecl = (
   onlyGeneric = false
 ): boolean => {
   if (!node) return false;
-  if (
-    node.kind === KIND.FunctionDeclaration ||
-    node.kind === KIND.MethodDeclaration ||
-    node.kind === KIND.MethodSignature ||
-    node.kind === KIND.FunctionExpression ||
-    node.kind === KIND.ArrowFunction ||
-    node.kind === KIND.GetAccessor
-  ) {
+  if (functionLike(node) || node.kind === KIND.MethodSignature || node.kind === KIND.GetAccessor) {
     walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
     return true;
   }
-  if (node.kind === KIND.VariableDeclaration) {
-    const type = node.type;
-    if (type?.kind === KIND.FunctionType || type?.kind === KIND.ConstructorType) {
+  const variable = variableDecl(node);
+  if (variable) {
+    const type = variable.type;
+    if (typeCallable(type)) {
       walkType(state, file, type.type, mode, seen, subs, onlyGeneric);
       return true;
     }
-    const init = node.initializer;
-    if (
-      init &&
-      (init.kind === KIND.FunctionExpression ||
-        init.kind === KIND.ArrowFunction ||
-        init.kind === KIND.MethodDeclaration)
-    ) {
+    const init = variable.initializer;
+    if (functionLike(init)) {
       walkType(state, file, init.type, mode, seen, subs, onlyGeneric);
       return true;
     }
@@ -981,6 +1152,32 @@ const walkReturnDecl = (
   return false;
 };
 const fnOutMode = (mode: Mode): Mode => (mode === 'output' ? 'output' : 'neutral');
+const walkParamTypes = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  seen: Set<string>,
+  subs?: Subs,
+  onlyGeneric = false
+) => {
+  visitParamTypes(node, (type) => walkType(state, file, type, 'input', seen, subs, onlyGeneric));
+};
+const walkCallable = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  mode: Mode,
+  seen: Set<string>,
+  subs?: Subs,
+  onlyGeneric = false
+) => {
+  visitCallableParts(
+    node,
+    mode,
+    (item) => walkParamTypes(state, file, item, seen, subs, onlyGeneric),
+    (item, next) => walkType(state, file, item, next, seen, subs, onlyGeneric)
+  );
+};
 const pushIssue = (
   state: State,
   file: string,
@@ -991,12 +1188,21 @@ const pushIssue = (
   prepend = false
 ) => {
   const key = `${file}:${line}:${kind}:${issue}`;
-  if (state.seen.has(key)) return;
-  state.seen.add(key);
+  if (!seenAdd(state.seen, key)) return;
   const item = { file, issue, kind, line, sym };
   if (prepend) state.issues.unshift(item);
   else state.issues.push(item);
 };
+const issueSym = (kind: Issue['kind']): Issue['sym'] =>
+  kind === 'bytes-field'
+    ? 'field'
+    : kind === 'bytes-generic' || kind === 'bytes-default'
+      ? 'generic'
+      : kind === 'bytes-helper'
+        ? 'helper'
+        : kind === 'bytes-input'
+          ? 'input'
+          : 'return';
 const addIssue = (
   state: State,
   file: FileCtx,
@@ -1004,18 +1210,85 @@ const addIssue = (
   issue: Issue['issue'],
   kind: Issue['kind']
 ) => {
-  const line = lineOf(file, node);
-  const sym =
-    kind === 'bytes-field'
-      ? 'field'
-      : kind === 'bytes-generic' || kind === 'bytes-default'
-        ? 'generic'
-        : kind === 'bytes-helper'
-          ? 'helper'
-          : kind === 'bytes-input'
-            ? 'input'
-            : 'return';
-  pushIssue(state, file.rel, line, sym, issue, kind);
+  const line = nodeLineNo(file, node);
+  pushIssue(state, file.rel, line, issueSym(kind), issue, kind);
+};
+const addInFieldIssue = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  mode: Mode,
+  typed: Typed,
+  label: string
+): void => {
+  if (mode === 'input') addIssue(state, file, node, inMsg(typed, label), 'bytes-input');
+  else if (mode === 'field') addIssue(state, file, node, fieldMsg(typed, label), 'bytes-field');
+};
+const addGenericIssue = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  typed: Typed,
+  raw: string,
+  mode: Mode,
+  alias = raw
+): void => {
+  const msg = alias === raw ? genMsg(typed, raw, mode) : genAliasMsg(typed, alias, raw, mode);
+  addIssue(state, file, node, msg, 'bytes-generic');
+};
+const addRawLeafIssue = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  mode: Mode,
+  onlyGeneric: boolean,
+  typed: Typed,
+  raw: string,
+  label = raw,
+  generic = false
+): boolean => {
+  if (generic) {
+    addGenericIssue(state, file, node, typed, raw, mode, label);
+    return true;
+  }
+  if (onlyGeneric) return true;
+  if (mode === 'output') addIssue(state, file, node, outMsg(label), 'bytes-return');
+  return true;
+};
+const addRetLeafIssue = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  mode: Mode,
+  onlyGeneric: boolean,
+  typed: Typed,
+  label: string
+): boolean => {
+  if (!onlyGeneric) addInFieldIssue(state, file, node, mode, typed, label);
+  return true;
+};
+const hasBytes = (state: State, file: FileCtx, node: any): boolean =>
+  hasByteType(state, file, node, new Set());
+const hasOpaque = (state: State, file: FileCtx, node: any): boolean =>
+  hasOpaqueDomain(state, file, node, new Set());
+const addBadPromiseRetIssue = (state: State, file: FileCtx, node: any): boolean => {
+  const bad = badPromiseRet(file, node);
+  if (!bad || !hasBytes(state, file, bad)) return false;
+  addIssue(state, file, node, badPromiseRetMsg(file, bad), 'bytes-return');
+  return true;
+};
+const wrappedPromiseRet = (file: FileCtx, node: any): boolean => {
+  const promise = promiseArg(file, node);
+  return !!promise && isWrapped(file, promise, 'TRet');
+};
+const addPromiseRetIssue = (state: State, file: FileCtx, node: any, wrapByte = false): boolean => {
+  if (addBadPromiseRetIssue(state, file, node)) return true;
+  const promise = promiseArg(file, node);
+  if (!promise) return false;
+  if (wrappedPromiseRet(file, node)) return true;
+  if (!wrapByte || !hasBytes(state, file, promise)) return false;
+  addIssue(state, file, node, wrapMsg(file, node, 'output'), 'bytes-return');
+  return true;
 };
 const checkWrap = (state: State, file: FileCtx, node: any, mode: 'input' | 'output'): void => {
   if (!node) return;
@@ -1023,18 +1296,10 @@ const checkWrap = (state: State, file: FileCtx, node: any, mode: 'input' | 'outp
   walkType(state, file, node, mode, new Set(), undefined, true);
   if (state.issues.length !== before) return;
   const wrap = wrapName(mode);
-  if (mode === 'output') {
-    const bad = badPromiseRet(file, node);
-    if (bad && hasByteType(state, file, bad, new Set())) {
-      addIssue(state, file, node, badPromiseRetMsg(file, bad), 'bytes-return');
-      return;
-    }
-    const promise = promiseArg(file, node);
-    if (promise && isWrapped(file, promise, 'TRet')) return;
-  }
+  if (mode === 'output' && addPromiseRetIssue(state, file, node, true)) return;
   if (!wrap || isWrapped(file, node, wrap)) return;
-  if (!hasByteType(state, file, node, new Set())) return;
-  if (hasOpaqueDomain(state, file, node, new Set())) return;
+  if (!hasBytes(state, file, node)) return;
+  if (hasOpaque(state, file, node)) return;
   addIssue(
     state,
     file,
@@ -1044,11 +1309,39 @@ const checkWrap = (state: State, file: FileCtx, node: any, mode: 'input' | 'outp
   );
 };
 const refAlias = (file: FileCtx, node: any, decl: any, declFile: FileCtx): string => {
-  const raw =
-    node.kind === KIND.ImportType ? nameOf(file, node.qualifier) : nameOf(file, node.typeName);
+  const raw = refName(file, node);
   if (ident(raw)) return raw;
-  const name = nameOf(declFile, decl?.name);
+  const name = nodeName(declFile, decl?.name);
   return ident(name) ? name : raw;
+};
+const addExternalRefIssue = (
+  state: State,
+  file: FileCtx,
+  node: any,
+  target: RefTarget,
+  mode: Mode,
+  onlyGeneric: boolean
+): boolean => {
+  if (target.local) return false;
+  const body = refBody(target);
+  const generic = typedKind(target.ctx, body);
+  const alias = refAlias(file, node, target.node, target.ctx);
+  if (generic) {
+    return addRawLeafIssue(
+      state,
+      file,
+      node,
+      mode,
+      onlyGeneric,
+      generic,
+      nodeText(target.ctx, body || target.node),
+      alias,
+      !!typeArgs(target.node?.type).length
+    );
+  }
+  const canonical = canonicalKind(target.ctx, body);
+  if (canonical) return addRetLeafIssue(state, file, node, mode, onlyGeneric, canonical, alias);
+  return false;
 };
 const walkType = (
   state: State,
@@ -1059,156 +1352,56 @@ const walkType = (
   subs?: Subs,
   onlyGeneric = false
 ): void => {
-  node = subNode(file, node, subs);
+  node = enterType(file, node, seen, subs, mode);
   if (!node) return;
-  // Recursive mapped generics can re-enter the same type-argument node without touching a decl guard.
-  const nodeKey = `${file.file}:${node.pos || 0}:${node.end || 0}:${mode}:${subKey(subs)}`;
-  if (seen.has(nodeKey)) return;
-  seen.add(nodeKey);
-  const typed = typedOf(file, node);
+  const typed = typedKind(file, node);
   if (typed) {
-    const raw = textOf(file, node);
-    if (node.typeArguments?.length) {
-      addIssue(state, file, node, genMsg(state, typed, raw, mode), 'bytes-generic');
-      return;
-    }
-    if (onlyGeneric) return;
-    if (mode === 'output') addIssue(state, file, node, outMsg(raw), 'bytes-return');
+    const raw = nodeText(file, node);
+    addRawLeafIssue(state, file, node, mode, onlyGeneric, typed, raw, raw, !!typeArgs(node).length);
     return;
   }
-  const canon = canonicalOf(file, node);
+  const canon = canonicalKind(file, node);
   if (canon) {
-    if (onlyGeneric) return;
-    if (mode === 'input') addIssue(state, file, node, inMsg(canon, canonDef(canon)), 'bytes-input');
-    if (mode === 'field')
-      addIssue(state, file, node, fieldMsg(canon, canonDef(canon)), 'bytes-field');
+    addRetLeafIssue(state, file, node, mode, onlyGeneric, canon, canonDef(canon));
     return;
   }
   if (!onlyGeneric && mode === 'output') {
-    const bad = badPromiseRet(file, node);
-    if (bad && hasByteType(state, file, bad, new Set())) {
-      addIssue(state, file, node, badPromiseRetMsg(file, bad), 'bytes-return');
-      return;
-    }
-    const promise = promiseArg(file, node);
-    if (promise) {
-      if (isWrapped(file, promise, 'TRet')) return;
-      if (hasByteType(state, file, promise, new Set())) {
-        addIssue(state, file, node, wrapMsg(file, node, 'output'), 'bytes-return');
-        return;
-      }
-    }
+    if (addPromiseRetIssue(state, file, node, true)) return;
   }
-  if (node.kind === KIND.TypeReference && nameOf(file, node.typeName) === 'ReturnType') {
-    const arg = subNode(file, node.typeArguments?.[0], subs);
-    if (arg?.kind === KIND.TypeQuery) {
-      for (const item of refValueDecls(state, arg))
-        if (walkReturnDecl(state, item.ctx, item.node, mode, seen, subs, onlyGeneric)) return;
-    }
-  }
-  if (node.kind === KIND.TypeReference || node.kind === KIND.ImportType) {
-    const name =
-      node.kind === KIND.ImportType ? nameOf(file, node.qualifier) : nameOf(file, node.typeName);
-    const aliased = file.imports.get(name) || state.aliasByName.get(name);
+  for (const item of returnTypeRefs(state, file, node, subs))
+    if (walkReturnDecl(state, item.ctx, item.node, mode, seen, subs, onlyGeneric)) return;
+  if (refLike(node)) {
+    const name = refName(file, node);
+    const aliased = typedAlias(state, file, name);
     if (aliased) {
       if (onlyGeneric) return;
-      if (mode === 'input') addIssue(state, file, node, inMsg(aliased, name), 'bytes-input');
-      else if (mode === 'field')
-        addIssue(state, file, node, fieldMsg(aliased, name), 'bytes-field');
+      addInFieldIssue(state, file, node, mode, aliased, name);
       return;
     }
-    for (const item of refDecls(state, node)) {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = filterSubs(item.ctx, item.node, mode, bindSubs(item.ctx, item.node, args));
-      const body = subNode(item.ctx, item.node?.type, declSubs);
-      const generic = typedOf(item.ctx, body);
-      const canonical = canonicalOf(item.ctx, body);
-      const raw = textOf(item.ctx, body || item.node);
-      const alias = refAlias(file, node, item.node, item.ctx);
-      if (generic && item.node?.type?.typeArguments?.length) {
-        const msg =
-          alias === raw
-            ? genMsg(state, generic, raw, mode)
-            : genAliasMsg(generic, alias, raw, mode);
-        addIssue(state, file, node, msg, 'bytes-generic');
-        return;
-      }
-      if (canonical) {
-        if (onlyGeneric) return;
-        if (mode === 'input') addIssue(state, file, node, inMsg(canonical, alias), 'bytes-input');
-        else if (mode === 'field')
-          addIssue(state, file, node, fieldMsg(canonical, alias), 'bytes-field');
-        return;
-      }
-      if (generic) {
-        if (onlyGeneric) return;
-        if (mode === 'output') addIssue(state, file, node, outMsg(alias), 'bytes-return');
-        return;
-      }
+    for (const item of refTargets(state, file, node, subs, (ctx, decl, cur) =>
+      filterSubs(ctx, decl, mode, cur)
+    )) {
+      if (addExternalRefIssue(state, file, node, item, mode, onlyGeneric)) return;
       if (mode === 'neutral') continue;
-      const key = `${item.ctx.file}:${item.node?.pos || 0}:${mode}:${subKey(declSubs)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      walkDecl(state, item.ctx, item.node, mode, seen, declSubs, onlyGeneric);
+      const key = item.local
+        ? `${name}:${mode}:${subKey(item.subs)}`
+        : targetKey(item, mode, subKey(item.subs));
+      if (!seenAdd(seen, key)) continue;
+      walkDecl(state, item.ctx, item.node, mode, seen, item.subs, onlyGeneric);
       return;
     }
-    const decl = file.decls.get(name);
-    if (decl && mode !== 'neutral') {
-      const args = node.typeArguments?.map((arg: any) => subNode(file, arg, subs));
-      const declSubs = filterSubs(file, decl, mode, bindSubs(file, decl, args));
-      const key = `${name}:${mode}:${subKey(declSubs)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        walkDecl(state, file, decl, mode, seen, declSubs, onlyGeneric);
-      }
-      return;
-    }
-    if (node.typeArguments)
-      for (const item of node.typeArguments)
-        walkType(state, file, item, mode, seen, subs, onlyGeneric);
+    visitTypeArgs(node, (item) => walkType(state, file, item, mode, seen, subs, onlyGeneric));
     return;
   }
-  if (node.kind === KIND.ArrayType)
-    return walkType(state, file, node.elementType, mode, seen, subs, onlyGeneric);
-  if (node.kind === KIND.ParenthesizedType)
-    return walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
-  if (node.kind === KIND.TypeOperator)
-    return walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
-  if (node.kind === KIND.IndexedAccessType) {
-    walkType(state, file, node.objectType, mode, seen, subs, onlyGeneric);
-    walkType(state, file, node.indexType, 'neutral', seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.UnionType || node.kind === KIND.IntersectionType) {
-    for (const item of node.types || []) walkType(state, file, item, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.TupleType) {
-    for (const item of node.elements || [])
-      walkType(state, file, item, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.ConditionalType) {
-    walkType(state, file, node.checkType, 'neutral', seen, subs, onlyGeneric);
-    walkType(state, file, node.extendsType, 'neutral', seen, subs, onlyGeneric);
-    walkType(state, file, node.trueType, mode, seen, subs, onlyGeneric);
-    walkType(state, file, node.falseType, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.MappedType) {
-    walkType(state, file, node.typeParameter?.constraint, 'neutral', seen, subs, onlyGeneric);
-    walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.TypeLiteral) {
-    for (const item of node.members || [])
-      walkMember(state, file, item, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.FunctionType || node.kind === KIND.ConstructorType) {
-    for (const item of node.parameters || [])
-      walkType(state, file, item.type, 'input', seen, subs, onlyGeneric);
-    walkType(state, file, node.type, fnOutMode(mode), seen, subs, onlyGeneric);
+  if (
+    walkTypeParts(
+      node,
+      mode,
+      (item, next) => walkType(state, file, item, next, seen, subs, onlyGeneric),
+      (item, next) => walkMember(state, file, item, next, seen, subs, onlyGeneric),
+      (item, next) => walkCallable(state, file, item, next, seen, subs, onlyGeneric)
+    )
+  ) {
     return;
   }
 };
@@ -1221,36 +1414,14 @@ const walkMember = (
   subs?: Subs,
   onlyGeneric = false
 ) => {
-  if (!node) return;
-  if (node.kind === KIND.PropertySignature || node.kind === KIND.IndexSignature) {
-    // Returned object/interface members are part of the API surface, unlike class storage fields.
-    walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.PropertyDeclaration) {
-    walkType(state, file, node.type, 'field', seen, subs, onlyGeneric);
-    return;
-  }
-  if (
-    node.kind === KIND.MethodDeclaration ||
-    node.kind === KIND.MethodSignature ||
-    node.kind === KIND.CallSignature ||
-    node.kind === KIND.ConstructSignature ||
-    node.kind === KIND.FunctionType ||
-    node.kind === KIND.ConstructorType
-  ) {
-    for (const item of node.parameters || [])
-      walkType(state, file, item.type, 'input', seen, subs, onlyGeneric);
-    walkType(state, file, node.type, fnOutMode(mode), seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.GetAccessor)
-    return walkType(state, file, node.type, fnOutMode(mode), seen, subs, onlyGeneric);
-  if (node.kind === KIND.SetAccessor) {
-    for (const item of node.parameters || [])
-      walkType(state, file, item.type, 'input', seen, subs, onlyGeneric);
-    return;
-  }
+  visitMemberParts(
+    node,
+    mode,
+    'callable',
+    (item, next) => walkType(state, file, item, next, seen, subs, onlyGeneric),
+    (item, next) => walkCallable(state, file, item, next, seen, subs, onlyGeneric),
+    (item) => walkParamTypes(state, file, item, seen, subs, onlyGeneric)
+  );
 };
 const walkClassMember = (
   state: State,
@@ -1262,7 +1433,7 @@ const walkClassMember = (
   onlyGeneric = false
 ) => {
   if (!node) return;
-  if (node.kind === KIND.PropertyDeclaration || node.kind === KIND.IndexSignature) {
+  if (classStorageMember(node)) {
     walkType(state, file, node.type, 'field', seen, subs, onlyGeneric);
     return;
   }
@@ -1278,26 +1449,15 @@ const walkDecl = (
 ) => {
   if (!node) return;
   if (isCanonicalHelperDecl(file, node)) return;
-  if (node.kind === KIND.TypeAliasDeclaration)
-    return walkType(state, file, node.type, mode, seen, subs, onlyGeneric);
-  if (node.kind === KIND.InterfaceDeclaration) {
-    for (const item of node.heritageClauses || [])
-      for (const part of item.types || [])
-        walkType(state, file, part, mode, seen, subs, onlyGeneric);
-    for (const item of node.members || [])
-      walkMember(state, file, item, mode, seen, subs, onlyGeneric);
-    return;
-  }
-  if (node.kind === KIND.ClassDeclaration) {
-    for (const item of node.heritageClauses || [])
-      for (const part of item.types || [])
-        walkType(state, file, part, mode, seen, subs, onlyGeneric);
-    for (const item of node.members || [])
-      walkClassMember(state, file, item, mode, seen, subs, onlyGeneric);
-  }
+  visitDeclParts(
+    node,
+    (item) => walkType(state, file, item, mode, seen, subs, onlyGeneric),
+    (item) => walkMember(state, file, item, mode, seen, subs, onlyGeneric),
+    (item) => walkClassMember(state, file, item, mode, seen, subs, onlyGeneric)
+  );
 };
 const scanTypeParams = (state: State, file: FileCtx, node: any) => {
-  for (const param of node?.typeParameters || []) {
+  for (const param of typeParams(node)) {
     const constraint = resolveByteType(state, file, param.constraint);
     const def = resolveByteType(state, file, param.default);
     if (!constraint || !def || constraint.typed !== def.typed) continue;
@@ -1305,84 +1465,91 @@ const scanTypeParams = (state: State, file: FileCtx, node: any) => {
       state,
       file,
       param.default || param,
-      defaultMsg(def.typed, def.role, nameOf(file, param.name)),
+      defaultMsg(def.typed, def.role, nodeName(file, param.name)),
       'bytes-default'
     );
   }
 };
 const KIND: any = {};
+const KIND_NAMES = `
+  ArrayType ArrowFunction CallSignature ClassDeclaration ConditionalType
+  Constructor ConstructorType ConstructSignature ExportDeclaration ExportKeyword
+  FunctionDeclaration FunctionExpression FunctionType GetAccessor ImportDeclaration ImportType
+  IndexedAccessType IndexSignature InterfaceDeclaration IntersectionType MappedType
+  MethodDeclaration MethodSignature ParenthesizedType PropertyDeclaration PropertySignature
+  SetAccessor TupleType TypeAliasDeclaration TypeLiteral TypeOperator TypeParameter
+  TypeQuery TypeReference UnionType VariableDeclaration
+`
+  .trim()
+  .split(/\s+/);
 type State = {
   aliasByName: Map<string, Typed>;
   checker: CheckerLike;
   cwd: string;
-  exportedByFile: Map<string, Map<string, Typed>>;
   files: Map<string, FileCtx>;
   issues: Issue[];
   prog: ProgLike;
   seen: Set<string>;
   ts: TsLike;
 };
-const varMode = (node: any): Mode =>
-  node.parent?.parent?.modifiers?.some((item: any) => item.kind === KIND.ExportKeyword)
-    ? 'output'
-    : 'neutral';
 const exported = (node: any): boolean =>
   !!node?.modifiers?.some((item: any) => item.kind === KIND.ExportKeyword);
+const varMode = (node: any): Mode => (exported(node.parent?.parent) ? 'output' : 'neutral');
 const helperDecl = (file: FileCtx, name: string): any => {
   const node = file.decls.get(name) as any;
-  return node?.kind === KIND.TypeAliasDeclaration ? node : undefined;
+  return typeAlias(node);
 };
-const CANON_HELPERS = new Map([
+const HELPER_NAMES = ['TypedArg', 'TypedRet', 'TArg', 'TRet'] as const;
+const WRAP_HELPERS = ['TArg', 'TRet'] as const;
+const HELPER_FILES = new Set(['utils.ts', 'index.ts']);
+const DEFAULT_HELPER_FILE = 'utils.ts';
+const HELPER_FILE_LABEL = 'utils.ts or index.ts';
+// Helper probes can start from arbitrary imported names before canonical-name filtering.
+const CANON_HELPERS = new Map<string, string>([
   ['TypedArg', CANON_TYPED_ARG],
   ['TypedRet', CANON_TYPED_RET],
   ['TArg', CANON_TARG],
   ['TRet', CANON_TRET],
 ]);
 const isCanonicalHelperDecl = (file: FileCtx, node: any): boolean => {
-  if (node?.kind !== KIND.TypeAliasDeclaration) return false;
+  if (!typeAlias(node)) return false;
   // Canonical helpers intentionally contain ReturnType<TypedArray.of>.
   // Expanding them reports the helper as its own input misuse.
-  const body = CANON_HELPERS.get(nameOf(file, node.name));
-  return !!body && exported(node) && normType(textOf(file, node.type)) === normType(body);
-};
-const canonicalType = (file: FileCtx, name: string, body: string): boolean => {
-  const node = helperDecl(file, name);
-  if (!node || !exported(node)) return false;
-  const raw = normType(textOf(file, node.type)).replace(/^\|/, '');
-  return raw === normType(body);
-};
-const canonicalDoc = (file: FileCtx, name: string, doc: string): boolean => {
-  const node = helperDecl(file, name);
-  if (!node || !exported(node)) return false;
-  const start = typeof node.getStart === 'function' ? node.getStart(file.source as any) : node.pos;
-  return normType(file.text.slice(node.pos, start)) === normType(doc);
+  const body = CANON_HELPERS.get(nodeName(file, node.name));
+  return !!body && exported(node) && normText(file, node.type) === normType(body);
 };
 const goodLocalHelper = (file: FileCtx, name: string): boolean => {
   const doc = CANON_DOC.get(name);
   const body = CANON_HELPERS.get(name);
-  return !!doc && !!body && canonicalDoc(file, name, doc) && canonicalType(file, name, body);
+  const node = helperDecl(file, name);
+  if (!node || !exported(node) || !doc || !body) return false;
+  const raw = normText(file, node.type).replace(/^\|/, '');
+  const start = nodePos(file, node);
+  return raw === normType(body) && normType(file.text.slice(node.pos, start)) === normType(doc);
 };
-const helperRefs = (file: FileCtx, name: string): any[] => {
-  const out: any[] = [];
-  for (const stmt of file.source.statements || []) {
-    if ((stmt as any).kind === KIND.ImportDeclaration) {
-      const named = (stmt as any).importClause?.namedBindings?.elements || [];
-      for (const item of named) if (nameOf(file, item.name) === name) out.push(item.name);
-      continue;
-    }
-    if ((stmt as any).kind === KIND.ExportDeclaration) {
-      const named = (stmt as any).exportClause?.elements || [];
-      for (const item of named) if (nameOf(file, item.name) === name) out.push(item.name);
-    }
+const namedRefs = (file: FileCtx, stmt: any, name: string): any[] =>
+  namedElements(stmt)
+    .filter((item: any) => nodeName(file, item.name) === name)
+    .map((item: any) => item.name);
+type HelperRow = { refs: any[]; spec?: string };
+const helperRows = (file: FileCtx, name: string): HelperRow[] => {
+  const out: HelperRow[] = [];
+  for (const stmt of stmts(file.source)) {
+    const refs = namedRefs(file, stmt, name);
+    if (refs.length) out.push({ refs, spec: modSpec(stmt) });
   }
   return out;
 };
+const helperRefs = (file: FileCtx, name: string): any[] =>
+  helperRows(file, name).flatMap((row) => row.refs);
+const helperNode = (file: FileCtx, name: string): any =>
+  helperDecl(file, name) || helperRefs(file, name)[0];
 const resolveHelperImport = (from: string, spec: string): string | undefined => {
   if (spec.startsWith('.')) return;
   try {
     const req = createRequire(from);
     const raw = req.resolve(spec);
-    // file: dependencies can carry canonical helper source that differs from generated declarations.
+    // file: dependencies can carry canonical helper source different from declarations.
     const tries = [
       raw,
       raw.replace(/\.js$/, '.ts'),
@@ -1392,41 +1559,35 @@ const resolveHelperImport = (from: string, spec: string): string | undefined => 
       raw.replace(/\.mjs$/, '.d.mts'),
       raw.replace(/\.cjs$/, '.d.cts'),
     ];
-    for (const file of tries)
+    for (const file of tries) {
       if (file !== raw || existsSync(file))
-        if (existsSync(file) && wantHelperFile(file)) return realpathSync(file);
+        if (existsSync(file) && HELPER_FILE.test(file)) return realpathSync(file);
+    }
   } catch {}
   return;
 };
 const helperTargets = (state: State, file: FileCtx, name: string): FileCtx[] => {
   const out: FileCtx[] = [];
   const fileSet = new Set(state.files.keys());
-  for (const stmt of file.source.statements || []) {
-    const spec = (stmt as any).moduleSpecifier?.text;
-    if (typeof spec !== 'string') continue;
-    const items =
-      (stmt as any).kind === KIND.ImportDeclaration
-        ? (stmt as any).importClause?.namedBindings?.elements || []
-        : (stmt as any).kind === KIND.ExportDeclaration
-          ? (stmt as any).exportClause?.elements || []
-          : [];
-    if (!items.length) continue;
-    if (!items.some((item: any) => nameOf(file, item.name) === name)) continue;
-    const target = resolveImportFile(file.file, spec, fileSet) || resolveHelperImport(file.file, spec);
-    if (target) out.push(ctxOf(state, target));
+  for (const row of helperRows(file, name)) {
+    if (!row.spec) continue;
+    const target =
+      resolveImportFile(file.file, row.spec, fileSet) || resolveHelperImport(file.file, row.spec);
+    if (target) out.push(getFileCtx(state, target));
   }
   return out;
 };
 const hasAnyHelper = (file: FileCtx): boolean =>
-  !!helperDecl(file, 'TArg') ||
-  !!helperDecl(file, 'TRet') ||
   TYPED.some((typed) => !!helperDecl(file, SHORT[typed])) ||
-  !!helperRefs(file, 'TArg').length ||
-  !!helperRefs(file, 'TRet').length;
-const goodHelperRef = (state: State, file: FileCtx, name: string, seen = new Set<string>()): boolean => {
+  WRAP_HELPERS.some((name) => !!helperNode(file, name));
+const goodHelperRef = (
+  state: State,
+  file: FileCtx,
+  name: string,
+  seen = new Set<string>()
+): boolean => {
   const key = `${file.file}:${name}`;
-  if (seen.has(key)) return false;
-  seen.add(key);
+  if (!seenAdd(seen, key)) return false;
   for (const target of helperTargets(state, file, name)) {
     if (goodLocalHelper(target, name) && goodLocalHelpers(target)) return true;
     if (goodHelperRef(state, target, name, seen)) return true;
@@ -1434,268 +1595,181 @@ const goodHelperRef = (state: State, file: FileCtx, name: string, seen = new Set
   return false;
 };
 const goodLocalHelpers = (file: FileCtx): boolean => {
-  return (
-    goodLocalHelper(file, 'TypedArg') &&
-    goodLocalHelper(file, 'TypedRet') &&
-    goodLocalHelper(file, 'TArg') &&
-    goodLocalHelper(file, 'TRet')
-  );
+  return HELPER_NAMES.every((name) => goodLocalHelper(file, name));
 };
 const goodHelpers = (state: State, file: FileCtx): boolean =>
-  goodLocalHelpers(file) ||
-  (goodHelperRef(state, file, 'TArg') && goodHelperRef(state, file, 'TRet'));
-const helperTarget = (
-  state: State,
-  files: FileCtx[]
-): { action: 'add' | 'update'; line: number; rel: string } | undefined => {
-  const candidates = files.filter((file) => {
-    const base = basename(file.file);
-    return base === 'utils.ts' || base === 'index.ts';
-  });
+  goodLocalHelpers(file) || WRAP_HELPERS.every((name) => goodHelperRef(state, file, name));
+const helperFileName = (file: FileCtx): string => basename(file.file);
+const helperFile = (file: FileCtx): boolean => HELPER_FILES.has(helperFileName(file));
+const helperCandidates = (files: FileCtx[]): FileCtx[] => files.filter(helperFile);
+const preferredHelperFile = (files: FileCtx[]): FileCtx | undefined =>
+  files.find((file) => helperFileName(file) === DEFAULT_HELPER_FILE) || files.find(helperFile);
+type HelperTarget = { action: 'add' | 'update'; line: number; rel: string };
+const helperTarget = (state: State, files: FileCtx[]): HelperTarget | undefined => {
+  const candidates = helperCandidates(files);
   const withHelpers = candidates.find(hasAnyHelper);
   if (withHelpers) {
     if (goodHelpers(state, withHelpers)) return;
-    const decl =
-      helperDecl(withHelpers, 'TArg') ||
-      helperDecl(withHelpers, 'TRet') ||
-      helperRefs(withHelpers, 'TArg')[0] ||
-      helperRefs(withHelpers, 'TRet')[0];
+    const decl = WRAP_HELPERS.map((name) => helperNode(withHelpers, name)).find(Boolean);
     return {
       action: 'update',
-      line: decl ? lineOf(withHelpers, decl) : 1,
+      line: decl ? nodeLineNo(withHelpers, decl) : 1,
       rel: withHelpers.rel,
     };
   }
-  const utils = candidates.find((file) => basename(file.file) === 'utils.ts');
-  const index = candidates.find((file) => basename(file.file) === 'index.ts');
-  const target = utils || index;
+  const target = preferredHelperFile(candidates);
   if (target) return { action: 'add', line: 1, rel: target.rel };
-  return { action: 'add', line: 1, rel: 'utils.ts' };
+  return { action: 'add', line: 1, rel: DEFAULT_HELPER_FILE };
 };
-const checkHelpers = (state: State, files: FileCtx[]) => {
-  if (
-    !state.issues.some(
-      (item) =>
-        (item.kind === 'bytes-input' || item.kind === 'bytes-return') &&
-        item.issue.startsWith('wrap ')
-    )
-  )
-    return;
-  const target = helperTarget(state, files);
-  if (!target) return;
-  if (target.action === 'add') {
-    pushIssue(
-      state,
-      target.rel,
-      target.line,
-      'helper',
-      helperMsg('add', 'utils.ts or index.ts'),
-      'bytes-helper',
-      true
-    );
-    return;
-  }
+const needsHelpers = (state: State): boolean =>
+  state.issues.some(
+    (item) =>
+      (item.kind === 'bytes-input' || item.kind === 'bytes-return') &&
+      item.issue.startsWith('wrap ')
+  );
+const addHelperIssue = (state: State, target: HelperTarget): void => {
+  const name = target.action === 'add' ? HELPER_FILE_LABEL : target.rel;
   pushIssue(
     state,
     target.rel,
     target.line,
     'helper',
-    helperMsg('update', target.rel),
+    helperMsg(target.action, name),
     'bytes-helper',
     true
   );
 };
-
-const scanFile = (state: State, file: FileCtx, ts: TsLike) => {
-  const walkNode = (node: any) => {
-    if (!node) return;
-    scanTypeParams(state, file, node);
-    if (
-      node.parent?.kind === KIND.ClassDeclaration &&
-      (node.kind === KIND.MethodDeclaration ||
-        node.kind === KIND.Constructor ||
-        node.kind === KIND.GetAccessor ||
-        node.kind === KIND.SetAccessor)
-    )
-      return;
-    if (
-      node.kind === KIND.MethodDeclaration ||
-      node.kind === KIND.FunctionDeclaration ||
-      node.kind === KIND.FunctionExpression ||
-      node.kind === KIND.ArrowFunction ||
-      node.kind === KIND.Constructor ||
-      node.kind === KIND.GetAccessor ||
-      node.kind === KIND.SetAccessor
-    ) {
-      for (const item of node.parameters || []) checkWrap(state, file, item.type, 'input');
-      if (node.kind !== KIND.SetAccessor) checkWrap(state, file, node.type, 'output');
-      if (node.body) ts.forEachChild(node.body, walkNode);
-      return;
-    }
-    if (node.kind === KIND.TypeAliasDeclaration) {
-      if (isCanonicalHelperDecl(file, node)) return;
-      const name = nameOf(file, node.name);
-      const generic = typedOf(file, node.type);
-      if (generic && name && node.type?.typeArguments?.length) {
-        addIssue(
-          state,
-          file,
-          node.type,
-          genAliasMsg(generic, name, textOf(file, node.type), 'neutral'),
-          'bytes-generic'
-        );
-        return;
-      }
-      walkType(state, file, node.type, 'neutral', new Set(), undefined, true);
-      return;
-    }
-    if (node.kind === KIND.InterfaceDeclaration || node.kind === KIND.ClassDeclaration) {
-      walkDecl(
-        state,
-        file,
-        node,
-        'neutral',
-        new Set(),
-        undefined,
-        node.kind !== KIND.ClassDeclaration
-      );
-      return;
-    }
-    if (node.kind === KIND.VariableDeclaration) {
-      if (node.type?.kind === KIND.FunctionType || node.type?.kind === KIND.ConstructorType) {
-        for (const item of node.type.parameters || []) checkWrap(state, file, item.type, 'input');
-        checkWrap(state, file, node.type.type, 'output');
-      } else if (varMode(node) === 'output') checkWrap(state, file, node.type, 'output');
-      else walkType(state, file, node.type, 'neutral', new Set(), undefined, true);
-      if (node.initializer) walkNode(node.initializer);
-      return;
-    }
-    ts.forEachChild(node, walkNode);
-  };
-  walkNode(file.source as any);
+const checkHelpers = (state: State, files: FileCtx[]) => {
+  if (!needsHelpers(state)) return;
+  const target = helperTarget(state, files);
+  if (!target) return;
+  addHelperIssue(state, target);
 };
-const loadFile = (ts: TsLike, prog: ProgLike, cwd: string, file: string): FileCtx => {
-  const source =
-    prog.getSourceFile(file) ||
-    ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true);
-  const text = (source as any).text || readFileSync(file, 'utf8');
-  const decls = new Map<string, unknown>();
-  for (const stmt of source.statements || []) {
-    const name = nameOf(
-      { decls, file, imports: new Map(), rel: '', source, text },
-      (stmt as any).name
-    );
-    if (!name) continue;
-    if (
-      (stmt as any).kind === KIND.TypeAliasDeclaration ||
-      (stmt as any).kind === KIND.InterfaceDeclaration ||
-      (stmt as any).kind === KIND.ClassDeclaration
-    )
-      decls.set(name, stmt);
-  }
-  return {
-    decls,
-    file,
-    imports: new Map(),
-    rel: relative(cwd, file) || basename(file),
-    source,
-    text,
-  };
+const checkParamWraps = (state: State, file: FileCtx, node: any) => {
+  visitParamTypes(node, (type) => checkWrap(state, file, type, 'input'));
 };
-
-export const runCli = async (
-  argv: string[],
-  opts: { color?: boolean; cwd?: string; loadTS?: (pkgFile: string) => TsLike } = {}
-): Promise<void> => {
-  const args = parseArgs(argv);
-  if (args.help) return console.log(usage);
-  const base = resolve(opts.cwd || process.cwd());
-  const pkgFile = resolve(base, args.pkgArg);
-  guardChild(base, pkgFile, 'package');
-  const colorOn = opts.color ?? wantColor();
-  const ts = (opts.loadTS || loadTS)(pkgFile);
-  Object.assign(KIND, {
-    ArrayType: ts.SyntaxKind.ArrayType,
-    ArrowFunction: ts.SyntaxKind.ArrowFunction,
-    CallSignature: ts.SyntaxKind.CallSignature,
-    ClassDeclaration: ts.SyntaxKind.ClassDeclaration,
-    ConditionalType: ts.SyntaxKind.ConditionalType,
-    Constructor: ts.SyntaxKind.Constructor,
-    ConstructorType: ts.SyntaxKind.ConstructorType,
-    ConstructSignature: ts.SyntaxKind.ConstructSignature,
-    FunctionDeclaration: ts.SyntaxKind.FunctionDeclaration,
-    FunctionExpression: ts.SyntaxKind.FunctionExpression,
-    FunctionType: ts.SyntaxKind.FunctionType,
-    GetAccessor: ts.SyntaxKind.GetAccessor,
-    IndexedAccessType: ts.SyntaxKind.IndexedAccessType,
-    IndexSignature: ts.SyntaxKind.IndexSignature,
-    InterfaceDeclaration: ts.SyntaxKind.InterfaceDeclaration,
-    IntersectionType: ts.SyntaxKind.IntersectionType,
-    MappedType: ts.SyntaxKind.MappedType,
-    MethodDeclaration: ts.SyntaxKind.MethodDeclaration,
-    MethodSignature: ts.SyntaxKind.MethodSignature,
-    ParenthesizedType: ts.SyntaxKind.ParenthesizedType,
-    PropertyDeclaration: ts.SyntaxKind.PropertyDeclaration,
-    PropertySignature: ts.SyntaxKind.PropertySignature,
-    ExportKeyword: ts.SyntaxKind.ExportKeyword,
-    ExportDeclaration: ts.SyntaxKind.ExportDeclaration,
-    ImportDeclaration: ts.SyntaxKind.ImportDeclaration,
-    ImportType: ts.SyntaxKind.ImportType,
-    SetAccessor: ts.SyntaxKind.SetAccessor,
-    TupleType: ts.SyntaxKind.TupleType,
-    TypeAliasDeclaration: ts.SyntaxKind.TypeAliasDeclaration,
-    TypeLiteral: ts.SyntaxKind.TypeLiteral,
-    TypeOperator: ts.SyntaxKind.TypeOperator,
-    TypeQuery: ts.SyntaxKind.TypeQuery,
-    TypeParameter: ts.SyntaxKind.TypeParameter,
-    TypeReference: ts.SyntaxKind.TypeReference,
-    UnionType: ts.SyntaxKind.UnionType,
-    VariableDeclaration: ts.SyntaxKind.VariableDeclaration,
-  });
-  const names = pickTSFiles(base);
-  const prog = ts.createProgram(names, tsOpts(ts, base));
-  const files = names.map((file) => loadFile(ts, prog, base, file));
-  const fileSet = new Set(files.map((file) => file.file));
-  const checker = prog.getTypeChecker();
+const checkCallableWraps = (state: State, file: FileCtx, node: any) => {
+  visitCallableParts(
+    node,
+    'output',
+    (item) => checkParamWraps(state, file, item),
+    (item) => checkWrap(state, file, item, 'output')
+  );
+};
+const aliasMaps = (files: FileCtx[]) => {
   const aliasByName = new Map<string, Typed>();
   const exportedByFile = new Map<string, Map<string, Typed>>();
   for (const file of files) {
     const exps = new Map<string, Typed>();
-    for (const stmt of file.source.statements || []) {
-      if ((stmt as any).kind !== KIND.TypeAliasDeclaration) continue;
-      const name = nameOf(file, (stmt as any).name);
-      const typed = canonicalOf(file, (stmt as any).type);
+    for (const stmt of stmts(file.source)) {
+      const alias = typeAlias(stmt);
+      if (!alias) continue;
+      const name = nodeName(file, alias.name);
+      const typed = canonicalKind(file, alias.type);
       if (!name || !typed) continue;
-      if ((stmt as any).modifiers?.some((item: any) => item.kind === KIND.ExportKeyword))
-        exps.set(name, typed);
+      if (exported(stmt)) exps.set(name, typed);
       aliasByName.set(name, typed);
     }
     exportedByFile.set(file.file, exps);
   }
-  for (const file of files)
-    for (const stmt of file.source.statements || []) {
-      if ((stmt as any).kind !== KIND.ImportDeclaration) continue;
-      const spec = (stmt as any).moduleSpecifier?.text;
-      if (typeof spec !== 'string') continue;
+  return { aliasByName, exportedByFile };
+};
+const applyImportedAliases = (
+  files: FileCtx[],
+  fileSet: Set<string>,
+  exportedByFile: Map<string, Map<string, Typed>>
+) => {
+  for (const file of files) {
+    for (const stmt of stmts(file.source)) {
+      if (!importDecl(stmt)) continue;
+      const spec = modSpec(stmt);
+      if (!spec) continue;
       const target = resolveImportFile(file.file, spec, fileSet);
       if (!target) continue;
       const exps = exportedByFile.get(target);
       if (!exps?.size) continue;
-      const named = (stmt as any).importClause?.namedBindings?.elements;
-      if (!named) continue;
+      const named = importElements(stmt);
+      if (!named.length) continue;
       for (const item of named) {
-        const imported = nameOf(file, item.propertyName || item.name);
-        const local = nameOf(file, item.name);
+        const imported = nodeName(file, item.propertyName || item.name);
+        const local = nodeName(file, item.name);
         const typed = exps.get(imported);
         if (!local || !typed) continue;
         file.imports.set(local, typed);
       }
     }
+  }
+};
+
+const scanFile = (state: State, file: FileCtx, ts: TsLike) => {
+  const walkNeutralType = (node: any): void =>
+    walkType(state, file, node, 'neutral', new Set(), undefined, true);
+  const walkNode = (node: any) => {
+    if (!node) return false;
+    scanTypeParams(state, file, node);
+    if (classRuntimeMember(node)) return false;
+    if (runtimeCallable(node)) {
+      checkCallableWraps(state, file, node);
+      if (node.body) walkAst(ts, node.body, walkNode);
+      return false;
+    }
+    const alias = typeAlias(node);
+    if (alias) {
+      if (isCanonicalHelperDecl(file, node)) return false;
+      const name = nodeName(file, alias.name);
+      const generic = typedKind(file, alias.type);
+      if (generic && name && typeArgs(alias.type).length) {
+        addGenericIssue(
+          state,
+          file,
+          alias.type,
+          generic,
+          nodeText(file, alias.type),
+          'neutral',
+          name
+        );
+        return false;
+      }
+      walkNeutralType(alias.type);
+      return false;
+    }
+    if (interfaceDecl(node) || classDecl(node)) {
+      walkDecl(state, file, node, 'neutral', new Set(), undefined, !classDecl(node));
+      return false;
+    }
+    const variable = variableDecl(node);
+    if (variable) {
+      if (typeCallable(variable.type)) checkCallableWraps(state, file, variable.type);
+      else if (varMode(variable) === 'output') checkWrap(state, file, variable.type, 'output');
+      else walkNeutralType(variable.type);
+      if (variable.initializer) walkAst(ts, variable.initializer, walkNode);
+      return false;
+    }
+    return true;
+  };
+  walkAst(ts, file.source, walkNode);
+};
+export const runCli = async (
+  argv: string[],
+  opts: { color?: boolean; cwd?: string; loadTS?: (pkgFile: string) => TsLike } = {}
+): Promise<void> => {
+  const cli = cliArgs(argv, usage, opts.color);
+  if (!cli) return;
+  const { args, colorOn } = cli;
+  const { cwd: base, pkgFile } = pkgTarget(args.pkgArg, opts.cwd);
+  const ts = (opts.loadTS || loadTS)(pkgFile);
+  for (const name of KIND_NAMES) KIND[name] = ts.SyntaxKind[name];
+  const names = pickTSFiles(base);
+  const prog = ts.createProgram(names, tsOpts(ts, base));
+  const files = names.map((file) => makeFileCtx(ts, prog, base, file));
+  const fileSet = new Set(files.map((file) => file.file));
+  const checker = prog.getTypeChecker();
+  const { aliasByName, exportedByFile } = aliasMaps(files);
+  applyImportedAliases(files, fileSet, exportedByFile);
   const state: State = {
     aliasByName,
     checker,
     cwd: base,
-    exportedByFile,
     files: new Map(files.map((file) => [file.file, file])),
     issues: [],
     prog,
@@ -1706,37 +1780,13 @@ export const runCli = async (
   checkHelpers(state, files);
   const byFile = new Map<string, number>();
   for (const item of state.issues) byFile.set(item.file, (byFile.get(item.file) || 0) + 1);
-  const out: Result = {
-    failures: state.issues.length,
-    passed: files.filter((file) => !byFile.has(file.rel)).length,
-    skipped: 0,
-    warnings: 0,
-  };
-  const logs: LogIssue[] = state.issues.map((item) => ({
-    level: 'ERROR',
-    ref: {
-      file: item.file,
-      issue: issueKind(item.issue, item.kind),
-      sym: `${item.line}/${item.sym}`,
-    },
-  }));
-  for (const line of groupIssues('bytes', logs, colorOn)) console.error(line);
-  if (out.failures) {
-    console.error(`${status('error', colorOn)} summary: ${summary(out)}`);
-    err('Bytes check found issues');
-  }
-  console.log(`${status('pass', colorOn)} summary: ${summary(out)}`);
+  const out = emptyResult();
+  out.failures = state.issues.length;
+  out.passed = files.filter((file) => !byFile.has(file.rel)).length;
+  const logs: LogIssue[] = state.issues.map((item) =>
+    makeIssue('error', item.file, `${item.line}/${item.sym}`, item.issue, item.kind)
+  );
+  reportIssues('bytes', logs, out, colorOn, 'Bytes check found issues');
 };
 
-const main = async (): Promise<void> => {
-  try {
-    await runCli(process.argv.slice(2));
-  } catch (error) {
-    console.error((error as Error).message);
-    process.exitCode = 1;
-  }
-};
-
-const entry: string | undefined = process.argv[1];
-const self: string = fileURLToPath(import.meta.url);
-if (!bundled() && entry && realpathSync(resolve(entry)) === realpathSync(self)) void main();
+runSelf(import.meta.url, runCli);

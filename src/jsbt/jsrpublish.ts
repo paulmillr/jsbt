@@ -1,31 +1,31 @@
 #!/usr/bin/env -S node --experimental-strip-types
 /**
-Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
-do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
+Destructive ops and `npm install` SHOULD use only `fs-modify.ts`.
+Do not call raw fs delete/write helpers or raw `npm install` directly here.
 
 `check:jsrpublish` probes the real local Deno publish path for Node-style packages:
-`deno publish --unstable-bare-node-builtins --unstable-sloppy-imports --unstable-byonm --dry-run --allow-dirty`.
+`deno publish --unstable-bare-node-builtins --unstable-sloppy-imports`
+`--unstable-byonm --dry-run --allow-dirty`.
 It first runs without `--allow-slow-types`. If that fails, it reruns with `--allow-slow-types`
 to separate slow-types-only problems from publish/type failures that still block publish.
 Generic `jsbt check` should call this in compact mode; direct `jsbt jsrpublish` keeps full output.
  */
 import { spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bundled,
-  guardChild,
-  issueKind,
-  printIssues,
-  status,
-  summary,
-  wantColor,
+  cliArgs,
+  emptyResult,
+  pkgTarget,
+  recordIssue,
+  relFile,
+  reportIssues,
+  runSelf,
+  textLines,
   type Issue as LogIssue,
   type Result,
+  usageText,
 } from './utils.ts';
 
-type Args = { help: boolean; pkgArg: string };
 type PublishProbe = {
   error?: string;
   skipped?: string;
@@ -36,23 +36,10 @@ type PublishProbe = {
 type PublishLoc = { file: string; sym: string };
 type PublishRun = (cwd: string, allowSlowTypes: boolean) => PublishProbe;
 
-const usage = `usage:
-  jsbt jsrpublish <package.json>
-
-examples:
-  jsbt jsrpublish package.json
-  node /path/to/jsbt/jsrpublish.ts package.json`;
+const usage = usageText('jsrpublish', 'jsbt/jsrpublish.ts');
 const SNIP = 8;
 
-const err = (msg: string): never => {
-  throw new Error(msg);
-};
-const parseArgs = (argv: string[]): Args => {
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true, pkgArg: '' };
-  if (argv.length !== 1) err('expected <package.json>');
-  return { help: false, pkgArg: argv[0] };
-};
-const textOf = (probe: PublishProbe): string =>
+const probeText = (probe: PublishProbe): string =>
   [probe.stdout, probe.stderr, probe.error].filter(Boolean).join('\n');
 const runPublish = (cwd: string, allowSlowTypes: boolean): PublishProbe => {
   const args = [
@@ -71,13 +58,14 @@ const runPublish = (cwd: string, allowSlowTypes: boolean): PublishProbe => {
   });
   if (res.error) {
     const err = res.error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT')
+    if (err.code === 'ENOENT') {
       return {
         skipped: 'missing deno on PATH; install deno to run publish dry-run',
         status: -1,
         stderr: '',
         stdout: '',
       };
+    }
     return {
       error: err.message,
       status: res.status || 1,
@@ -96,17 +84,12 @@ const publishLoc = (cwd: string, line: string): PublishLoc | undefined => {
   ]) {
     if (!hit) continue;
     const raw = hit[1].startsWith('file://') ? fileURLToPath(hit[1]) : hit[1];
-    const rel = relative(cwd, raw);
-    const file = (!rel || rel.startsWith('..') ? raw : rel).split('\\').join('/');
-    return { file, sym: `${hit[2]}:${hit[3]}` };
+    return { file: relFile(cwd, raw, true), sym: `${hit[2]}:${hit[3]}` };
   }
   return;
 };
 const relevantLines = (text: string): string[] => {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
+  const lines = textLines(text, true);
   if (!lines.length) return [];
   const start = lines.findIndex((line) =>
     /^(?:TS\d+ \[(?:ERROR|WARNING)\]:|(?:error|warning)\[[^\]]+\]:|error: )/.test(line)
@@ -121,35 +104,31 @@ const relevantLines = (text: string): string[] => {
   );
 };
 const preview = (probe: PublishProbe, full: boolean): string[] => {
-  const lines = relevantLines(textOf(probe));
+  const lines = relevantLines(probeText(probe));
   if (full || lines.length <= SNIP) return lines;
   return [...lines.slice(0, SNIP), '...'];
 };
-const issueOf = (
+const recordPublishIssue = (
+  out: Result,
+  issues: LogIssue[],
   level: 'ERROR' | 'WARNING',
   kind: string,
   text: string,
   probe: PublishProbe,
   cwd: string,
   full: boolean
-): LogIssue => {
-  const lines = relevantLines(textOf(probe));
-  const loc =
-    lines.map((line) => publishLoc(cwd, line)).find((item): item is PublishLoc => !!item) || {
-      file: 'jsr.json',
-      sym: 'publish',
-    };
+): void => {
+  const lines = relevantLines(probeText(probe));
+  const loc = lines
+    .map((line) => publishLoc(cwd, line))
+    .find((item): item is PublishLoc => !!item) || {
+    file: 'jsr.json',
+    sym: 'publish',
+  };
   const body = preview(probe, full)
     .map((line) => `  ${line}`)
     .join('\n');
-  return {
-    level,
-    ref: {
-      file: loc.file,
-      issue: issueKind(body ? `${text}\n${body}` : text, kind),
-      sym: loc.sym,
-    },
-  };
+  recordIssue(out, issues, level, loc.file, loc.sym, body ? `${text}\n${body}` : text, kind);
 };
 
 export const runCli = async (
@@ -161,78 +140,59 @@ export const runCli = async (
     runPublish?: PublishRun;
   } = {}
 ): Promise<void> => {
-  const args = parseArgs(argv);
-  if (args.help) return console.log(usage);
-  const cwd = resolve(opts.cwd || process.cwd());
-  const pkgFile = resolve(cwd, args.pkgArg);
-  guardChild(cwd, pkgFile, 'package');
-  const colorOn = opts.color ?? wantColor();
+  const cli = cliArgs(argv, usage, opts.color);
+  if (!cli) return;
+  const { args, colorOn } = cli;
+  const { cwd } = pkgTarget(args.pkgArg, opts.cwd);
   const full = opts.full ?? true;
   const run = opts.runPublish || runPublish;
   const strict = run(cwd, false);
   const issues: LogIssue[] = [];
-  let out: Result = { failures: 0, passed: 1, skipped: 0, warnings: 0 };
+  const out = emptyResult();
   if (strict.skipped) {
-    issues.push({
-      level: 'INFO',
-      ref: {
-        file: 'jsr.json',
-        issue: issueKind(`deno publish dry-run skipped; ${strict.skipped}`, 'jsrpublish-skip'),
-        sym: 'publish',
-      },
-    });
-    out = { failures: 0, passed: 0, skipped: 1, warnings: 0 };
+    recordIssue(
+      out,
+      issues,
+      'info',
+      'jsr.json',
+      'publish',
+      `deno publish dry-run skipped; ${strict.skipped}`,
+      'jsrpublish-skip'
+    );
   } else if (!strict.status && !strict.error) {
-    out = { failures: 0, passed: 1, skipped: 0, warnings: 0 };
+    out.passed = 1;
   } else {
     const slow = run(cwd, true);
     if (!slow.status && !slow.error) {
       const hint = full ? '' : '; see npm run check jsrpublish for full output';
-      issues.push(
-        issueOf(
-          'WARNING',
-          'jsrpublish-slow',
-          `deno publish fails without --allow-slow-types; rerun passes with --allow-slow-types${hint}`,
-          strict,
-          cwd,
-          full
-        )
+      recordPublishIssue(
+        out,
+        issues,
+        'WARNING',
+        'jsrpublish-slow',
+        [
+          'deno publish fails without --allow-slow-types;',
+          `rerun passes with --allow-slow-types${hint}`,
+        ].join(' '),
+        strict,
+        cwd,
+        full
       );
-      out = { failures: 0, passed: 0, skipped: 0, warnings: 1 };
     } else {
       const hint = full ? '' : '; see npm run check jsrpublish for full output';
-      issues.push(
-        issueOf(
-          'ERROR',
-          'jsrpublish',
-          `deno publish fails even with --allow-slow-types${hint}`,
-          textOf(slow) ? slow : strict,
-          cwd,
-          full
-        )
+      recordPublishIssue(
+        out,
+        issues,
+        'ERROR',
+        'jsrpublish',
+        `deno publish fails even with --allow-slow-types${hint}`,
+        probeText(slow) ? slow : strict,
+        cwd,
+        full
       );
-      out = { failures: 1, passed: 0, skipped: 0, warnings: 0 };
     }
   }
-  printIssues('jsrpublish', issues, colorOn);
-  if (out.failures) {
-    console.error(`${status('error', colorOn)} summary: ${summary(out)}`);
-    throw new Error('JSR publish check found issues');
-  }
-  if (out.warnings) return console.error(`${status('warn', colorOn)} summary: ${summary(out)}`);
-  if (out.skipped) return console.log(`${status('pass', colorOn)} summary: ${summary(out)}`);
-  console.log(`${status('pass', colorOn)} summary: ${summary(out)}`);
+  reportIssues('jsrpublish', issues, out, colorOn, 'JSR publish check found issues', 'warn');
 };
 
-const main = async (): Promise<void> => {
-  try {
-    await runCli(process.argv.slice(2));
-  } catch (err) {
-    console.error((err as Error).message);
-    process.exitCode = 1;
-  }
-};
-
-const entry: string | undefined = process.argv[1];
-const self: string = fileURLToPath(import.meta.url);
-if (!bundled() && entry && realpathSync(resolve(entry)) === realpathSync(self)) void main();
+runSelf(import.meta.url, runCli);

@@ -61,11 +61,15 @@ export const sweep = (dir: string): string[] => {
       else if (
         EXTS.some((ext) => ent.name.endsWith(ext)) &&
         PREFIXES.some((prefix) => ent.name.startsWith(prefix))
-      )
+      ) {
         out.push(file);
+      }
     }
   };
   walk(dir);
   for (const file of out) rm(file);
   return out;
+};
+export const sweepTemps = (cwd: string): void => {
+  sweep(cwd);
 };

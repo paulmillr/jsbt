@@ -134,10 +134,8 @@ function calcStats(list: bigint[]): {
   )})${reset}`;
   return { rme, min, max, mean, median, formatted };
 }
-function getTime(): bigint {
-  // @ts-ignore
-  return process.hrtime.bigint();
-}
+// @ts-ignore
+const getTime: () => bigint = process.hrtime.bigint;
 async function benchmarkRaw(callback: CbFn, maxRunTime: bigint = SECOND): Promise<BenchStats> {
   if (typeof callback !== 'function') throw new Error('callback must be a function');
   // measurements contain sample timings

@@ -265,9 +265,6 @@ async function runTest(
 function stackTop() {
   return stack[stack.length - 1];
 }
-function stackPop() {
-  return stack.pop();
-}
 function stackAdd(info: { message: any; skip?: boolean }) {
   const c = { ...info, children: [] };
   stackTop().children.push(c);
@@ -300,13 +297,13 @@ function stackFlatten(elm: StackItem): StackItem[] {
 const describe: DescribeFunction = (message: any, fn: EmptyFn): void => {
   stackAdd({ message });
   fn(); // Run function in the context of current stack path
-  stackPop();
+  stack.pop();
 };
 
 function describeSkip(message: any, _fn: EmptyFn): void {
   stackAdd({ message, skip: true });
   // fn();
-  stackPop();
+  stack.pop();
 }
 describe.skip = describeSkip;
 
@@ -320,7 +317,7 @@ function afterEach(fn: EmptyFn): void {
 
 function register(info: StackItem) {
   stackAdd(info);
-  stackPop(); // remove from stack since there are no children
+  stack.pop(); // remove from stack since there are no children
 }
 
 function cloneAndReset() {
@@ -392,7 +389,6 @@ async function runTestsInParallel(): Promise<number> {
   const tasks = cloneAndReset().filter((i) => !!i.test); // Filter describe elements
   const total = tasks.length;
   const startTime = Date.now();
-  const runTestPar = (info: StackItem) => runTest(info, false, false, opts.STOP_ON_ERROR);
 
   let cluster: any, err: any;
   let totalW = opts.FAST;
@@ -414,7 +410,7 @@ async function runTestsInParallel(): Promise<number> {
     const strId = 'W' + id;
     for (let i = 0; i < tasks.length; i++) {
       if (i % totalW !== id - 1) continue;
-      await runTestPar(tasks[i]);
+      await runTest(tasks[i], false, false, opts.STOP_ON_ERROR);
       tasksDone++;
     }
     proc!.send({ name: 'parallelTests', worker: strId, tasksDone, errorLog });

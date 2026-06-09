@@ -4,7 +4,7 @@ Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
 do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
 
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
-Like `jsbt esbuild`, it runs `npm install` in the selected build directory before checking.
+Like `jsbt bundle`, it runs `npm install` in the selected build directory before checking.
 File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
 
 It prints grouped `unused` issues for locals that still survive bundling.
@@ -15,28 +15,33 @@ nested object-property builders, inline arithmetic args, and object literals who
 initializers still look non-pure, so place the PURE marker as close as possible to the offender;
 if a computed arg or top-level value still survives, a tiny pure IIFE is the next-smallest fix.
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
-import { npmInstall, sweep, write } from '../fs-modify.ts';
+import { npmInstall, sweepTemps, write } from '../fs-modify.ts';
+import { exportPath, readPkg, type Pkg } from './public.ts';
 import {
+  camelParts,
   color,
+  err,
   groupIssues,
-  issueKind,
+  kb,
+  loadModuleApi,
+  loadTypeScriptApi,
+  makeIssue,
+  nodeText,
   paint,
-  stripAnsi,
-  type Issue as LogIssue,
+  readSource,
+  readText,
+  relFile,
+  resolveLocalImport,
+  runSelf,
+  table,
   wantColor,
+  type Issue as LogIssue,
 } from './utils.ts';
 
-declare const __JSBT_BUNDLE__: boolean | undefined;
-
 type Args = { help: boolean; pkgArg: string; outArg: string };
-type RawPkg = { exports?: Record<string, unknown>; main?: string; module?: string; name?: string };
-type Pkg = { exports: Record<string, unknown>; name: string; self: boolean };
-type Log = (line: string) => void;
 type TsLike = {
   ModuleKind: { ESNext: unknown };
   ScriptTarget: { ESNext: unknown };
@@ -103,17 +108,7 @@ type Item = {
 };
 type Built = Item & { file: string; min: Uint8Array; minFile: string; plain: Uint8Array };
 type AuditItem = { code: number; line: number; text: string };
-type TreeIssue = { file: string; id: string; line: number; text: string };
-type TableApi = {
-  drawHeader: (sizes: number[], fields: string[]) => void;
-  drawSeparator: (sizes: number[], changed: boolean[]) => void;
-  printRow: (
-    values: string[],
-    prev: string[] | undefined,
-    sizes: number[],
-    selected: string[]
-  ) => string[];
-};
+export type TreeIssue = { file: string; id: string; line: number; text: string };
 type TestApi = {
   esbuildPkg: typeof esbuildPkg;
   exportPath: typeof exportPath;
@@ -132,77 +127,15 @@ const usage = `usage:
 examples:
   jsbt treeshake package.json test/build/out-treeshake`;
 
-const bundled = (): boolean => typeof __JSBT_BUNDLE__ !== 'undefined' && __JSBT_BUNDLE__;
-
 const decoder = new TextDecoder();
-const CH = '─';
-const NN = '│';
-const LR = '┼';
-const RN = '├';
-const NL = '┤';
 const ALL = 'all';
 const UNUSED = new Set([6133, 6198]); // TS6133, TS6198 typescript errors
 const UNUSED_IGNORE = new Set(['__require', '__toESM']);
 
-const err = (msg: string): never => {
-  throw new Error(msg);
-};
-const _paint = (text: string, code: string = color.green) => paint(text, code);
-const kb = (bytes: number) => (bytes / 1024).toFixed(2);
 const diff = (cur: number, base: number) => `${((cur / base - 1) * 100).toFixed(2)}%`;
 const size = (cur: number, base: number) =>
-  `${_paint(kb(cur))} ${_paint(`(${diff(cur, base)})`, color.dim)}`;
-const camel = (s: string) =>
-  s
-    .split(/[^a-zA-Z0-9]+/)
-    .filter(Boolean)
-    .map((part, i) => (i ? part[0].toUpperCase() + part.slice(1) : part))
-    .join('');
-const sweepTemps = (cwd: string): void => {
-  sweep(cwd);
-};
-const joinBorders = (str: string) =>
-  str
-    .replaceAll(`${CH}${NN}${CH}`, `${CH}${LR}${CH}`)
-    .replaceAll(`${CH}${NN}`, `${CH}${NL}`)
-    .replaceAll(`${NN}${CH}`, `${RN}${CH}`);
-const pad = (s: string, len: number, end = true) => {
-  const extra = len - stripAnsi(s).length;
-  if (extra <= 0) return s;
-  const fill = ' '.repeat(extra);
-  return end ? s + fill : fill + s;
-};
-const table = (log: Log): TableApi => {
-  const drawHeader = (sizes: number[], fields: string[]) =>
-    log(fields.map((name, i) => `${name.padEnd(sizes[i])} `).join(NN));
-  const drawSeparator = (sizes: number[], changed: boolean[]) => {
-    const sep = sizes.map((size, i) => (changed[i] ? CH : ' ').repeat(size + 1));
-    log(joinBorders(sep.join(NN)));
-  };
-  const printRow = (
-    values: string[],
-    prev: string[] | undefined,
-    sizes: number[],
-    selected: string[]
-  ) => {
-    const changed = values.map(() => true);
-    for (let i = 0, parentChanged = false; i < selected.length; i++) {
-      const curChanged = parentChanged || !prev || values[i] !== prev[i];
-      changed[i] = curChanged;
-      if (curChanged) parentChanged = true;
-    }
-    const head = changed.slice(0, selected.length);
-    const skip = head.length < 2 ? true : head.slice(0, -1).every((v) => !v) && !!head.at(-1);
-    if (!skip) drawSeparator(sizes, changed);
-    log(
-      values
-        .map((val, i) => pad(!changed[i] ? ' ' : val, sizes[i] + 1, i < selected.length))
-        .join(NN)
-    );
-    return values;
-  };
-  return { drawHeader, drawSeparator, printRow };
-};
+  `${paint(kb(cur), color.green)} ${paint(`(${diff(cur, base)})`, color.dim)}`;
+const camel = (s: string) => camelParts(s.split(/[^a-zA-Z0-9]+/).filter(Boolean));
 const slug = (s: string): string =>
   s
     .replace(/^@/, '')
@@ -212,21 +145,6 @@ const parseArgs = (argv: string[]): Args => {
   if (argv.includes('--help') || argv.includes('-h')) return { help: true, outArg: '', pkgArg: '' };
   if (argv.length !== 2) err('expected <package.json> and <out-dir>');
   return { help: false, outArg: argv[1], pkgArg: argv[0] };
-};
-const readPkg = (pkgFile: string): Pkg => {
-  const raw = JSON.parse(readFileSync(pkgFile, 'utf8')) as RawPkg;
-  if (!raw.name) err(`missing name in ${pkgFile}`);
-  const name = raw.name as string;
-  let exports = raw.exports as Record<string, unknown> | undefined;
-  let self = true;
-  if (!exports || typeof exports !== 'object') {
-    // Older packages publish a single ESM/CJS entry without an exports map; treat that as one root module.
-    const entry = raw.module || raw.main;
-    if (!entry) err(`missing exports or main/module entry in ${pkgFile}`);
-    exports = { '.': entry };
-    self = false;
-  }
-  return { exports, name, self };
 };
 const resolveCtx = (args: Args, cwd: string = process.cwd()): Ctx => {
   const base = resolve(cwd);
@@ -243,28 +161,14 @@ const esbuildPkg = (pkgFile: string): string => {
 };
 const loadDeps = (pkgFile: string): Deps => {
   // `esbuild` usually lives under `test/build`; TypeScript lives at the repo root.
-  const esReq = createRequire(esbuildPkg(pkgFile));
-  const tsReq = createRequire(pkgFile);
-  const esbuild = (() => {
-    try {
-      return esReq('esbuild') as { build?: BuildLike };
-    } catch {
-      return err(`missing esbuild near ${pkgFile}; run npm install in the target repo first`);
-    }
-  })();
-  const rawTs = (() => {
-    try {
-      return tsReq('typescript') as TsLike | { default?: TsLike };
-    } catch {
-      return err(`missing typescript near ${pkgFile}; run npm install in the target repo first`);
-    }
-  })();
-  const ts = ('default' in rawTs && rawTs.default ? rawTs.default : rawTs) as TsLike;
-  const build = esbuild.build;
-  if (typeof build !== 'function') err(`expected esbuild.build near ${pkgFile}`);
-  if (typeof ts.createProgram !== 'function')
-    err(`expected TypeScript compiler API near ${pkgFile}`);
-  return { build: build as BuildLike, ts };
+  const esbuild = loadModuleApi<{ build?: BuildLike }>(
+    esbuildPkg(pkgFile),
+    'esbuild',
+    'esbuild.build',
+    ['build']
+  );
+  const ts = loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
+  return { build: esbuild.build as BuildLike, ts };
 };
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
 const itemId = (pkg: Pkg, item: Pick<Item, 'dir' | 'export' | 'module' | 'out'>): string =>
@@ -276,59 +180,47 @@ const outPath = (pkg: Pkg, item: Pick<Item, 'dir' | 'out'>, ext: string): string
 const relSpec = (file: string) => (file.startsWith('.') ? file : `./${file}`);
 const exportSpec = (pkg: Pkg, key: string, file: string) =>
   !pkg.self ? relSpec(file) : key === '.' ? pkg.name : `${pkg.name}/${key.slice(2)}`;
-const dirOf = (key: string, file: string) => {
+const bundleDir = (key: string, file: string) => {
   if (key === '.') return 'index';
   const base = basename(key, extname(key));
   return base === 'index' ? basename(dirname(file)) : base;
 };
-const labelOf = (key: string, file: string) => {
+const bundleLabel = (key: string, file: string) => {
   if (key === '.') return 'index';
   const src = key === '.' ? file : key;
   const base = basename(src, extname(src));
   return base === 'index' ? basename(dirname(src)) : base;
 };
-const exportPath = (value: unknown): string => {
-  if (typeof value === 'string') return value.endsWith('.js') ? value : '';
-  if (!value || typeof value !== 'object') return '';
-  for (const key of ['default', 'import', 'node']) {
-    const path = exportPath((value as Record<string, unknown>)[key]);
-    if (path) return path;
-  }
-  for (const path of Object.values(value)) {
-    const res = exportPath(path);
-    if (res) return res;
-  }
-  return '';
-};
-const textOf = (node: any): string => (typeof node?.text === 'string' ? node.text : '');
+const jsExportPath = (value: unknown): string =>
+  exportPath(value, (path) => (path.endsWith('.js') ? path : ''));
 const exported = (ts: TsLike, node: any): boolean =>
   !!node.modifiers?.some((mod: any) => mod.kind === ts.SyntaxKind.ExportKeyword);
-const localSpec = (from: string, spec: string): string | undefined => {
-  if (!spec.startsWith('.')) return;
-  const base = resolve(dirname(from), spec);
-  if (existsSync(base)) return base;
-  for (const ext of ['.js', '.mjs', '.cjs']) if (existsSync(base + ext)) return base + ext;
-  return;
-};
+const localSpec = (from: string, spec: string): string | undefined =>
+  resolveLocalImport(from, spec, {
+    accept: existsSync,
+    exts: ['.js', '.mjs', '.cjs'],
+    indexExts: [],
+    jsToTs: false,
+  });
 const runtimeExports = (ts: TsLike, file: string, seen = new Set<string>()): string[] => {
   if (seen.has(file)) return [];
   seen.add(file);
-  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true);
+  const { source: sf } = readSource(ts, file);
   const out = new Set<string>();
   const add = (name: string): void => {
     if (name && name !== 'default' && name !== '__esModule') out.add(name);
   };
   for (const stmt of sf.statements || []) {
     if ((ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) && exported(ts, stmt))
-      add(textOf(stmt.name));
+      add(nodeText(stmt.name));
     else if (ts.isVariableStatement(stmt) && exported(ts, stmt)) {
       for (const decl of stmt.declarationList?.declarations || [])
-        if (ts.isIdentifier(decl.name)) add(textOf(decl.name));
+        if (ts.isIdentifier(decl.name)) add(nodeText(decl.name));
     } else if (ts.isExportDeclaration(stmt)) {
       const clause = stmt.exportClause;
       if (clause && ts.isNamedExports(clause)) {
-        for (const el of clause.elements || []) if (!el.isTypeOnly) add(textOf(el.name));
-      } else if (clause && ts.isNamespaceExport?.(clause)) add(textOf(clause.name));
+        for (const el of clause.elements || []) if (!el.isTypeOnly) add(nodeText(el.name));
+      } else if (clause && ts.isNamespaceExport?.(clause)) add(nodeText(clause.name));
       else if (
         !stmt.isTypeOnly &&
         stmt.moduleSpecifier &&
@@ -344,16 +236,16 @@ const runtimeExports = (ts: TsLike, file: string, seen = new Set<string>()): str
 const readModules = (ctx: Ctx, ts: TsLike): Mod[] => {
   const res: Mod[] = [];
   for (const [key, value] of Object.entries(ctx.pkg.exports)) {
-    const file = exportPath(value);
+    const file = jsExportPath(value);
     if (!file) continue;
     const abs = resolve(ctx.pkgDir, file);
-    readFileSync(abs, 'utf8');
+    readText(abs);
     res.push({
-      dir: dirOf(key, file),
+      dir: bundleDir(key, file),
       exports: [],
       file: abs,
       key,
-      module: labelOf(key, file),
+      module: bundleLabel(key, file),
       spec: exportSpec(ctx.pkg, key, file),
     });
   }
@@ -472,12 +364,26 @@ const row = (ctx: Ctx, item: Item, out: Pick<Built, 'min' | 'minFile' | 'plain'>
     item.module,
     item.export,
     relative(ctx.outDir, out.minFile) || basename(out.minFile),
-    _paint(String(decoder.decode(out.plain).split('\n').length)),
-    _paint(kb(out.min.length)),
+    paint(String(decoder.decode(out.plain).split('\n').length), color.green),
+    paint(kb(out.min.length), color.green),
     size(gz.length, out.min.length),
     size(zstd.length, out.min.length),
   ];
 };
+const treeIssue = (pkg: Pkg, item: Built, entry: AuditItem): TreeIssue => ({
+  file: item.file,
+  id: itemId(pkg, item),
+  line: entry.line,
+  text: entry.text,
+});
+export const treeIssueLog = (cwd: string | undefined, item: TreeIssue): LogIssue =>
+  makeIssue(
+    'error',
+    relFile(cwd, item.file),
+    `${item.line}/${item.text}`,
+    `unused (${item.id})`,
+    'treeshake'
+  );
 
 export const runCli = async (
   argv: string[],
@@ -495,7 +401,7 @@ export const runCli = async (
   }
   const ctx = resolveCtx(args, opts.cwd);
   npmInstall(dirname(esbuildPkg(ctx.pkgFile)));
-  sweep(ctx.outDir);
+  sweepTemps(ctx.outDir);
   sweepTemps(dirname(ctx.outDir));
   const { build, ts } = (opts.load || loadDeps)(ctx.pkgFile);
   const mods = readModules(ctx, ts);
@@ -519,11 +425,12 @@ export const runCli = async (
     built.push(out);
     if (!opts.quiet) prev = print.printRow(row(ctx, item, out), prev, sizes, headers.slice(0, 2));
   }
-  if (!opts.quiet)
+  if (!opts.quiet) {
     print.drawSeparator(
       sizes,
       sizes.map(() => true)
     );
+  }
   const issues = audit(
     ts,
     built.map((item) => item.file)
@@ -533,22 +440,11 @@ export const runCli = async (
   for (const item of built) {
     const list = issues.get(item.file);
     if (!list?.length) continue;
-    for (const entry of list)
-      opts.onIssue?.({
-        file: item.file,
-        id: itemId(ctx.pkg, item),
-        line: entry.line,
-        text: entry.text,
-      });
-    for (const entry of list)
-      logs.push({
-        level: 'ERROR',
-        ref: {
-          file: relative(ctx.cwd, item.file) || item.file,
-          issue: issueKind(`unused (${itemId(ctx.pkg, item)})`, 'treeshake'),
-          sym: `${entry.line}/${entry.text}`,
-        },
-      });
+    for (const entry of list) {
+      const issue = treeIssue(ctx.pkg, item, entry);
+      opts.onIssue?.(issue);
+      logs.push(treeIssueLog(ctx.cwd, issue));
+    }
   }
   if (!opts.quiet)
     for (const line of groupIssues('treeshake', logs, wantColor())) console.error(line);
@@ -567,15 +463,4 @@ export const __TEST: TestApi = {
   sweepTemps: sweepTemps,
 };
 
-const main = async () => {
-  try {
-    await runCli(process.argv.slice(2));
-  } catch (erro) {
-    console.error((erro as Error).message);
-    process.exitCode = 1;
-  }
-};
-
-const entry: string | undefined = process.argv[1];
-const self: string = fileURLToPath(import.meta.url);
-if (!bundled() && entry && realpathSync(resolve(entry)) === realpathSync(self)) void main();
+runSelf(import.meta.url, runCli);

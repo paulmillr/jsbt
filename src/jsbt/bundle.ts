@@ -2,24 +2,22 @@
 // Destructive ops and `npm install` SHOULD use only `fs-modify.ts`; do not call `rmSync`, `rmdirSync`,
 // `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
 /**
- * `jsbt esbuild` helps produce single-file package output for JS projects.
+ * `jsbt bundle` helps produce single-file package output for JS projects.
  *
  * Usage:
- *   `npx --no @paulmillr/jsbt esbuild test/build`
+ *   `npx --no @paulmillr/jsbt bundle test/build`
  *
- * The command runs `npm install` and esbuild in the target build directory,
+ * The command runs `npm install` and bundle in the target build directory,
  * then prints bundle checksums and compressed sizes.
  * @module
  */
 import { exec } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join as pjoin, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
 import { npmInstall } from '../fs-modify.ts';
-
-declare const __JSBT_BUNDLE__: boolean | undefined;
+import { camelParts, kb, readJson, runSelf } from './utils.ts';
 
 type Args = { cwd: string; directory: string; help: boolean; isAuto: boolean; noPrefix: boolean };
 
@@ -30,32 +28,25 @@ const ex = (cmd: string) => {
 };
 
 const usage = `usage:
-  jsbt esbuild <build-dir> [--auto] [--no-prefix]
-  jsbt build <build-dir> [--auto] [--no-prefix]
+  jsbt bundle <build-dir> [--auto] [--no-prefix]
 
 examples:
-  jsbt esbuild test/build
-  npx --no @paulmillr/jsbt esbuild test/build`;
-
-const bundled = (): boolean => typeof __JSBT_BUNDLE__ !== 'undefined' && __JSBT_BUNDLE__;
+  jsbt bundle test/build
+  npx --no @paulmillr/jsbt bundle test/build`;
 
 const sha256 = async (buf: Uint8Array<ArrayBuffer>) => {
   const resb = await crypto.subtle.digest('SHA-256', buf.buffer);
   return Buffer.from(resb).toString('hex');
 };
 
-const snakeToCamel = (snakeCased: string) =>
-  snakeCased
-    .split('-')
-    .map((words, index) => (index === 0 ? words : words[0].toUpperCase() + words.slice(1)))
-    .join('');
+const snakeToCamel = (snakeCased: string) => camelParts(snakeCased.split('-'));
 
 // @namespace/ab-cd => namespace-ab-cd and namespaceAbCd
 const getNames = (cwd: string) => {
   const curr = pjoin(cwd, 'package.json');
   let packageJsonName;
   try {
-    packageJsonName = JSON.parse(readFileSync(curr, 'utf8')).name;
+    packageJsonName = readJson<{ name: string }>(curr).name;
   } catch (error) {
     throw new Error('package.json read error: ' + error);
   }
@@ -72,7 +63,6 @@ const getNames = (cwd: string) => {
 
 const _c = String.fromCharCode(27);
 const c = { green: _c + '[32m', reset: _c + '[0m' };
-const kb = (bytes: number) => (bytes / 1024).toFixed(2);
 
 const runEsbuild = async (cwd: string, root: string, noPrefix: boolean, _isAuto: boolean) => {
   const names = getNames(cwd);
@@ -126,15 +116,4 @@ export const runCli = async (argv: string[]): Promise<void> => {
   await runEsbuild(args.cwd, args.directory, args.noPrefix, args.isAuto);
 };
 
-const main = async (): Promise<void> => {
-  try {
-    await runCli(process.argv.slice(2));
-  } catch (err) {
-    console.error((err as Error).message);
-    process.exitCode = 1;
-  }
-};
-
-const entry = process.argv[1];
-const self = fileURLToPath(import.meta.url);
-if (!bundled() && entry && entry === self) void main();
+runSelf(import.meta.url, runCli);

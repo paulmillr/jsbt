@@ -1,10 +1,11 @@
 #!/usr/bin/env -S node --experimental-strip-types
 /**
-Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
-do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
+Destructive ops and `npm install` SHOULD use only `fs-modify.ts`.
+Do not call raw fs delete/write helpers or raw `npm install` directly here.
 
-Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
-Like `jsbt esbuild`, it runs `npm install` in the selected run/build directory before checking.
+Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`,
+then run it after a fresh build.
+Like `jsbt bundle`, it runs `npm install` in the selected run/build directory before checking.
 File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
 
 It audits the built public `.d.ts` export surface, requires JSDoc on every public export,
@@ -19,47 +20,60 @@ Exported `type` / `interface` docs must explain the shape directly and must not 
 object members inside those types need their own JSDoc, typed members must not keep an old inline
 trailing comment next to new JSDoc, and callable members need `@param` / `@returns` docs too.
 
-Tagged JSDoc must use multiline blocks, and plain tagless JSDoc must use short one-line form instead of
-a multiline block. Runtime examples should show real public usage: reject placeholders like `void Symbol;`, `{} as any`, or alias-only `type Example = Foo;`.
+Tagged JSDoc must use multiline blocks, and plain tagless JSDoc must use short
+one-line form instead of a multiline block. Runtime examples should show real
+public usage: reject placeholders like `void Symbol;`, `{} as any`, or
+alias-only `type Example = Foo;`.
 
-All writes and any other modifications from this script MUST stay under the selected run/build directory.
+All writes and other modifications MUST stay under the selected run/build directory.
 This checker takes only a package.json path, uses `test/build` next to it as the run directory,
 and MUST fail if that fixture directory is missing or if `test/build/package.json`
 does not install the checked package name as `"file:../.."`.
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
-import { npmInstall, rm, sweep, write } from '../fs-modify.ts';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { npmInstall, sweepTemps } from '../fs-modify.ts';
+import { scanPatternText } from './patterns.ts';
 import {
-  dtsPathOf,
-  jsPathOf,
+  dtsPath,
+  jsPath,
   listModules as listPublicModules,
-  readPkg,
-  type Pkg,
+  publicCtx,
+  type PublicCtx,
   type PublicMod,
 } from './public.ts';
 import {
-  issueKind,
-  printIssues,
-  status,
-  summary,
-  type Issue as LogIssue,
-  type Result,
+  compact,
+  docCommentLines,
+  emptyResult,
+  err,
+  execText,
+  firstText,
+  loadTypeScriptApi,
+  makeTypeCheck,
+  nodeLine,
+  nodeStart,
+  pkgArgs,
+  readJson,
+  readSource,
+  recordIssue,
+  reportIssues,
+  runSelf,
+  runTempImport,
+  sorted,
+  usageText,
   wantColor,
+  withRunDir,
+  type ExecRes,
+  type Issue as LogIssue,
+  type PkgArgs,
+  type Result,
+  type TsCheck,
+  type TypeCheck,
 } from './utils.ts';
 
-declare const __JSBT_BUNDLE__: boolean | undefined;
-
-type Args = { help: boolean; pkgArg: string };
-type RawBuildPkg = {
-  dependencies?: Record<string, unknown>;
-  devDependencies?: Record<string, unknown>;
-  optionalDependencies?: Record<string, unknown>;
-};
-type Ctx = { cwd: string; pkg: Pkg; pkgFile: string; runDir: string };
+type Ctx = PublicCtx & { runDir: string };
 type Disp = { kind?: string; text: string };
 type Tag = { name: string; paramName?: string; prose?: string; text?: string };
 type Sym = {
@@ -80,59 +94,19 @@ type CheckerLike = {
   getTypeAtLocation?: (node: unknown) => unknown;
   typeToString: (type: unknown) => string;
 };
-type HostLike = {
-  fileExists?: (file: string) => boolean;
-  getCurrentDirectory?: () => string;
-  getDirectories?: (dir: string) => string[];
-  getSourceFile?: (file: string, target: unknown, onError?: (msg: string) => void) => unknown;
-  readFile?: (file: string) => string | undefined;
-  realpath?: (file: string) => string;
-  useCaseSensitiveFileNames?: () => boolean;
-  writeFile?: () => void;
-};
 type ProgLike = {
   getSourceFile: (file: string) => any;
   getTypeChecker: () => CheckerLike;
 };
 type SigLike = { getReturnType: () => unknown; parameters: Sym[] };
-type TsLike = {
-  ModuleKind: { ESNext?: unknown; NodeNext?: unknown };
-  ModuleResolutionKind?: { Bundler?: unknown; NodeNext?: unknown };
+type Programs = { dts: ProgLike; js: ProgLike };
+type SymDocs = { docs: string; tags: Tag[] };
+type TsLike = Omit<TsCheck, 'createProgram'> & {
   ScriptTarget: { ESNext: unknown };
   SignatureKind: { Call: unknown; Construct: unknown };
   SymbolFlags: { Alias: number };
-  createCompilerHost: (opts: Record<string, unknown>) => HostLike;
-  createProgram: (files: string[], opts: Record<string, unknown>, host?: HostLike) => ProgLike;
-  createSourceFile: (file: string, text: string, target: unknown, setParents?: boolean) => unknown;
+  createProgram: (files: string[], opts: Record<string, unknown>, host?: any) => ProgLike;
   displayPartsToString?: (parts: Disp[]) => string;
-  findConfigFile?: (
-    dir: string,
-    exists: (file: string) => boolean,
-    name?: string
-  ) => string | undefined;
-  flattenDiagnosticMessageText?: (msg: Msg, newLine: string) => string;
-  getPreEmitDiagnostics: (prog: unknown) => DiagnosticLike[];
-  parseJsonConfigFileContent?: (
-    config: unknown,
-    host: unknown,
-    base: string
-  ) => { options: Record<string, unknown> };
-  readConfigFile?: (
-    file: string,
-    read: (file: string) => string | undefined
-  ) => { config?: unknown; error?: DiagnosticLike };
-  sys: {
-    fileExists: (file: string) => boolean;
-    getDirectories: (dir: string) => string[];
-    readFile: (file: string) => string | undefined;
-    realpath?: (file: string) => string;
-    useCaseSensitiveFileNames: boolean;
-  };
-};
-type Msg = string | { messageText?: Msg; next?: Msg[] };
-type DiagnosticLike = {
-  file?: { fileName: string };
-  messageText: Msg;
 };
 type TSDocLike = {
   TSDocConfiguration: new () => {
@@ -152,15 +126,6 @@ type TSDocLike = {
   TSDocTagDefinition: new (opts: { syntaxKind: unknown; tagName: string }) => unknown;
   TSDocTagSyntaxKind: { ModifierTag: unknown };
 };
-type ExecRes = {
-  error?: Error;
-  ok: boolean;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
-type TypeCheck = (code: string) => string[];
-type Mod = PublicMod & { runtime: Set<string> };
 type Item = {
   bind: string;
   dtsFile: string;
@@ -171,21 +136,34 @@ type Item = {
   spec: string;
   sym: Sym;
 };
-type RefDoc = { docs: string; docProse: string; hasDocs: boolean; info: CallInfo; tags: Tag[] };
-type DocItem = {
+type ItemRef = Pick<Item, 'dtsFile' | 'line' | 'name'>;
+type FailFn = (at: ItemRef, text: string, kind: string) => void;
+type DocLike = Pick<
+  DeclMeta,
+  'docProse' | 'docs' | 'errors' | 'plainLongSingle' | 'single' | 'tags'
+>;
+type DocMessages = {
+  example?: string;
+  invalid: (err: string) => string;
+  link: (err: string) => string;
+  missing: string;
+  // Member-doc absence is grouped as "member", while top-level absence stays "docs".
+  missingKind?: string;
+  plain: string;
+  tagged: string;
+  throws: (err: string) => string;
+};
+type BagRefs = Map<string, string[]> | Record<string, string[]>;
+type RefDoc = Pick<DeclMeta, 'docs' | 'docProse' | 'hasDocs' | 'tags'> & { info: CallInfo };
+type TypeRefInfo = { base: Sym; decl?: any; sym: Sym };
+type DocItem = DeclMeta & {
   bagRefs: Map<string, string[]>;
-  docs: string;
-  docProse: string;
-  errors: string[];
   info: CallInfo;
   inline: string;
   name: string;
   owner: any;
   ownerName: string;
-  plainLongSingle: boolean;
   ref?: RefDoc;
-  single: boolean;
-  tags: Tag[];
 };
 type CallInfo = {
   bagRefs: Record<string, string[]>;
@@ -204,29 +182,36 @@ type DeclMeta = {
   hasDocs: boolean;
   plainLongSingle: boolean;
   single: boolean;
-  tagNames: string[];
   tags: Tag[];
+};
+type ExportInfo = {
+  decl: any;
+  own: SymDocs;
+  resolved: Sym;
+  resolvedDoc: SymDocs;
+  resolvedFile: string | undefined;
+  src: Sym;
+};
+type ExportRow = { ex: ExportInfo; exported: Sym; item: Item; jsSym?: Sym; mod: PublicMod };
+type Analysis = {
+  dtsChecker: CheckerLike;
+  jsChecker: CheckerLike;
+  rows: ExportRow[];
 };
 type SrcIndex = Map<string, Map<string, Map<string, string>>>;
 type DocShape = { plainLongSingle: boolean; taggedSingle: boolean };
 type Example = { code: string; errors: string[]; prose: string[] };
-type ParsedDoc = {
-  docProse: string;
-  docs: string;
-  errors: string[];
-  examples: Example[];
-  hasDocs: boolean;
-  tags: Tag[];
-};
+type ParsedDoc = Omit<DeclMeta, 'single'> & { taggedSingle: boolean };
 type TestApi = {
-  bindOf: typeof bindOf;
-  dtsPathOf: typeof dtsPathOf;
+  bindName: typeof bindName;
+  dtsPath: typeof dtsPath;
   docShape: typeof docShape;
+  examplePatternErrors: typeof examplePatternErrors;
   exampleDoc: typeof exampleDoc;
   inject: typeof inject;
   isIgnored: typeof isIgnored;
   isTrivial: typeof isTrivial;
-  jsPathOf: typeof jsPathOf;
+  jsPath: typeof jsPath;
   normalizeDoc: typeof normalizeDoc;
   parseParam: typeof parseParam;
   parseReturn: typeof parseReturn;
@@ -265,82 +250,20 @@ type EnvEntry = { bool?: AbsBool; value?: AbsVal };
 type Env = Map<string, EnvEntry>;
 type Facts = Map<string, boolean>;
 type Flow = { env: Env; facts: Facts };
+type Walk = { flows: Flow[]; info: ThrowInfo };
 
-const usage = `usage:
-  jsbt tsdoc <package.json>
+const usage = usageText('tsdoc', 'check-jsdoc.ts');
 
-examples:
-  jsbt tsdoc package.json
-  node /path/to/check-jsdoc.ts package.json`;
-
-const bundled = (): boolean => typeof __JSBT_BUNDLE__ !== 'undefined' && __JSBT_BUNDLE__;
-
-const err = (msg: string): never => {
-  throw new Error(msg);
-};
-const flatten = (msg: Msg): string => {
-  if (typeof msg === 'string') return msg;
-  const head = msg.messageText ? flatten(msg.messageText) : '';
-  const tail = (msg.next || []).map(flatten).filter(Boolean).join(' ');
-  return [head, tail].filter(Boolean).join(' ');
-};
 const partsText = (parts?: Disp[]) => parts?.map((part) => part.text).join('') || '';
 const tagText = (value: unknown): string => {
   if (typeof value === 'string') return value;
   return Array.isArray(value) ? partsText(value as Disp[]) : '';
 };
-const guardChild = (cwd: string, file: string, label: string) => {
-  const rel = relative(cwd, file);
-  if (!rel || rel === '.' || rel.startsWith('..') || isAbsolute(rel))
-    err(`refusing unsafe ${label} path ${file}; expected a child path of ${cwd}`);
+const resolveCtx = (args: PkgArgs, cwd = process.cwd()): Ctx => {
+  return withRunDir(publicCtx(args.pkgArg, cwd));
 };
-const parseArgs = (argv: string[]): Args => {
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true, pkgArg: '' };
-  if (argv.length !== 1) err('expected <package.json>');
-  return { help: false, pkgArg: argv[0] };
-};
-const pickRunDir = (cwd: string, pkg: Pkg): string => {
-  const dir = join(cwd, 'test', 'build');
-  const buildPkgFile = join(dir, 'package.json');
-  if (!existsSync(buildPkgFile))
-    err(`expected test/build/package.json next to ${pkg.name || 'package.json'}`);
-  const buildPkg = JSON.parse(readFileSync(buildPkgFile, 'utf8')) as RawBuildPkg;
-  const dep =
-    buildPkg.dependencies?.[pkg.name] ||
-    buildPkg.devDependencies?.[pkg.name] ||
-    buildPkg.optionalDependencies?.[pkg.name];
-  if (dep !== 'file:../..')
-    err(
-      `expected test/build/package.json to install ${pkg.name} as "file:../.."; got ${JSON.stringify(dep)}`
-    );
-  return dir;
-};
-const sweepTemps = (cwd: string): void => {
-  sweep(cwd);
-};
-const resolveCtx = (args: Args, cwd = process.cwd()): Ctx => {
-  const base = resolve(cwd);
-  const pkgFile = resolve(base, args.pkgArg);
-  guardChild(base, pkgFile, 'package');
-  const root = dirname(pkgFile);
-  const pkg = readPkg(pkgFile);
-  return { cwd: root, pkg, pkgFile, runDir: pickRunDir(root, pkg) };
-};
-const listModules = (ctx: Ctx): Mod[] =>
-  listPublicModules(ctx).map((mod) => ({ ...mod, runtime: new Set() }));
 const loadTs = (pkgFile: string): TsLike => {
-  const req = createRequire(pkgFile);
-  const rawTs = (() => {
-    try {
-      return req('typescript') as TsLike | { default?: TsLike };
-    } catch {
-      return err(`missing typescript near ${pkgFile}; run npm install in the target repo first`);
-    }
-  })();
-  const ts = ('default' in rawTs && rawTs.default ? rawTs.default : rawTs) as TsLike;
-  if (typeof ts.createProgram !== 'function')
-    err(`expected TypeScript compiler API near ${pkgFile}`);
-  return ts;
+  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
 };
 const loadTSDoc = (pkgFile: string): TSDocLike => {
   const req = createRequire(pkgFile);
@@ -354,7 +277,10 @@ const loadTSDoc = (pkgFile: string): TSDocLike => {
       return jsbtReq('@microsoft/tsdoc') as TSDocLike | { default?: TSDocLike };
     } catch {
       return err(
-        `missing @microsoft/tsdoc near ${pkgFile}; reinstall @paulmillr/jsbt or run npm install in the target repo first`
+        [
+          `missing @microsoft/tsdoc near ${pkgFile};`,
+          'reinstall @paulmillr/jsbt or run npm install in the target repo first',
+        ].join(' ')
       );
     }
   })();
@@ -362,163 +288,13 @@ const loadTSDoc = (pkgFile: string): TSDocLike => {
   if (typeof tsdoc.TSDocParser !== 'function') err(`expected TSDoc parser API near ${pkgFile}`);
   return tsdoc;
 };
-const tsOpts = (ts: TsLike, cwd: string) => {
-  const file = ts.findConfigFile?.(cwd, ts.sys.fileExists, 'tsconfig.json');
-  const base = (() => {
-    if (!file || !ts.readConfigFile || !ts.parseJsonConfigFileContent) return {};
-    const res = ts.readConfigFile(file, ts.sys.readFile);
-    if (res.error) return {};
-    return ts.parseJsonConfigFileContent(res.config || {}, ts.sys, dirname(file)).options || {};
-  })();
-  return {
-    ...base,
-    allowImportingTsExtensions: true,
-    module: base.module || ts.ModuleKind.NodeNext || ts.ModuleKind.ESNext,
-    moduleResolution:
-      base.moduleResolution ||
-      ts.ModuleResolutionKind?.NodeNext ||
-      ts.ModuleResolutionKind?.Bundler,
-    noEmit: true,
-    noUnusedLocals: false,
-    noUnusedParameters: false,
-    rootDir: cwd,
-    skipLibCheck: true,
-    target: base.target || ts.ScriptTarget.ESNext,
-  };
-};
-const checkTypes = (ts: TsLike, cwd: string, code: string) => makeTypeCheck(ts, cwd)(code);
-const makeTypeCheck = (ts: TsLike, cwd: string): TypeCheck => {
-  const file = join(cwd, '.__jsdoc-check.ts');
-  const opts = tsOpts(ts, cwd);
-  const host = ts.createCompilerHost(opts);
-  const fileExists = host.fileExists?.bind(host) || ts.sys.fileExists;
-  const readFile = host.readFile?.bind(host) || ts.sys.readFile;
-  const getSourceFile = host.getSourceFile?.bind(host);
-  const sys = ts.sys;
-  const cache = new Map<string, any>();
-  let code = '';
-  host.fileExists = (name) => (resolve(name) === file ? true : fileExists(name));
-  host.readFile = (name) => (resolve(name) === file ? code : readFile(name));
-  host.getCurrentDirectory = () => cwd;
-  host.getDirectories = (dir) => sys.getDirectories(dir);
-  host.realpath = (name) => sys.realpath?.(name) || name;
-  host.useCaseSensitiveFileNames = () => sys.useCaseSensitiveFileNames;
-  host.writeFile = () => {};
-  host.getSourceFile = (name, target, onError) => {
-    if (resolve(name) === file) return ts.createSourceFile(name, code, target, true);
-    const key = `${resolve(name)}:${String(target)}`;
-    if (cache.has(key)) return cache.get(key);
-    if (!getSourceFile) return undefined;
-    const sf = getSourceFile(name, target, onError);
-    if (sf) cache.set(key, sf);
-    return sf;
-  };
-  return (value) => {
-    code = value;
-    const prog = ts.createProgram([file], opts, host);
-    return ts
-      .getPreEmitDiagnostics(prog)
-      .filter((diag) => !diag.file || diag.file.fileName === file)
-      .map((diag) =>
-        ts.flattenDiagnosticMessageText
-          ? ts.flattenDiagnosticMessageText(diag.messageText, '\n')
-          : flatten(diag.messageText)
-      )
-      .filter(Boolean);
-  };
-};
-let nextId = 0;
-const workerCode = `
-import { parentPort, workerData } from 'node:worker_threads';
-try {
-  await import(workerData.file);
-  parentPort?.postMessage({ ok: true });
-} catch (err_) {
-  console.error(err_);
-  parentPort?.postMessage({ ok: false });
-}
-`;
 const runCode = async (code: string, cwd: string): Promise<ExecRes> => {
-  const file = join(cwd, `.__jsdoc-check-${process.pid}-${++nextId}.ts`);
-  write(file, code);
-  try {
-    return await new Promise<ExecRes>((resolveRes) => {
-      const prev = process.cwd();
-      process.chdir(cwd);
-      let done = false;
-      let result: { ok?: boolean } | undefined;
-      let stdout = '';
-      let stderr = '';
-      const finish = (res: ExecRes) => {
-        if (done) return;
-        done = true;
-        process.chdir(prev);
-        resolveRes({ ...res, stderr, stdout });
-      };
-      const stop = async (res: ExecRes) => {
-        try {
-          const code = await worker.terminate();
-          if (res.status === null) res.status = code;
-        } catch {}
-        finish(res);
-      };
-      let worker: Worker;
-      try {
-        worker = new Worker(workerCode, {
-          eval: true,
-          execArgv: ['--experimental-strip-types'],
-          stderr: true,
-          stdout: true,
-          type: 'module',
-          workerData: { file: pathToFileURL(file).href },
-        } as any);
-      } catch (error) {
-        finish({ error: error as Error, ok: false, status: null, stderr: '', stdout: '' });
-        return;
-      }
-      const out = worker.stdout as any;
-      const err2 = worker.stderr as any;
-      out?.setEncoding?.('utf8');
-      err2?.setEncoding?.('utf8');
-      out?.on?.('data', (chunk: string) => (stdout += chunk));
-      err2?.on?.('data', (chunk: string) => (stderr += chunk));
-      worker.once('message', (msg: { ok?: boolean }) => {
-        result = msg;
-        if (msg?.ok) return void stop({ ok: true, status: 0, stderr: '', stdout: '' });
-        return void stop({ ok: false, status: 1, stderr: '', stdout: '' });
-      });
-      worker.once(
-        'error',
-        (error) => void stop({ error, ok: false, status: null, stderr: '', stdout: '' })
-      );
-      worker.once('exit', (code) => {
-        if (done) return;
-        setImmediate(() => {
-          if (done || result) return;
-          finish({
-            error: code === 0 ? undefined : new Error(`exit ${code}`),
-            ok: code === 0,
-            status: code,
-            stderr: '',
-            stdout: '',
-          });
-        });
-      });
-    });
-  } finally {
-    rm(file);
-  }
-};
-const firstText = (text = '') =>
-  text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean) || '';
-const compact = (items: string[]) => {
-  const list = items.map((item) => item.trim()).filter(Boolean);
-  if (!list.length) return '';
-  if (list.length === 1) return list[0];
-  return `${list.slice(0, 3).join('; ')}${list.length > 3 ? `; +${list.length - 3} more` : ''}`;
+  return runTempImport(cwd, {
+    code,
+    execArgv: ['--experimental-strip-types'],
+    ext: 'ts',
+    prefix: '.__jsdoc-check-',
+  });
 };
 const loadProgram = (ts: TsLike, files: string[], allowJs = false) =>
   ts.createProgram(files, {
@@ -528,20 +304,37 @@ const loadProgram = (ts: TsLike, files: string[], allowJs = false) =>
     skipLibCheck: true,
     target: ts.ScriptTarget.ESNext,
   });
+const programs = (ts: TsLike, mods: PublicMod[]): Programs => ({
+  dts: loadProgram(
+    ts,
+    mods.map((mod) => mod.dtsFile)
+  ),
+  js: loadProgram(
+    ts,
+    mods.map((mod) => mod.jsFile),
+    true
+  ),
+});
 const moduleExports = (checker: CheckerLike, sf: any, file: string) => {
   const sym = sf?.symbol || checker.getSymbolAtLocation(sf);
   if (!sf || !sym) err(`cannot inspect exports of ${file}`);
   return checker.getExportsOfModule(sym);
 };
-const lineOf = (sym: Sym): number => {
-  const node = sym.valueDeclaration || sym.declarations?.[0];
+const progExports = (checker: CheckerLike, prog: ProgLike, file: string): Sym[] =>
+  moduleExports(checker, prog.getSourceFile(file), file);
+const sortedProgExports = (checker: CheckerLike, prog: ProgLike, file: string): Sym[] =>
+  progExports(checker, prog, file).sort((a, b) => a.getName().localeCompare(b.getName()));
+const isAlias = (ts: TsLike, sym: Sym): boolean => !!(sym.flags & ts.SymbolFlags.Alias);
+const resolveAlias = (ts: TsLike, checker: CheckerLike, sym: Sym): Sym =>
+  isAlias(ts, sym) ? checker.getAliasedSymbol(sym) : sym;
+const symLine = (sym: Sym): number => {
+  const node = symDecl(sym);
   return lineAt(node);
 };
 const lineAt = (node: any): number => {
   const sf = node?.getSourceFile?.();
   if (!node || !sf?.getLineAndCharacterOfPosition) return 0;
-  const pos = node.getStart ? node.getStart(sf) : node.pos || 0;
-  return sf.getLineAndCharacterOfPosition(pos).line + 1;
+  return nodeLine(sf, node);
 };
 const itemAt = (
   item: Pick<Item, 'dtsFile' | 'line' | 'name'>,
@@ -571,10 +364,34 @@ const parseParam = (tag: Tag): { desc: string; name: string } => ({
   desc: (tag.text || '').replace(/^\s*-\s*/, '').trim(),
   name: (tag.paramName || '').replace(/^\[|\]$/g, ''),
 });
+const tagsNamed = (tags: Tag[], name: string): Tag[] => tags.filter((tag) => tag.name === name);
+const hasTagName = (tags: Tag[], name: string): boolean => !!tagsNamed(tags, name).length;
+const paramTagRows = (tags: Tag[]): { desc: string; name: string }[] =>
+  tagsNamed(tags, 'param')
+    .map(parseParam)
+    .filter((tag) => tag.name);
+const tagDescMap = (tags: { desc: string; name: string }[]): Map<string, string> =>
+  new Map(tags.map((tag) => [tag.name, tag.desc]));
+const returnTag = (tags: Tag[], legacy = false): Tag | undefined =>
+  tags.find((tag) => tag.name === 'returns' || (legacy && tag.name === 'return'));
 const parseReturn = (tag: Tag): string => (tag.text || '').replace(/^\s*-\s*/, '').trim();
-const hasLink = (text: string): boolean => /\{@link\b/.test(text);
+const LINK_TAG = /\{@link\b/;
 const linkTargets = (text: string): string[] =>
   [...text.matchAll(/\{@link\s+([^\s}|]+)/g)].map((match) => match[1] || '').filter(Boolean);
+const linkTail = (target: string): string => {
+  const raw = target.trim();
+  return /([A-Z][A-Za-z0-9_]*)$/.exec(raw)?.[1] || raw.split(/[.#/]/).at(-1) || raw;
+};
+const linkTypeNames = (texts: Iterable<string>): Set<string> => {
+  const out = new Set<string>();
+  for (const text of texts) {
+    for (const target of linkTargets(text)) {
+      const tail = linkTail(target);
+      if (tail) out.add(tail);
+    }
+  }
+  return out;
+};
 const sameLinkTarget = (actual: string, expected: string): boolean => {
   const trim = (value: string) => value.replace(/^typeof\s+/, '').trim();
   return trim(actual) === trim(expected) || trim(actual).split(/[.#/]/).at(-1) === trim(expected);
@@ -589,7 +406,11 @@ const linkTargetMsg = (refs: string[]): string =>
     : `one of ${refs.map((ref) => `{@link ${ref}}`).join(', ')}`;
 const isTsLibDecl = (decl: any): boolean =>
   /(?:^|\/)lib\.[^/]+\.d\.ts$/.test(decl?.getSourceFile?.()?.fileName || '');
-const declOf = (sym: Sym) => sym.valueDeclaration || sym.declarations?.[0];
+const symDecls = (sym: Sym | undefined): any[] =>
+  sym?.declarations || (sym?.valueDeclaration ? [sym.valueDeclaration] : []);
+const symDecl = (sym: Sym | undefined) => sym?.valueDeclaration || sym?.declarations?.[0];
+const paramDecl = (sym: Sym, fallback?: any): any =>
+  sym.valueDeclaration || sym.declarations?.[0] || fallback;
 const docNode = (node: any): any => {
   let cur = node;
   while (cur) {
@@ -616,31 +437,21 @@ const linkIssues = (docs: string, tags: Tag[]): string[] => {
   }
   return issues;
 };
+const tagBody = (tag: Tag): string => [tag.text || '', tag.prose || ''].filter(Boolean).join('\n');
 const throwsIssues = (tags: Tag[]): string[] => {
   const issues: string[] = [];
-  for (const tag of tags) {
-    if (tag.name !== 'throws') continue;
-    const text = [tag.text || '', tag.prose || ''].filter(Boolean).join('\n');
-    const first = firstText(tag.text || tag.prose || '');
-    if (!hasLink(text)) issues.push('@throws should include a linked thrown type with {@link ...}');
+  for (const tag of tagsNamed(tags, 'throws')) {
+    const text = tagBody(tag);
+    const first = firstText(text);
+    if (!LINK_TAG.test(text))
+      issues.push('@throws should include a linked thrown type with {@link ...}');
     if (first.startsWith('{@link'))
       issues.push('@throws should explain the failure first and move {@link ...} after the prose');
   }
   return issues;
 };
-const throwTagTypes = (tags: Tag[]): Set<string> => {
-  const out = new Set<string>();
-  for (const tag of tags) {
-    if (tag.name !== 'throws') continue;
-    const text = [tag.text || '', tag.prose || ''].filter(Boolean).join('\n');
-    for (const match of text.matchAll(/\{@link\s+([^\s}|]+)/g)) {
-      const raw = (match[1] || '').trim();
-      const tail = /([A-Z][A-Za-z0-9_]*)$/.exec(raw)?.[1] || raw.split(/[.#/]/).at(-1) || raw;
-      if (tail) out.add(tail);
-    }
-  }
-  return out;
-};
+const throwTagTypes = (tags: Tag[]): Set<string> =>
+  linkTypeNames(tagsNamed(tags, 'throws').map(tagBody));
 const throwsExample = (name: string): string => {
   if (name === 'TypeError') return '@throws On wrong argument types. {@link TypeError}';
   if (name === 'RangeError')
@@ -649,53 +460,51 @@ const throwsExample = (name: string): string => {
     return '@throws If a documented runtime validation or state check fails. {@link Error}';
   return `@throws If a documented ${name} condition is hit. {@link ${name}}`;
 };
-const throwsCoverageIssues = (tags: Tag[], info: ThrowInfo): string[] => {
-  const throwTags = tags.filter((tag) => tag.name === 'throws');
+const missingThrowsMsg = (name: string): string =>
+  `missing @throws for ${name}; e.g. "${throwsExample(name)}"`;
+const throwDocIssues = (docs: Set<string>, info: ThrowInfo, hasThrowTags: boolean): string[] => {
   const issues: string[] = [];
-  const docs = throwTagTypes(tags);
   if (!info.thrown.size) {
-    if (throwTags.length && !info.unknown)
+    if (hasThrowTags && !info.unknown)
       return ['remove @throws; no thrown errors were inferred from the current implementation'];
     return [];
   }
   if (!info.unknown) {
-    for (const name of [...info.thrown].sort()) {
-      if (!docs.has(name))
-        issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
+    for (const name of sorted(info.thrown)) {
+      if (!docs.has(name)) issues.push(missingThrowsMsg(name));
     }
-    for (const name of [...docs].sort()) {
-      if (!info.thrown.has(name))
+    for (const name of sorted(docs)) {
+      if (!info.thrown.has(name)) {
         issues.push(
           `remove stale @throws for ${name}; it is not inferred from the current implementation`
         );
+      }
     }
     return issues;
   }
   if (info.direct.size) {
-    for (const name of [...info.direct].sort()) {
+    for (const name of sorted(info.direct)) {
       if (docs.has(name)) continue;
-      issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
+      issues.push(missingThrowsMsg(name));
     }
     return issues;
   }
-  if (throwTags.length) {
-    if (info.thrown.size === 1 && !info.unknown) {
-      const [name] = [...info.thrown];
-      if (!docs.has(name))
-        issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
-    }
-    return issues;
-  }
-  if (info.thrown.size === 1 && !info.unknown) {
-    const [name] = [...info.thrown];
-    issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
-    return issues;
-  }
+  if (hasThrowTags) return issues;
   issues.push(
-    'missing @throws; document the known thrown conditions with prose first and a linked error type'
+    [
+      'missing @throws; document the known thrown conditions with prose first',
+      'and a linked error type',
+    ].join(' ')
   );
   return issues;
 };
+const throwsCoverageIssues = (tags: Tag[], info: ThrowInfo): string[] =>
+  throwDocIssues(throwTagTypes(tags), info, hasTagName(tags, 'throws'));
+const throwInfo = (item: Pick<ThrowRawReport, 'direct' | 'thrown' | 'unknown'>): ThrowInfo => ({
+  direct: new Set(item.direct),
+  thrown: new Set(item.thrown),
+  unknown: item.unknown,
+});
 const emptyThrows = (): ThrowInfo => ({
   direct: new Set<string>(),
   thrown: new Set<string>(),
@@ -723,18 +532,18 @@ const isLocalDecl = (root: string, decl: any): boolean => {
   const rel = relative(root, file);
   return !!rel && rel !== '.' && !rel.startsWith('..') && !isAbsolute(rel);
 };
-const throwClassLike = (name: string): boolean => /^[A-Z][A-Za-z0-9_$.]*$/.test(name);
+const THROW_CLASS = /^[A-Z][A-Za-z0-9_$.]*$/;
 const throwName = (checker: CheckerLike, expr: any): string => {
   if (!expr) return '';
   const sym = checker.getSymbolAtLocation(expr.expression || expr);
   if (sym) {
     const name = sym.getName();
-    return throwClassLike(name) ? name : '';
+    return THROW_CLASS.test(name) ? name : '';
   }
   const type = checker.getTypeAtLocation?.(expr);
   const text = type ? checker.typeToString(type).trim() : '';
   if (!text || text === 'never' || text === 'unknown' || text === 'any') return '';
-  return throwClassLike(text) ? text : '';
+  return THROW_CLASS.test(text) ? text : '';
 };
 const bodyOfDecl = (ts: TsLike, decl: any): any => {
   const api = ts as any;
@@ -754,34 +563,22 @@ const boolNot = (item: AbsBool): AbsBool => {
   if (item.kind === 'not') return item.item;
   return { kind: 'not', item };
 };
-const boolAnd = (...raw: AbsBool[]): AbsBool => {
+const boolGroup = (kind: 'and' | 'or', stop: boolean, empty: boolean, raw: AbsBool[]): AbsBool => {
   const items: AbsBool[] = [];
   for (const cur of raw) {
     if (cur.kind === 'const') {
-      if (!cur.value) return cur;
+      if (cur.value === stop) return cur;
       continue;
     }
-    if (cur.kind === 'and') items.push(...cur.items);
+    if (cur.kind === kind) items.push(...cur.items);
     else items.push(cur);
   }
-  if (!items.length) return boolConst(true);
+  if (!items.length) return boolConst(empty);
   if (items.length === 1) return items[0];
-  return { kind: 'and', items };
+  return kind === 'and' ? { kind: 'and', items } : { kind: 'or', items };
 };
-const boolOr = (...raw: AbsBool[]): AbsBool => {
-  const items: AbsBool[] = [];
-  for (const cur of raw) {
-    if (cur.kind === 'const') {
-      if (cur.value) return cur;
-      continue;
-    }
-    if (cur.kind === 'or') items.push(...cur.items);
-    else items.push(cur);
-  }
-  if (!items.length) return boolConst(false);
-  if (items.length === 1) return items[0];
-  return { kind: 'or', items };
-};
+const boolAnd = (...raw: AbsBool[]): AbsBool => boolGroup('and', false, true, raw);
+const boolOr = (...raw: AbsBool[]): AbsBool => boolGroup('or', true, false, raw);
 const exprText = (node: any): string => {
   const sf = node?.getSourceFile?.();
   if (node?.getText) return node.getText(sf).trim();
@@ -793,6 +590,15 @@ const exprText = (node: any): string => {
     : '';
 };
 const boolValue = (expr: AbsBool, facts: Facts): boolean | undefined => {
+  const group = (items: AbsBool[], stop: boolean, full: boolean): boolean | undefined => {
+    let unknown = false;
+    for (const item of items) {
+      const value = boolValue(item, facts);
+      if (value === stop) return stop;
+      if (value === undefined) unknown = true;
+    }
+    return unknown ? undefined : full;
+  };
   switch (expr.kind) {
     case 'const':
       return expr.value;
@@ -802,25 +608,25 @@ const boolValue = (expr: AbsBool, facts: Facts): boolean | undefined => {
       const value = boolValue(expr.item, facts);
       return value === undefined ? undefined : !value;
     }
-    case 'and': {
-      let unknown = false;
-      for (const item of expr.items) {
-        const value = boolValue(item, facts);
-        if (value === false) return false;
-        if (value === undefined) unknown = true;
-      }
-      return unknown ? undefined : true;
-    }
-    case 'or': {
-      let unknown = false;
-      for (const item of expr.items) {
-        const value = boolValue(item, facts);
-        if (value === true) return true;
-        if (value === undefined) unknown = true;
-      }
-      return unknown ? undefined : false;
-    }
+    case 'and':
+      return group(expr.items, false, true);
+    case 'or':
+      return group(expr.items, true, false);
   }
+};
+const applyGroupFacts = (
+  facts: Facts,
+  items: AbsBool[],
+  stop: boolean,
+  value: boolean
+): Facts[] => {
+  if (value === stop) return items.flatMap((item) => applyFacts(new Map(facts), item, stop));
+  let states: Facts[] = [new Map(facts)];
+  for (const item of items) {
+    states = states.flatMap((state) => applyFacts(state, item, !stop));
+    if (!states.length) return [];
+  }
+  return states;
 };
 const applyFacts = (facts: Facts, expr: AbsBool, value: boolean): Facts[] => {
   const current = boolValue(expr, facts);
@@ -831,24 +637,8 @@ const applyFacts = (facts: Facts, expr: AbsBool, value: boolean): Facts[] => {
     return [next];
   }
   if (expr.kind === 'not') return applyFacts(facts, expr.item, !value);
-  if (expr.kind === 'and') {
-    if (!value) return expr.items.flatMap((item) => applyFacts(new Map(facts), item, false));
-    let states: Facts[] = [new Map(facts)];
-    for (const item of expr.items) {
-      states = states.flatMap((state) => applyFacts(state, item, true));
-      if (!states.length) return [];
-    }
-    return states;
-  }
-  if (expr.kind === 'or') {
-    if (value) return expr.items.flatMap((item) => applyFacts(new Map(facts), item, true));
-    let states: Facts[] = [new Map(facts)];
-    for (const item of expr.items) {
-      states = states.flatMap((state) => applyFacts(state, item, false));
-      if (!states.length) return [];
-    }
-    return states;
-  }
+  if (expr.kind === 'and') return applyGroupFacts(facts, expr.items, false, value);
+  if (expr.kind === 'or') return applyGroupFacts(facts, expr.items, true, value);
   return [];
 };
 const truthyVal = (value: AbsVal): boolean | undefined => {
@@ -1024,13 +814,15 @@ const inferThrows = (() => {
         if (
           op === api.SyntaxKind?.EqualsEqualsEqualsToken ||
           op === api.SyntaxKind?.EqualsEqualsToken
-        )
+        ) {
           return eq === undefined ? boolAtom(exprText(node)) : boolConst(eq);
+        }
         if (
           op === api.SyntaxKind?.ExclamationEqualsEqualsToken ||
           op === api.SyntaxKind?.ExclamationEqualsToken
-        )
+        ) {
           return eq === undefined ? boolAtom(exprText(node)) : boolConst(!eq);
+        }
         if (left.kind !== 'unknown' && right.kind !== 'unknown') {
           const a = (left as any).value;
           const b = (right as any).value;
@@ -1048,9 +840,9 @@ const inferThrows = (() => {
     const callThrows = (expr: any, env: Env, facts: Facts): ThrowInfo => {
       const sym0 = checker.getSymbolAtLocation(expr?.expression || expr);
       if (!sym0) return emptyThrows();
-      const sym = sym0.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym0) : sym0;
+      const sym = resolveAlias(ts, checker, sym0);
       const infos: ThrowInfo[] = [];
-      for (const next of sym.declarations || (sym.valueDeclaration ? [sym.valueDeclaration] : [])) {
+      for (const next of symDecls(sym)) {
         if (!isLocalDecl(root, next)) continue;
         const body = bodyOfDecl(ts, next);
         if (!body) continue;
@@ -1111,18 +903,23 @@ const inferThrows = (() => {
       });
       return out;
     };
+    const cloneEnv = (env: Env): Env => new Map(env);
+    const flow = (env: Env, facts: Facts): Flow => ({ env, facts });
+    const fork = (env: Env, facts: Facts): Flow => flow(cloneEnv(env), facts);
+    const walkOut = (flows: Flow[], info: ThrowInfo): Walk => ({ flows, info });
+    const walkKeep = (env: Env, facts: Facts, info: ThrowInfo = emptyThrows()): Walk =>
+      walkOut([flow(env, facts)], info);
+    const walkStop = (info: ThrowInfo): Walk => walkOut([], info);
     const walkStmt = (
       node: any,
       env: Env,
       facts: Facts,
       caught?: { name: string; info: ThrowInfo }
-    ): { flows: Flow[]; info: ThrowInfo } => {
-      if (!node || typeof node !== 'object')
-        return { flows: [{ env, facts }], info: emptyThrows() };
-      if (api.isBlock?.(node))
-        return walkList(node.statements || [], [{ env: new Map(env), facts }], caught);
+    ): Walk => {
+      if (!node || typeof node !== 'object') return walkKeep(env, facts);
+      if (api.isBlock?.(node)) return walkList(node.statements || [], [fork(env, facts)], caught);
       if (api.isVariableStatement?.(node)) {
-        const nextEnv = new Map(env);
+        const nextEnv = cloneEnv(env);
         let out = emptyThrows();
         for (const decl0 of node.declarationList?.declarations || []) {
           if (decl0.initializer)
@@ -1137,69 +934,67 @@ const inferThrows = (() => {
             );
           }
         }
-        return { flows: [{ env: nextEnv, facts }], info: out };
+        return walkKeep(nextEnv, facts, out);
       }
       if (api.isExpressionStatement?.(node))
-        return { flows: [{ env, facts }], info: walkExpr(node.expression, env, facts, caught) };
+        return walkKeep(env, facts, walkExpr(node.expression, env, facts, caught));
       if (api.isReturnStatement?.(node))
-        return { flows: [], info: walkExpr(node.expression, env, facts, caught) };
-      if (api.isThrowStatement?.(node))
-        return { flows: [], info: walkExpr(node, env, facts, caught) };
+        return walkStop(walkExpr(node.expression, env, facts, caught));
+      if (api.isThrowStatement?.(node)) return walkStop(walkExpr(node, env, facts, caught));
       if (api.isIfStatement?.(node)) {
         const condInfo = walkExpr(node.expression, env, facts, caught);
         const cond = evalBool(node.expression, env, facts);
         const thenFacts = applyFacts(facts, cond, true);
         const elseFacts = applyFacts(facts, cond, false);
-        const walkStates = (stmt: any, states: Facts[]): { flows: Flow[]; info: ThrowInfo } => {
+        const walkStates = (stmt: any, states: Facts[]): Walk => {
           const flows: Flow[] = [];
           let info = emptyThrows();
           for (const state of states) {
-            const cur = walkStmt(stmt, new Map(env), state, caught);
+            const cur = walkStmt(stmt, cloneEnv(env), state, caught);
             info = mergeThrows(info, cur.info);
             flows.push(...cur.flows);
           }
-          return { flows, info };
+          return walkOut(flows, info);
         };
         const thenRes = thenFacts.length
           ? walkStates(node.thenStatement, thenFacts)
-          : { flows: [], info: emptyThrows() };
+          : walkStop(emptyThrows());
         const elseRes = node.elseStatement
           ? elseFacts.length
             ? walkStates(node.elseStatement, elseFacts)
-            : { flows: [], info: emptyThrows() }
-          : {
-              flows: elseFacts.map((state) => ({ env: new Map(env), facts: state })),
-              info: emptyThrows(),
-            };
-        return {
-          flows: [...thenRes.flows, ...elseRes.flows],
-          info: mergeThrows(condInfo, thenRes.info, elseRes.info),
-        };
+            : walkStop(emptyThrows())
+          : walkOut(
+              elseFacts.map((state) => fork(env, state)),
+              emptyThrows()
+            );
+        return walkOut(
+          [...thenRes.flows, ...elseRes.flows],
+          mergeThrows(condInfo, thenRes.info, elseRes.info)
+        );
       }
       if (api.isTryStatement?.(node)) {
-        const inside = walkStmt(node.tryBlock, new Map(env), facts, caught).info;
+        const inside = walkStmt(node.tryBlock, cloneEnv(env), facts, caught).info;
         const finalInfo = node.finallyBlock
-          ? walkStmt(node.finallyBlock, new Map(env), facts, caught).info
+          ? walkStmt(node.finallyBlock, cloneEnv(env), facts, caught).info
           : emptyThrows();
-        if (!node.catchClause)
-          return { flows: [{ env, facts }], info: mergeThrows(inside, finalInfo) };
+        if (!node.catchClause) return walkKeep(env, facts, mergeThrows(inside, finalInfo));
         const catchName = node.catchClause.variableDeclaration?.name;
         const name = catchName && api.isIdentifier?.(catchName) ? catchName.text : '';
         const handled = walkStmt(
           node.catchClause.block,
-          new Map(env),
+          cloneEnv(env),
           facts,
           name ? { name, info: inside } : undefined
         ).info;
-        return { flows: [{ env, facts }], info: mergeThrows(handled, finalInfo) };
+        return walkKeep(env, facts, mergeThrows(handled, finalInfo));
       }
-      return { flows: [{ env, facts }], info: walkExpr(node, env, facts, caught) };
+      return walkKeep(env, facts, walkExpr(node, env, facts, caught));
     };
     const walkList = (
       list: any[],
       flows: Flow[],
       caught?: { name: string; info: ThrowInfo }
-    ): { flows: Flow[]; info: ThrowInfo } => {
+    ): Walk => {
       let nextFlows = flows;
       let out = emptyThrows();
       for (const node of list) {
@@ -1212,12 +1007,12 @@ const inferThrows = (() => {
         nextFlows = curFlows;
         if (!nextFlows.length) break;
       }
-      return { flows: nextFlows, info: out };
+      return walkOut(nextFlows, out);
     };
     const body = bodyOfDecl(ts, decl);
     const out = body
       ? api.isBlock?.(body)
-        ? walkList(body.statements || [], [{ env: new Map(seedEnv || []), facts: new Map() }]).info
+        ? walkList(body.statements || [], [flow(new Map(seedEnv || []), new Map())]).info
         : walkExpr(body, new Map(seedEnv || []), new Map())
       : emptyThrows();
     if (!seedEnv) cache.set(decl, out);
@@ -1229,21 +1024,12 @@ const docRaw = (doc: any): string => {
   const sf = doc?.getSourceFile?.();
   const text = sf?.text;
   if (typeof text !== 'string') return '';
-  const start = doc.getStart ? doc.getStart(sf) : doc.pos || 0;
+  const start = nodeStart(sf, doc);
   const end = doc.end || start;
   return text.slice(start, end);
 };
 const docLines = (doc: any) => {
-  return docRaw(doc)
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .replace(/^\s*\/\*\*?\s?/, '')
-        .replace(/\s*\*\/\s*$/, '')
-        .replace(/^\s*\*\s?/, '')
-        .trim()
-    )
-    .filter(Boolean);
+  return docCommentLines(docRaw(doc)).filter(Boolean);
 };
 const nodeKids = (node: any): any[] => {
   if (Array.isArray(node?.nodes)) return node.nodes;
@@ -1263,36 +1049,26 @@ const linkDest = (node: any): string => {
     .filter(Boolean)
     .join('.');
 };
-const nodeText = (node: any): string => {
+const docNodeText = (node: any, prose = false): string => {
   if (!node) return '';
   if (node.kind === 'SoftBreak') return '\n';
+  if (prose && (node.kind === 'CodeSpan' || node.kind === 'FencedCode' || node.kind === 'LinkTag'))
+    return '';
   if (typeof node.text === 'string') return node.text;
-  if (typeof node.code === 'string') return node.code;
-  if (node.kind === 'LinkTag') {
+  if (!prose && typeof node.code === 'string') return node.code;
+  if (!prose && node.kind === 'LinkTag') {
     const dest = linkDest(node);
     return dest ? `{@link ${dest}}` : '{@link}';
   }
   const kids = nodeKids(node);
-  if (kids.length) return kids.map(nodeText).join('');
-  if (node.content) return nodeText(node.content);
+  if (kids.length) return kids.map((kid) => docNodeText(kid, prose)).join('');
+  if (node.content) return docNodeText(node.content, prose);
   return '';
 };
-const proseText = (node: any): string => {
-  if (!node) return '';
-  if (node.kind === 'SoftBreak') return '\n';
-  if (node.kind === 'CodeSpan' || node.kind === 'FencedCode' || node.kind === 'LinkTag') return '';
-  if (typeof node.text === 'string') return node.text;
-  const kids = nodeKids(node);
-  if (kids.length) return kids.map(proseText).join('');
-  if (node.content) return proseText(node.content);
-  return '';
-};
-const proseComment = (text: string): boolean => /(?:^|\n)\s*(?:\/\/|\/\*)/.test(text);
+const proseText = (node: any): string => docNodeText(node, true);
+const PROSE_COMMENT = /(?:^|\n)\s*(?:\/\/|\/\*)/;
 const codeTopComment = (code: string): boolean => {
-  const first = code
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
+  const first = firstText(code);
   return !!first && /^(?:\/\/|\/\*)/.test(first);
 };
 const exampleDoc = (block: any): Example => {
@@ -1304,19 +1080,21 @@ const exampleDoc = (block: any): Example => {
       if (typeof node.code === 'string') codes.push(node.code.trim());
       continue;
     }
-    const text = nodeText(node).trim();
+    const text = docNodeText(node).trim();
     if (!text) continue;
     prose.push(text);
   }
   if (!codes.length) errors.push('example must contain a fenced code block');
   for (const text of prose) {
-    if (proseComment(text))
+    if (PROSE_COMMENT.test(text)) {
       errors.push('example prose must not use code comments; move the explanation into prose text');
+    }
     errors.push(...proseLinkIssues(text));
   }
   const code = codes.filter(Boolean).join('\n\n').trim();
-  if (code && codeTopComment(code))
+  if (code && codeTopComment(code)) {
     errors.push('example code must not start with a comment; move the explanation into prose text');
+  }
   if (codes.length && !code) errors.push('example fenced code block is empty');
   return { code, errors, prose };
 };
@@ -1325,8 +1103,28 @@ const messageText = (msg: { messageId?: unknown; unformattedText?: string }): st
   const text = msg.unformattedText?.trim() || id;
   return id ? `${id}: ${text}` : text;
 };
+const docTag = (name: string, content: any, paramName?: string): Tag => ({
+  name,
+  ...(paramName === undefined ? {} : { paramName }),
+  prose: proseText(content).trim(),
+  text: docNodeText(content).trim(),
+});
 const docParseText = (raw: string): string =>
   raw.replace(/(^|\n)(\s*\*\s*)@__NO_SIDE_EFFECTS__(?=\s|$)/g, '$1$2@nosideeffects');
+const emptyDocShape = (): DocShape => ({ plainLongSingle: false, taggedSingle: false });
+const addDocShape = (shape: DocShape, doc: any): void => {
+  const sf = doc?.getSourceFile?.();
+  if (!sf?.getLineAndCharacterOfPosition) return;
+  const start = nodeStart(sf, doc);
+  const end = Math.max(start, (doc.end || start) - 1);
+  const single =
+    sf.getLineAndCharacterOfPosition(start).line === sf.getLineAndCharacterOfPosition(end).line;
+  if (doc?.tags?.length) {
+    if (single) shape.taggedSingle = true;
+    return;
+  }
+  if (!single && docLines(doc).length === 1) shape.plainLongSingle = true;
+};
 const docParser = (() => {
   const cache = new WeakMap<object, { parseString: (text: string) => any }>();
   return (tsdoc: TSDocLike) => {
@@ -1351,8 +1149,18 @@ const docParser = (() => {
 const docInfo = (() => {
   const cache = new WeakMap<object, ParsedDoc>();
   return (tsdoc: TSDocLike, decl: any): ParsedDoc => {
-    if (!decl || typeof decl !== 'object')
-      return { docProse: '', docs: '', errors: [], examples: [], hasDocs: false, tags: [] };
+    if (!decl || typeof decl !== 'object') {
+      return {
+        docProse: '',
+        docs: '',
+        errors: [],
+        examples: [],
+        hasDocs: false,
+        plainLongSingle: false,
+        taggedSingle: false,
+        tags: [],
+      };
+    }
     const hit = cache.get(decl);
     if (hit) return hit;
     const parser = docParser(tsdoc);
@@ -1360,30 +1168,28 @@ const docInfo = (() => {
     const proseDocs: string[] = [];
     const errors: string[] = [];
     const examples: Example[] = [];
+    const shape = emptyDocShape();
     const tags: Tag[] = [];
     for (const doc of decl?.jsDoc || []) {
+      addDocShape(shape, doc);
       const raw = normalizeDoc(docRaw(doc));
       if (!raw) continue;
       const res = parser.parseString(docParseText(raw));
       const parsed = res.docComment;
-      const summary = nodeText(parsed?.summarySection).trim();
+      const summary = docNodeText(parsed?.summarySection).trim();
       const summaryProse = proseText(parsed?.summarySection).trim();
       if (summary) docs.push(summary);
       if (summaryProse) proseDocs.push(summaryProse);
       for (const block of parsed?.params?.blocks || []) {
-        tags.push({
-          name: 'param',
-          paramName: typeof block?.parameterName === 'string' ? block.parameterName : '',
-          prose: proseText(block?.content).trim(),
-          text: nodeText(block?.content).trim(),
-        });
+        tags.push(
+          docTag(
+            'param',
+            block?.content,
+            typeof block?.parameterName === 'string' ? block.parameterName : ''
+          )
+        );
       }
-      if (parsed?.returnsBlock)
-        tags.push({
-          name: 'returns',
-          prose: proseText(parsed.returnsBlock.content).trim(),
-          text: nodeText(parsed.returnsBlock.content).trim(),
-        });
+      if (parsed?.returnsBlock) tags.push(docTag('returns', parsed.returnsBlock.content));
       for (const block of parsed?.customBlocks || []) {
         const name = String(block?.blockTag?.tagName || '').replace(/^@/, '');
         if (!name) continue;
@@ -1393,11 +1199,7 @@ const docInfo = (() => {
           tags.push({ name, text: example.prose.join('\n').trim() });
           continue;
         }
-        tags.push({
-          name,
-          prose: proseText(block?.content).trim(),
-          text: nodeText(block?.content).trim(),
-        });
+        tags.push(docTag(name, block?.content));
       }
       const hasTodo = todoTag.test(raw);
       for (const msg of res.log?.messages || []) {
@@ -1414,6 +1216,8 @@ const docInfo = (() => {
       errors,
       examples,
       hasDocs: !!docs.join('').trim() || !!tags.length,
+      plainLongSingle: shape.plainLongSingle,
+      taggedSingle: shape.taggedSingle,
       tags,
     };
     cache.set(decl, out);
@@ -1421,34 +1225,15 @@ const docInfo = (() => {
   };
 })();
 const docShape = (decl: any): DocShape => {
-  let plainLongSingle = false;
-  let taggedSingle = false;
-  for (const doc of decl?.jsDoc || []) {
-    const sf = doc.getSourceFile?.();
-    if (!sf?.getLineAndCharacterOfPosition) continue;
-    const start = doc.getStart ? doc.getStart(sf) : doc.pos || 0;
-    const end = Math.max(start, (doc.end || start) - 1);
-    const single =
-      sf.getLineAndCharacterOfPosition(start).line === sf.getLineAndCharacterOfPosition(end).line;
-    if (doc?.tags?.length) {
-      if (single) taggedSingle = true;
-    } else if (!single && docLines(doc).length === 1) plainLongSingle = true;
-  }
-  return { plainLongSingle, taggedSingle };
+  const shape = emptyDocShape();
+  for (const doc of decl?.jsDoc || []) addDocShape(shape, doc);
+  return shape;
 };
 const declMeta = (tsdoc: TSDocLike, decl: any): DeclMeta => {
-  const info = docInfo(tsdoc, decl);
-  const shape = docShape(decl);
+  const { taggedSingle, ...info } = docInfo(tsdoc, decl);
   return {
-    docs: info.docs,
-    docProse: info.docProse,
-    errors: info.errors,
-    examples: info.examples,
-    hasDocs: info.hasDocs,
-    plainLongSingle: shape.plainLongSingle,
-    single: shape.taggedSingle,
-    tags: info.tags,
-    tagNames: info.tags.map((tag) => tag.name),
+    ...info,
+    single: taggedSingle,
   };
 };
 const typedMeta = (tsdoc: TSDocLike, decls: TypedDecl[]): DeclMeta => {
@@ -1456,7 +1241,6 @@ const typedMeta = (tsdoc: TSDocLike, decls: TypedDecl[]): DeclMeta => {
   const docProse: string[] = [];
   const errors: string[] = [];
   const examples: Example[] = [];
-  const tagNames: string[] = [];
   const tags: Tag[] = [];
   let hasDocs = false;
   let plainLongSingle = false;
@@ -1470,7 +1254,6 @@ const typedMeta = (tsdoc: TSDocLike, decls: TypedDecl[]): DeclMeta => {
     if (meta.docProse) docProse.push(meta.docProse);
     errors.push(...meta.errors);
     examples.push(...meta.examples);
-    tagNames.push(...meta.tagNames);
     tags.push(...meta.tags);
   }
   return {
@@ -1481,7 +1264,6 @@ const typedMeta = (tsdoc: TSDocLike, decls: TypedDecl[]): DeclMeta => {
     hasDocs,
     plainLongSingle,
     single,
-    tagNames,
     tags,
   };
 };
@@ -1500,10 +1282,10 @@ const trailingInline = (node: any) => {
     .replace(/\s*\*\/$/, '')
     .trim();
 };
-const sourceFilesOf = (dtsFile: string) => {
+const sourceFiles = (dtsFile: string) => {
   const mapFile = `${dtsFile}.map`;
   if (!existsSync(mapFile)) return [] as string[];
-  const raw = JSON.parse(readFileSync(mapFile, 'utf8')) as { sources?: unknown };
+  const raw = readJson<{ sources?: unknown }>(mapFile);
   if (!Array.isArray(raw.sources)) return [] as string[];
   return raw.sources
     .filter((src): src is string => typeof src === 'string' && !!src)
@@ -1515,28 +1297,31 @@ const exportedDecl = (ts: TsLike, node: any) => {
   if (kind === undefined) return false;
   return (node?.modifiers || []).some((mod: any) => mod?.kind === kind);
 };
-const sourceIndex = (ts: TsLike, mods: Mod[]): SrcIndex => {
+const typedDecl = (ts: TsLike, decl: any): TypedDecl | undefined => {
+  const api = ts as any;
+  if (api.isInterfaceDeclaration?.(decl))
+    return { decl, kind: 'interface', members: [...decl.members] };
+  if (!api.isTypeAliasDeclaration?.(decl)) return;
+  return {
+    decl,
+    kind: 'type',
+    members: api.isTypeLiteralNode?.(decl.type) ? [...decl.type.members] : [],
+  };
+};
+const sourceIndex = (ts: TsLike, mods: PublicMod[]): SrcIndex => {
   const out: SrcIndex = new Map();
   for (const mod of mods) {
     const fileMap = new Map<string, Map<string, string>>();
-    for (const file of sourceFilesOf(mod.dtsFile)) {
-      const sf = ts.createSourceFile(
-        file,
-        readFileSync(file, 'utf8'),
-        ts.ScriptTarget.ESNext,
-        true
-      );
+    for (const file of sourceFiles(mod.dtsFile)) {
+      const { source: sf } = readSource(ts, file);
       for (const stmt of (sf as any).statements || []) {
         if (!exportedDecl(ts, stmt)) continue;
-        const isIface = (ts as any).isInterfaceDeclaration?.(stmt);
-        const isType =
-          (ts as any).isTypeAliasDeclaration?.(stmt) && (ts as any).isTypeLiteralNode?.(stmt.type);
-        if (!isIface && !isType) continue;
+        const typed = typedDecl(ts, stmt);
+        if (!typed) continue;
         const name = stmt.name?.text;
         if (!name) continue;
-        const members = isIface ? [...stmt.members] : [...stmt.type.members];
         const memberMap = fileMap.get(name) || new Map<string, string>();
-        for (const member of members) {
+        for (const member of typed.members) {
           const memberName = member.name?.getText?.();
           const inline = memberName ? trailingInline(member) : '';
           if (memberName && inline) memberMap.set(memberName, inline);
@@ -1575,16 +1360,26 @@ const shouldInject = (code: string, bind: string): boolean => {
   );
   return !pat.test(code);
 };
-const bagParam = (name: string) =>
-  /(?:^|.*(?:opts?|options?|params?|config|cfg|settings?))$/i.test(name);
+const BAG_PARAM = /(?:^|.*(?:opts?|options?|params?|config|cfg|settings?))$/i;
+const typeRefName = (node: any): string => node?.typeName?.getText?.() || '';
+const typeRefTail = (node: any): string => typeRefName(node).split('.').pop() || '';
+const wrappedRef = (node: any): boolean => {
+  const name = typeRefTail(node);
+  return name === 'TArg' || name === 'TRet';
+};
+const typeRefInfo = (ts: TsLike, checker: CheckerLike, node: any): TypeRefInfo | undefined => {
+  const base = checker.getSymbolAtLocation(node?.typeName);
+  if (!base) return;
+  const sym = resolveAlias(ts, checker, base);
+  return { base, decl: symDecl(sym) || symDecl(base), sym };
+};
 const wrapperInner = (ts: TsLike, node: any): any => {
   const api = ts as any;
   let cur = node;
   const seen = new Set<any>();
   while (api.isTypeReferenceNode?.(cur) && !seen.has(cur)) {
     seen.add(cur);
-    const name = cur.typeName?.getText?.().split('.').pop();
-    if (name !== 'TArg' && name !== 'TRet') break;
+    if (!wrappedRef(cur)) break;
     const next = cur.typeArguments?.[0];
     if (!next) break;
     cur = next;
@@ -1604,6 +1399,17 @@ const functionTypeNode = (ts: TsLike, node: any): any | undefined => {
   }
 };
 const uniq = <T>(items: T[]): T[] => [...new Set(items)];
+const bagRef = (refs: BagRefs, name: string): string[] | undefined =>
+  refs instanceof Map ? refs.get(name) : refs[name];
+const setBagRef = (refs: BagRefs, name: string, values: string[]): void => {
+  if (!values.length || bagRef(refs, name)) return;
+  if (refs instanceof Map) refs.set(name, values);
+  else refs[name] = values;
+};
+const addBagFields = (bags: Record<string, string[]>, name: string, fields: string[]): void => {
+  if (!fields.length) return;
+  bags[name] = uniq([...(bags[name] || []), ...fields]);
+};
 const namedBagRefs = (ts: TsLike, checker: CheckerLike, node: any): string[] => {
   const api = ts as any;
   const type = wrapperInner(ts, node);
@@ -1611,28 +1417,32 @@ const namedBagRefs = (ts: TsLike, checker: CheckerLike, node: any): string[] => 
   const childRefs = uniq<string>(
     (type.typeArguments || []).flatMap((arg: any): string[] => namedBagRefs(ts, checker, arg))
   );
-  const ref = type.typeName?.getText?.() || '';
+  const ref = typeRefName(type);
   if (!ref) return childRefs;
-  const sym = checker.getSymbolAtLocation(type.typeName);
-  const decls = sym?.declarations || [];
+  const decls = typeRefInfo(ts, checker, type)?.base.declarations || [];
   if (decls.length && decls.every((d: any) => api.isTypeParameterDeclaration?.(d)))
     return childRefs;
   if (decls.length && decls.every((d: any) => isTsLibDecl(d))) return childRefs;
   return childRefs.length ? uniq([...childRefs, ref]) : [ref];
 };
+const addParamBagRefs = (
+  refs: BagRefs,
+  ts: TsLike,
+  checker: CheckerLike,
+  params: Iterable<any>
+): void => {
+  for (const param of params) {
+    const name = param.name?.getText?.();
+    if (!name || !BAG_PARAM.test(name)) continue;
+    setBagRef(refs, name, namedBagRefs(ts, checker, param.type));
+  }
+};
 const bagTypeRefs = (ts: TsLike, checker: CheckerLike, decl: any): Record<string, string[]> => {
   const out: Record<string, string[]> = Object.create(null);
-  for (const param of decl?.parameters || []) {
-    const name = param.name?.getText?.();
-    if (!name || !bagParam(name)) continue;
-    const refs = namedBagRefs(ts, checker, param.type);
-    if (!refs.length) continue;
-    out[name] = refs;
-  }
+  addParamBagRefs(out, ts, checker, decl?.parameters || []);
   return out;
 };
-const paramTypeNode = (param: Sym): any =>
-  (param.valueDeclaration || param.declarations?.[0] || (param as any))?.type;
+const paramTypeNode = (param: Sym): any => paramDecl(param, param)?.type;
 const wrapperAnnotation = (ts: TsLike, decl: any): any | undefined => {
   const api = ts as any;
   // Re-export-only doc paths can probe wrapper helpers without a direct declaration node.
@@ -1646,8 +1456,7 @@ const wrapperAnnotation = (ts: TsLike, decl: any): any | undefined => {
   if (!ok) return;
   const type = decl?.type;
   if (!type || !api.isTypeReferenceNode?.(type)) return;
-  const name = type.typeName?.getText?.().split('.').pop();
-  if (name !== 'TArg' && name !== 'TRet') return;
+  if (!wrappedRef(type)) return;
   return type;
 };
 const unwrapDocType = (ts: TsLike, checker: CheckerLike, decl: any): unknown => {
@@ -1663,9 +1472,7 @@ const unwrapDocType = (ts: TsLike, checker: CheckerLike, decl: any): unknown => 
 const docCallScore = (ts: TsLike, checker: CheckerLike, type: unknown): number => {
   const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call) || [];
   if (!calls.length) return -1;
-  const params = [
-    ...new Set(calls.flatMap((sig) => sig.parameters.map((param) => param.getName()))),
-  ];
+  const params = sigParamNames(calls);
   return params.length === 1 && params[0] === 'args' ? 1 : 10 + params.length;
 };
 const betterDocType = (
@@ -1677,6 +1484,16 @@ const betterDocType = (
 ): { score: number; type?: unknown } => {
   const next = docCallableType(ts, checker, node, seen);
   return next.score > best.score ? next : best;
+};
+const betterDocTypes = (
+  ts: TsLike,
+  checker: CheckerLike,
+  best: { score: number; type?: unknown },
+  nodes: Iterable<any>,
+  seen: Set<any>
+): { score: number; type?: unknown } => {
+  for (const node of nodes) best = betterDocType(ts, checker, best, node, seen);
+  return best;
 };
 const docCallableType = (
   ts: TsLike,
@@ -1690,19 +1507,17 @@ const docCallableType = (
   const type = checker.getTypeAtLocation(node);
   let best: { score: number; type?: unknown } = { score: docCallScore(ts, checker, type), type };
   if (api.isTypeReferenceNode?.(node)) {
-    const name = node.typeName?.getText?.().split('.').pop();
-    if ((name === 'TArg' || name === 'TRet') && node.typeArguments?.length === 1)
+    if (wrappedRef(node) && node.typeArguments?.length === 1)
       best = betterDocType(ts, checker, best, node.typeArguments[0], seen);
     // Helpers such as Asyncify<F> commonly erase names into ...args; prefer F when it is callable.
-    for (const arg of node.typeArguments || []) best = betterDocType(ts, checker, best, arg, seen);
-    const base = checker.getSymbolAtLocation(node.typeName);
-    const sym = base && base.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(base) : base;
-    const decl = sym ? declOf(sym) : base ? declOf(base) : undefined;
+    best = betterDocTypes(ts, checker, best, node.typeArguments || [], seen);
+    // Keep the declaration local so TypeScript narrows alias-body access below.
+    const decl = typeRefInfo(ts, checker, node)?.decl;
     if (api.isTypeAliasDeclaration?.(decl) && decl.type)
       best = betterDocType(ts, checker, best, decl.type, seen);
   }
   if (api.isIntersectionTypeNode?.(node) || api.isUnionTypeNode?.(node))
-    for (const item of node.types || []) best = betterDocType(ts, checker, best, item, seen);
+    best = betterDocTypes(ts, checker, best, node.types || [], seen);
   return best;
 };
 const unwrapDocDecl = (ts: TsLike, checker: CheckerLike, decl: any): any | undefined => {
@@ -1711,108 +1526,85 @@ const unwrapDocDecl = (ts: TsLike, checker: CheckerLike, decl: any): any | undef
   if (!type) return;
   const inner = type.typeArguments?.[0];
   if (!api.isTypeReferenceNode?.(inner)) return;
-  const base = checker.getSymbolAtLocation(inner.typeName);
-  if (!base) return;
-  const sym = base.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(base) : base;
-  const doc = declOf(sym) || declOf(base);
-  return doc ? docNode(doc) : undefined;
+  const decl0 = typeRefInfo(ts, checker, inner)?.decl;
+  return decl0 ? docNode(decl0) : undefined;
+};
+const sigParamNames = (sigs: SigLike[]): string[] => [
+  ...new Set(sigs.flatMap((sig) => sig.parameters.map((param) => param.getName()))),
+];
+const hasValueReturn = (checker: CheckerLike, sig: SigLike): boolean => {
+  const out = checker.typeToString(sig.getReturnType()).replace(/\s+/g, '');
+  return (
+    out !== 'void' && out !== 'undefined' && out !== 'Promise<void>' && out !== 'Promise<undefined>'
+  );
+};
+const emptyCallInfo = (): CallInfo => ({
+  bagRefs: {},
+  bags: {},
+  fnParams: [],
+  kind: '',
+  params: [],
+  returns: false,
+});
+const signatureInfo = (
+  ts: TsLike,
+  checker: CheckerLike,
+  decl: any,
+  sigs: SigLike[],
+  bagRefs: Record<string, string[]>,
+  kind: string,
+  checkReturn: boolean
+): CallInfo => {
+  const params = sigParamNames(sigs);
+  const bags: Record<string, string[]> = Object.create(null);
+  const fnParams = new Set<string>();
+  for (const sig of sigs) {
+    for (const param of sig.parameters) {
+      const name = param.getName();
+      const at = paramDecl(param, decl);
+      const type = checker.getTypeOfSymbolAtLocation(param, at);
+      if (
+        checker.getSignaturesOfType(type, ts.SignatureKind.Call)?.length ||
+        checker.getSignaturesOfType(type, ts.SignatureKind.Construct)?.length
+      ) {
+        fnParams.add(name);
+      }
+      if (!BAG_PARAM.test(name)) continue;
+      setBagRef(bagRefs, name, namedBagRefs(ts, checker, paramTypeNode(param)));
+      const fields = checker.getPropertiesOfType?.(type) || [];
+      const names = fields.map((field) => field.getName()).filter((field) => !isIgnored(field));
+      addBagFields(bags, name, names);
+    }
+  }
+  return {
+    bagRefs,
+    bags,
+    fnParams: [...fnParams],
+    kind,
+    params,
+    returns: checkReturn && sigs.some((sig) => hasValueReturn(checker, sig)),
+  };
 };
 const callInfo = (ts: TsLike, checker: CheckerLike, type: unknown, decl: any): CallInfo => {
   const docType = unwrapDocType(ts, checker, decl) || type;
   const calls = checker.getSignaturesOfType(docType, ts.SignatureKind.Call) || [];
   const bagRefs = bagTypeRefs(ts, checker, decl);
-  if (calls.length) {
-    const params = [
-      ...new Set(calls.flatMap((sig) => sig.parameters.map((param) => param.getName()))),
-    ];
-    const bags: Record<string, string[]> = Object.create(null);
-    const fnParams = new Set<string>();
-    for (const sig of calls) {
-      for (const param of sig.parameters) {
-        const name = param.getName();
-        const at = param.valueDeclaration || param.declarations?.[0] || decl;
-        const type = checker.getTypeOfSymbolAtLocation(param, at);
-        if (
-          checker.getSignaturesOfType(type, ts.SignatureKind.Call)?.length ||
-          checker.getSignaturesOfType(type, ts.SignatureKind.Construct)?.length
-        )
-          fnParams.add(name);
-        if (!bagParam(name)) continue;
-        const refs = namedBagRefs(ts, checker, paramTypeNode(param));
-        if (refs.length && !bagRefs[name]) bagRefs[name] = refs;
-        const fields = checker.getPropertiesOfType?.(type) || [];
-        const names = fields.map((field) => field.getName()).filter((field) => !isIgnored(field));
-        if (!names.length) continue;
-        bags[name] = [...new Set([...(bags[name] || []), ...names])];
-      }
-    }
-    const returns = calls.some((sig) => {
-      const out = checker.typeToString(sig.getReturnType()).replace(/\s+/g, '');
-      return (
-        out !== 'void' &&
-        out !== 'undefined' &&
-        out !== 'Promise<void>' &&
-        out !== 'Promise<undefined>'
-      );
-    });
-    return { bagRefs, bags, fnParams: [...fnParams], kind: 'call', params, returns };
-  }
+  if (calls.length) return signatureInfo(ts, checker, decl, calls, bagRefs, 'call', true);
   const constructs = checker.getSignaturesOfType(type, ts.SignatureKind.Construct) || [];
-  if (constructs.length) {
-    const params = [
-      ...new Set(constructs.flatMap((sig) => sig.parameters.map((param) => param.getName()))),
-    ];
-    const bags: Record<string, string[]> = Object.create(null);
-    const fnParams = new Set<string>();
-    for (const sig of constructs) {
-      for (const param of sig.parameters) {
-        const name = param.getName();
-        const at = param.valueDeclaration || param.declarations?.[0] || decl;
-        const type = checker.getTypeOfSymbolAtLocation(param, at);
-        if (
-          checker.getSignaturesOfType(type, ts.SignatureKind.Call)?.length ||
-          checker.getSignaturesOfType(type, ts.SignatureKind.Construct)?.length
-        )
-          fnParams.add(name);
-        if (!bagParam(name)) continue;
-        const refs = namedBagRefs(ts, checker, paramTypeNode(param));
-        if (refs.length && !bagRefs[name]) bagRefs[name] = refs;
-        const fields = checker.getPropertiesOfType?.(type) || [];
-        const names = fields.map((field) => field.getName()).filter((field) => !isIgnored(field));
-        if (!names.length) continue;
-        bags[name] = [...new Set([...(bags[name] || []), ...names])];
-      }
-    }
-    return { bagRefs, bags, fnParams: [...fnParams], kind: 'construct', params, returns: false };
-  }
-  return { bagRefs: {}, bags: {}, fnParams: [], kind: '', params: [], returns: false };
+  if (constructs.length)
+    return signatureInfo(ts, checker, decl, constructs, bagRefs, 'construct', false);
+  return emptyCallInfo();
 };
 const typeOfExport = (ts: TsLike, checker: CheckerLike, sym: Sym) => {
-  const decl = sym.valueDeclaration || sym.declarations?.[0];
-  if (!decl)
-    return {
-      bagRefs: {},
-      bags: {},
-      fnParams: [],
-      kind: '',
-      params: [] as string[],
-      returns: false,
-    };
+  const decl = symDecl(sym);
+  if (!decl) return emptyCallInfo();
   return callInfo(ts, checker, checker.getTypeOfSymbolAtLocation(sym, decl), decl);
 };
 const typeDecls = (ts: TsLike, sym: Sym) => {
-  const api = ts as any;
-  const decls = sym.declarations || (sym.valueDeclaration ? [sym.valueDeclaration] : []);
   const out: TypedDecl[] = [];
-  for (const decl of decls) {
-    if (api.isInterfaceDeclaration?.(decl))
-      out.push({ decl, kind: 'interface', members: [...decl.members] });
-    else if (api.isTypeAliasDeclaration?.(decl))
-      out.push({
-        decl,
-        kind: 'type',
-        members: api.isTypeLiteralNode?.(decl.type) ? [...decl.type.members] : [],
-      });
+  for (const decl of symDecls(sym)) {
+    const typed = typedDecl(ts, decl);
+    if (typed) out.push(typed);
   }
   return out;
 };
@@ -1826,19 +1618,21 @@ const refDoc = (
   const type = wrapperInner(ts, member?.type);
   const refNode = api.isTypeReferenceNode?.(type) ? type.typeName : undefined;
   if (!refNode) return;
-  const base = checker.getSymbolAtLocation(refNode);
-  if (!base) return;
-  const sym = base.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(base) : base;
-  const decl = declOf(sym) || declOf(base);
-  if (!decl) return;
-  const infoDoc = docInfo(tsdoc, decl);
-  const info = callInfo(ts, checker, checker.getTypeOfSymbolAtLocation(sym, decl), decl);
+  const ref = typeRefInfo(ts, checker, type);
+  if (!ref?.decl) return;
+  const meta = declMeta(tsdoc, ref.decl);
+  const info = callInfo(
+    ts,
+    checker,
+    checker.getTypeOfSymbolAtLocation(ref.sym, ref.decl),
+    ref.decl
+  );
   return {
-    docs: infoDoc.docs,
-    docProse: infoDoc.docProse,
-    hasDocs: infoDoc.hasDocs,
+    docs: meta.docs,
+    docProse: meta.docProse,
+    hasDocs: meta.hasDocs,
     info,
-    tags: infoDoc.tags,
+    tags: meta.tags,
   };
 };
 const docItems = (ts: TsLike, tsdoc: TSDocLike, checker: CheckerLike, sym: Sym): DocItem[] => {
@@ -1854,7 +1648,7 @@ const docItems = (ts: TsLike, tsdoc: TSDocLike, checker: CheckerLike, sym: Sym):
       if (!name || seen.has(name)) continue;
       seen.add(name);
       const msym = (member as any).symbol || checker.getSymbolAtLocation(nameNode);
-      const meta = docInfo(tsdoc, member);
+      const meta = declMeta(tsdoc, member);
       const type = msym
         ? checker.getTypeOfSymbolAtLocation(msym, member)
         : checker.getTypeAtLocation?.(member);
@@ -1864,37 +1658,26 @@ const docItems = (ts: TsLike, tsdoc: TSDocLike, checker: CheckerLike, sym: Sym):
           ? functionTypeNode(ts, member.type)
           : undefined;
       const bagRefs = new Map<string, string[]>();
-      for (const param of fn?.parameters || []) {
-        const paramName = param.name?.getText?.();
-        if (!paramName || !bagParam(paramName)) continue;
-        const refs = namedBagRefs(ts, checker, param.type);
-        if (refs.length) bagRefs.set(paramName, refs);
-      }
+      addParamBagRefs(bagRefs, ts, checker, fn?.parameters || []);
       const info = fn
         ? callInfo(ts, checker, checker.getTypeAtLocation?.(fn) || type, fn)
         : callInfo(ts, checker, type, member);
-      for (const [param, ref] of Object.entries(info.bagRefs))
-        if (!bagRefs.has(param)) bagRefs.set(param, ref);
+      for (const [param, ref] of Object.entries(info.bagRefs)) setBagRef(bagRefs, param, ref);
       out.push({
+        ...meta,
         bagRefs,
-        docs: meta.docs,
-        docProse: meta.docProse,
-        errors: meta.errors,
         info,
         inline: trailingInline(member),
         name,
         owner: decl.decl,
         ownerName,
-        plainLongSingle: docShape(member).plainLongSingle,
         ref: refDoc(ts, tsdoc, checker, member),
-        single: docShape(member).taggedSingle,
-        tags: meta.tags,
       });
     }
   }
   return out;
 };
-const bindOf = (name: string, sym: Sym): string => {
+const bindName = (name: string, sym: Sym): string => {
   const value = name === 'default' ? sym.getName() || 'value' : name;
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value) ? value : 'value';
 };
@@ -1911,10 +1694,12 @@ const inject = (item: Item, code: string): string => {
 const describeAttempt = (errs: string[], exec?: ExecRes): string => {
   if (errs.length) return compact(errs);
   if (!exec) return '';
-  return (
-    exec.error?.message || firstText(exec.stderr) || firstText(exec.stdout) || `exit ${exec.status}`
-  );
+  return execText(exec);
 };
+const examplePatternErrors = (ts: TsLike, code: string): string[] =>
+  scanPatternText(ts as any, 'example.ts', code)
+    .filter((item) => item.level === 'error')
+    .map((item) => `pattern ${item.line}:${item.col}: ${item.issue}`);
 const tryExample = async (
   code: string,
   item: Item,
@@ -1928,15 +1713,21 @@ const tryExample = async (
   const attempts = [code, ...(shouldInject(code, item.bind) ? [inject(item, code)] : [])];
   const seen = new Set<string>();
   const fails: string[] = [];
+  const check = opts.checkTypes || makeTypeCheck(ts, ctx.runDir, '.__jsdoc-check.ts');
   for (const cur of attempts) {
     if (!cur.trim() || seen.has(cur)) continue;
     seen.add(cur);
+    const patterns = examplePatternErrors(ts, cur);
+    if (patterns.length) {
+      fails.push(compact(patterns));
+      continue;
+    }
     const placeholder = placeholderExample(cur);
     if (placeholder) {
       fails.push(placeholder);
       continue;
     }
-    const errs = (opts.checkTypes || ((code) => checkTypes(ts, ctx.runDir, code)))(cur);
+    const errs = check(cur);
     if (errs.length) {
       fails.push(describeAttempt(errs));
       continue;
@@ -1948,95 +1739,200 @@ const tryExample = async (
   }
   return compact(fails);
 };
-const logIssue = (
+const recordDocIssue = (
+  out: Result,
   log: LogIssue[],
-  _colorOn: boolean,
   level: 'error' | 'warn',
-  item: Pick<Item, 'dtsFile' | 'line' | 'name'>,
+  item: ItemRef,
   text: string,
   kind: string
-) =>
-  log.push({
-    level: level === 'warn' ? 'WARNING' : 'ERROR',
-    ref: {
-      file: basename(item.dtsFile),
-      issue: issueKind(text, kind),
-      sym: `${item.line}/${item.name}`,
-    },
-  });
-const logUniqueIssue = (
+): void =>
+  recordIssue(out, log, level, basename(item.dtsFile), `${item.line}/${item.name}`, text, kind);
+const recordUniqueDocIssue = (
+  out: Result,
   log: LogIssue[],
   seen: Set<string>,
-  colorOn: boolean,
   level: 'error' | 'warn',
-  item: Pick<Item, 'dtsFile' | 'line' | 'name'>,
+  item: ItemRef,
   text: string,
   kind: string
 ): boolean => {
   const key = `${level}\0${item.dtsFile}\0${item.line}\0${item.name}\0${kind}\0${text}`;
   if (seen.has(key)) return false;
   seen.add(key);
-  logIssue(log, colorOn, level, item, text, kind);
+  recordDocIssue(out, log, level, item, text, kind);
   return true;
 };
-const docSource = (checker: CheckerLike, exported: Sym, resolved: Sym): Sym => {
-  const docs = partsText(exported.getDocumentationComment(checker));
-  const tags = exported.getJsDocTags(checker);
-  return docs.trim() || tags.length ? exported : resolved;
+const hasDocText = (meta: Pick<DocLike, 'docs' | 'tags'>): boolean =>
+  !!(meta.docs.trim() || meta.tags.length);
+const DOC_MSG: DocMessages = {
+  invalid: (err) => `invalid TSDoc: ${err}`,
+  link: (err) => err,
+  missing: 'missing JSDoc',
+  plain: 'single-line plain JSDoc must use short form',
+  tagged: 'tagged JSDoc must be multiline',
+  throws: (err) => err,
+};
+const TYPE_DOC_MSG: DocMessages = {
+  ...DOC_MSG,
+  example: 'types/interfaces must not use @example',
+};
+const memberDocMsg = (name: string): DocMessages => ({
+  example: `typed member ${name} must not use @example`,
+  invalid: (err) => `invalid TSDoc for ${name}: ${err}`,
+  link: (err) => `${name}: ${err}`,
+  missing: `missing member JSDoc for ${name}`,
+  missingKind: 'member',
+  plain: `single-line plain member JSDoc for ${name} must use short form`,
+  tagged: `tagged member JSDoc for ${name} must be multiline`,
+  throws: (err) => `${name}: ${err}`,
+});
+const reportDocMeta = (
+  fail: FailFn,
+  at: ItemRef,
+  meta: DocLike,
+  msg: DocMessages,
+  beforeShape?: () => void
+): void => {
+  for (const err of meta.errors) fail(at, msg.invalid(err), 'tsdoc');
+  for (const err of linkIssues(meta.docProse, meta.tags)) fail(at, msg.link(err), 'link');
+  for (const err of throwsIssues(meta.tags)) fail(at, msg.throws(err), 'throws');
+  beforeShape?.();
+  if (!hasDocText(meta)) fail(at, msg.missing, msg.missingKind || 'docs');
+  if (meta.tags.length && meta.single) fail(at, msg.tagged, 'format');
+  if (!meta.tags.length && meta.plainLongSingle) fail(at, msg.plain, 'format');
+  if (msg.example && hasTagName(meta.tags, 'example')) fail(at, msg.example, 'example');
+};
+const reportParamDocs = (
+  fail: FailFn,
+  at: ItemRef,
+  params: string[],
+  tags: Tag[],
+  refs: BagRefs,
+  owner = ''
+): void => {
+  const pTags = paramTagRows(tags);
+  const paramMap = tagDescMap(pTags);
+  const label = (name: string) => (owner ? `${owner}.${name}` : name);
+  for (const name of params) {
+    const desc = paramMap.get(name);
+    const full = label(name);
+    if (desc === undefined) {
+      fail(at, `missing @param ${full}`, 'param');
+      continue;
+    }
+    const ref = bagRef(refs, name);
+    if (ref && !hasAnyLinkTarget(desc, ref))
+      fail(at, `@param ${full} should link to ${linkTargetMsg(ref)}`, 'param');
+    if (isTrivial(desc, name)) fail(at, `trivial @param ${full} description`, 'param');
+  }
+  for (const tag of pTags)
+    if (!params.includes(tag.name)) fail(at, `unknown @param ${label(tag.name)}`, 'param');
+};
+const reportReturnDoc = (
+  fail: FailFn,
+  at: ItemRef,
+  returns: boolean,
+  tag: Tag | undefined,
+  owner = ''
+): void => {
+  if (!returns) return;
+  const suffix = owner ? ` for ${owner}` : '';
+  if (!tag) fail(at, `missing @returns${suffix}`, 'return');
+  else if (isTrivial(parseReturn(tag))) fail(at, `trivial @returns${suffix}`, 'return');
+};
+const symDocs = (checker: CheckerLike, sym: Sym): SymDocs => ({
+  docs: partsText(sym.getDocumentationComment(checker)),
+  tags: sym.getJsDocTags(checker),
+});
+const exportInfo = (ts: TsLike, checker: CheckerLike, exported: Sym): ExportInfo => {
+  const resolved = resolveAlias(ts, checker, exported);
+  const own = symDocs(checker, exported);
+  const resolvedDoc = symDocs(checker, resolved);
+  const decl = symDecl(resolved);
+  return {
+    decl,
+    own,
+    resolved,
+    resolvedDoc,
+    resolvedFile: decl?.getSourceFile?.()?.fileName,
+    src: hasDocText(own) ? exported : resolved,
+  };
+};
+const forwardedAliasDocs = (
+  ts: TsLike,
+  mods: PublicMod[],
+  mod: PublicMod,
+  exported: Sym,
+  info: ExportInfo
+): boolean => {
+  if (!isAlias(ts, exported) || hasDocText(info.own) || !hasDocText(info.resolvedDoc)) return false;
+  const file = info.resolvedFile;
+  return !file || file === mod.dtsFile || mods.some((item) => item.dtsFile === file);
+};
+const runtimeExports = (checker: CheckerLike, prog: ProgLike, mod: PublicMod): Map<string, Sym> => {
+  const out = new Map<string, Sym>();
+  for (const sym of progExports(checker, prog, mod.jsFile)) out.set(sym.getName(), sym);
+  return out;
+};
+const exportRows = (
+  ts: TsLike,
+  mods: PublicMod[],
+  dtsChecker: CheckerLike,
+  dtsProg: ProgLike,
+  jsChecker: CheckerLike,
+  jsProg: ProgLike
+): ExportRow[] => {
+  const out: ExportRow[] = [];
+  for (const mod of mods) {
+    const runtime = runtimeExports(jsChecker, jsProg, mod);
+    for (const exported of sortedProgExports(dtsChecker, dtsProg, mod.dtsFile)) {
+      const name = exported.getName();
+      if (isIgnored(name)) continue;
+      const ex = exportInfo(ts, dtsChecker, exported);
+      const jsSym0 = runtime.get(name);
+      out.push({
+        ex,
+        exported,
+        item: {
+          bind: bindName(name, ex.resolved),
+          dtsFile: mod.dtsFile,
+          key: mod.key,
+          line: symLine(ex.resolved) || symLine(exported),
+          name,
+          runtime: !!jsSym0,
+          spec: mod.spec,
+          sym: ex.resolved,
+        },
+        jsSym: jsSym0 ? resolveAlias(ts, jsChecker, jsSym0) : undefined,
+        mod,
+      });
+    }
+  }
+  return out;
+};
+const analyzeDocs = (ts: TsLike, mods: PublicMod[]): Analysis => {
+  const progs = programs(ts, mods);
+  const dtsProg = progs.dts;
+  const jsProg = progs.js;
+  const dtsChecker = dtsProg.getTypeChecker();
+  const jsChecker = jsProg.getTypeChecker();
+  return {
+    dtsChecker,
+    jsChecker,
+    rows: exportRows(ts, mods, dtsChecker, dtsProg, jsChecker, jsProg),
+  };
 };
 const throwReportIssues = (item: ThrowRawReport): string[] => {
-  const docs = new Set<string>();
-  for (const tag of item.docs)
-    for (const match of tag.matchAll(/\{@link\s+([^\s}|]+)/g)) {
-      const raw = (match[1] || '').trim();
-      const tail = /([A-Z][A-Za-z0-9_]*)$/.exec(raw)?.[1] || raw.split(/[.#/]/).at(-1) || raw;
-      if (tail) docs.add(tail);
-    }
-  const thrown = new Set(item.thrown);
-  const direct = new Set(item.direct);
-  const issues: string[] = [];
-  if (!thrown.size) {
-    if (docs.size && !item.unknown)
-      issues.push('remove @throws; no thrown errors were inferred from the current implementation');
-    return issues;
-  }
-  if (!item.unknown) {
-    for (const name of [...thrown].sort())
-      if (!docs.has(name))
-        issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
-    for (const name of [...docs].sort())
-      if (!thrown.has(name))
-        issues.push(
-          `remove stale @throws for ${name}; it is not inferred from the current implementation`
-        );
-    return issues;
-  }
-  if (direct.size) {
-    for (const name of [...direct].sort())
-      if (!docs.has(name))
-        issues.push(`missing @throws for ${name}; e.g. "${throwsExample(name)}"`);
-    return issues;
-  }
-  if (docs.size) return issues;
-  issues.push(
-    'missing @throws; document the known thrown conditions with prose first and a linked error type'
-  );
-  return issues;
+  const docs = linkTypeNames(item.docs);
+  return throwDocIssues(docs, throwInfo(item), !!docs.size);
 };
 const prototypeThrowsRaw = (pkgFile: string): ThrowRawReport[] => {
   const ctx = resolveCtx({ help: false, pkgArg: pkgFile }, dirname(resolve(pkgFile)));
   const ts = loadTs(ctx.pkgFile);
-  const mods = listModules(ctx);
-  const dtsProg = loadProgram(
-    ts,
-    mods.map((mod) => mod.dtsFile)
-  );
-  const jsProg = loadProgram(
-    ts,
-    mods.map((mod) => mod.jsFile),
-    true
-  );
-  return collectPrototypeThrows(ctx, ts, mods, dtsProg, jsProg);
+  const mods = listPublicModules(ctx);
+  const analysis = analyzeDocs(ts, mods);
+  return collectPrototypeThrows(ctx, ts, analysis.rows, analysis.dtsChecker, analysis.jsChecker);
 };
 const prototypeThrows = (pkgFile: string): ThrowReport[] =>
   prototypeThrowsRaw(pkgFile)
@@ -2045,47 +1941,29 @@ const prototypeThrows = (pkgFile: string): ThrowReport[] =>
 const collectPrototypeThrows = (
   ctx: Ctx,
   ts: TsLike,
-  mods: Mod[],
-  dtsProg: ProgLike,
-  jsProg: ProgLike
+  rows: ExportRow[],
+  dtsChecker: CheckerLike,
+  jsChecker: CheckerLike
 ): ThrowRawReport[] => {
-  const dtsChecker = dtsProg.getTypeChecker();
-  const jsChecker = jsProg.getTypeChecker();
   const out: ThrowRawReport[] = [];
-  for (const mod of mods) {
-    const jsMap = new Map<string, Sym>();
-    for (const sym of moduleExports(jsChecker, jsProg.getSourceFile(mod.jsFile), mod.jsFile))
-      jsMap.set(sym.getName(), sym);
-    const symbols = moduleExports(dtsChecker, dtsProg.getSourceFile(mod.dtsFile), mod.dtsFile).sort(
-      (a, b) => a.getName().localeCompare(b.getName())
+  for (const row of rows) {
+    const docs = tagsNamed(row.ex.src.getJsDocTags(dtsChecker), 'throws').map((tag) =>
+      tagText(tag.text)
     );
-    for (const exported of symbols) {
-      if (isIgnored(exported.getName())) continue;
-      const resolved =
-        exported.flags & ts.SymbolFlags.Alias ? dtsChecker.getAliasedSymbol(exported) : exported;
-      const src = docSource(dtsChecker, exported, resolved);
-      const docs = src
-        .getJsDocTags(dtsChecker)
-        .filter((tag) => tag.name === 'throws')
-        .map((tag) => tagText(tag.text));
-      const jsSym0 = jsMap.get(exported.getName());
-      if (!jsSym0) continue;
-      const jsSym =
-        jsSym0.flags & ts.SymbolFlags.Alias ? jsChecker.getAliasedSymbol(jsSym0) : jsSym0;
-      const decl = declOf(jsSym);
-      if (!decl || !isLocalDecl(ctx.cwd, decl)) continue;
-      const info = inferThrows(ts, jsChecker, ctx.cwd, decl);
-      if (!info.thrown.size && !docs.length) continue;
-      out.push({
-        direct: [...info.direct].sort(),
-        docs,
-        dtsFile: mod.dtsFile,
-        key: mod.key,
-        name: exported.getName(),
-        thrown: [...info.thrown].sort(),
-        unknown: info.unknown,
-      });
-    }
+    if (!row.jsSym) continue;
+    const decl = symDecl(row.jsSym);
+    if (!decl || !isLocalDecl(ctx.cwd, decl)) continue;
+    const info = inferThrows(ts, jsChecker, ctx.cwd, decl);
+    if (!info.thrown.size && !docs.length) continue;
+    out.push({
+      direct: sorted(info.direct),
+      docs,
+      dtsFile: row.item.dtsFile,
+      key: row.item.key,
+      name: row.item.name,
+      thrown: sorted(info.thrown),
+      unknown: info.unknown,
+    });
   }
   return out;
 };
@@ -2101,7 +1979,7 @@ export const runCli = async (
     runCode?: (code: string, cwd: string) => ExecRes | Promise<ExecRes>;
   } = {}
 ): Promise<void> => {
-  const args = parseArgs(argv);
+  const args = pkgArgs(argv);
   if (args.help) {
     console.log(usage);
     return;
@@ -2112,576 +1990,133 @@ export const runCli = async (
   const log: LogIssue[] = [];
   const ts = (opts.loadTs || loadTs)(ctx.pkgFile);
   const tsdoc = (opts.loadTSDoc || loadTSDoc)(ctx.pkgFile);
-  const mods = listModules(ctx);
+  const mods = listPublicModules(ctx);
   const typedSeen = new Set<string>();
-  const dtsProg = loadProgram(
-    ts,
-    mods.map((mod) => mod.dtsFile)
-  );
-  const jsProg = loadProgram(
-    ts,
-    mods.map((mod) => mod.jsFile),
-    true
-  );
+  const analysis = analyzeDocs(ts, mods);
+  const dtsChecker = analysis.dtsChecker;
   const srcIndex = sourceIndex(ts, mods);
-  const dtsChecker = dtsProg.getTypeChecker();
-  const jsChecker = jsProg.getTypeChecker();
   const checkExampleTypes = opts.checkTypes
     ? (code: string) => opts.checkTypes!(ts, ctx.runDir, code)
-    : makeTypeCheck(ts, ctx.runDir);
-  const throwReports = collectPrototypeThrows(ctx, ts, mods, dtsProg, jsProg);
+    : makeTypeCheck(ts, ctx.runDir, '.__jsdoc-check.ts');
+  const throwReports = collectPrototypeThrows(
+    ctx,
+    ts,
+    analysis.rows,
+    analysis.dtsChecker,
+    analysis.jsChecker
+  );
   const throwMap = new Map(throwReports.map((item) => [`${item.key}:${item.name}`, item]));
-  for (const mod of mods) {
-    mod.runtime = new Set(
-      moduleExports(jsChecker, jsProg.getSourceFile(mod.jsFile), mod.jsFile).map((sym) =>
-        sym.getName()
-      )
+  const out = emptyResult();
+  for (const row of analysis.rows) {
+    const { ex, exported, item, mod } = row;
+    if (forwardedAliasDocs(ts, mods, mod, exported, ex)) continue;
+    const sourceDecl = docNode(symDecl(ex.src));
+    const wrappedDecl = unwrapDocDecl(ts, dtsChecker, ex.decl);
+    const typed = typeDecls(ts, ex.resolved);
+    const smeta = declMeta(tsdoc, sourceDecl);
+    const wmeta = wrappedDecl ? declMeta(tsdoc, wrappedDecl) : undefined;
+    // TRet<T>/TArg<T> exports often carry the public callable docs on the inner type alias.
+    const vmeta = smeta.hasDocs || !wmeta?.hasDocs ? smeta : wmeta;
+    const tmeta = typedMeta(tsdoc, typed);
+    const typedItem = itemAt(
+      item,
+      ex.decl,
+      ex.decl?.name?.getText?.() || ex.resolved.getName() || item.name
     );
-  }
-  const out: Result = { failures: 0, passed: 0, skipped: 0, warnings: 0 };
-  for (const mod of mods) {
-    const symbols = moduleExports(dtsChecker, dtsProg.getSourceFile(mod.dtsFile), mod.dtsFile).sort(
-      (a, b) => a.getName().localeCompare(b.getName())
-    );
-    for (const exported of symbols) {
-      if (isIgnored(exported.getName())) continue;
-      const resolved =
-        exported.flags & ts.SymbolFlags.Alias ? dtsChecker.getAliasedSymbol(exported) : exported;
-      const ownDocs = partsText(exported.getDocumentationComment(dtsChecker));
-      const ownTags = exported.getJsDocTags(dtsChecker);
-      const resolvedDocs = partsText(resolved.getDocumentationComment(dtsChecker));
-      const resolvedTags = resolved.getJsDocTags(dtsChecker);
-      const resolvedFile = declOf(resolved)?.getSourceFile?.()?.fileName;
-      if (exported.flags & ts.SymbolFlags.Alias && !ownDocs.trim() && !ownTags.length)
-        if (
-          (resolvedDocs.trim() || resolvedTags.length) &&
-          (!resolvedFile ||
-            resolvedFile === mod.dtsFile ||
-            mods.some((item) => item.dtsFile === resolvedFile))
-        )
-          continue;
-      const src = docSource(dtsChecker, exported, resolved);
-      const sourceDecl = docNode(declOf(src));
-      const wrappedDecl = unwrapDocDecl(ts, dtsChecker, declOf(resolved));
-      const typed = typeDecls(ts, resolved);
-      const smeta = declMeta(tsdoc, sourceDecl);
-      const wmeta = wrappedDecl ? declMeta(tsdoc, wrappedDecl) : undefined;
-      // TRet<T>/TArg<T> exports often carry the public callable docs on the inner type alias.
-      const vmeta = smeta.hasDocs || !wmeta?.hasDocs ? smeta : wmeta;
-      const tmeta = typedMeta(tsdoc, typed);
-      const item: Item = {
-        bind: bindOf(exported.getName(), resolved),
-        dtsFile: mod.dtsFile,
-        key: mod.key,
-        line: lineOf(resolved) || lineOf(exported),
-        name: exported.getName(),
-        runtime: mod.runtime.has(exported.getName()),
-        spec: mod.spec,
-        sym: resolved,
-      };
-      const typedItem = itemAt(
-        item,
-        declOf(resolved),
-        declOf(resolved)?.name?.getText?.() || resolved.getName() || item.name
-      );
-      let failed = false;
-      const info = typeOfExport(ts, dtsChecker, resolved);
-      if (typed.length) {
-        for (const err of tmeta.errors) {
-          if (
-            logUniqueIssue(
-              log,
-              typedSeen,
-              colorOn,
-              'error',
-              typedItem,
-              `invalid TSDoc: ${err}`,
-              'tsdoc'
-            )
-          ) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        for (const err of linkIssues(tmeta.docProse, tmeta.tags)) {
-          if (logUniqueIssue(log, typedSeen, colorOn, 'error', typedItem, err, 'link')) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        for (const err of throwsIssues(tmeta.tags)) {
-          if (logUniqueIssue(log, typedSeen, colorOn, 'error', typedItem, err, 'throws')) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        if (!tmeta.hasDocs) {
-          if (
-            logUniqueIssue(log, typedSeen, colorOn, 'error', typedItem, 'missing JSDoc', 'docs')
-          ) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        if (tmeta.tagNames.length && tmeta.single) {
-          if (
-            logUniqueIssue(
-              log,
-              typedSeen,
-              colorOn,
-              'error',
-              typedItem,
-              'tagged JSDoc must be multiline',
-              'format'
-            )
-          ) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        if (!tmeta.tagNames.length && tmeta.plainLongSingle) {
-          if (
-            logUniqueIssue(
-              log,
-              typedSeen,
-              colorOn,
-              'error',
-              typedItem,
-              'single-line plain JSDoc must use short form',
-              'format'
-            )
-          ) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-        if (tmeta.tagNames.includes('example')) {
-          if (
-            logUniqueIssue(
-              log,
-              typedSeen,
-              colorOn,
-              'error',
-              typedItem,
-              'types/interfaces must not use @example',
-              'example'
-            )
-          ) {
-            failed = true;
-            out.failures += 1;
-          }
-        }
-      } else {
-        for (const err of vmeta.errors) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, `invalid TSDoc: ${err}`, 'tsdoc');
-        }
-        for (const err of linkIssues(vmeta.docProse, vmeta.tags)) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, err, 'link');
-        }
-        for (const err of throwsIssues(vmeta.tags)) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, err, 'throws');
-        }
-        if (!vmeta.docs.trim() && !vmeta.tags.length) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, 'missing JSDoc', 'docs');
-        }
-        if (vmeta.tags.length && vmeta.single) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, 'tagged JSDoc must be multiline', 'format');
-        }
-        if (!vmeta.tags.length && vmeta.plainLongSingle) {
-          failed = true;
-          out.failures += 1;
-          logIssue(
-            log,
-            colorOn,
-            'error',
-            item,
-            'single-line plain JSDoc must use short form',
-            'format'
-          );
-        }
+    let failed = false;
+    const fail = (at: ItemRef, text: string, kind: string): void => {
+      failed = true;
+      recordDocIssue(out, log, 'error', at, text, kind);
+    };
+    const failUnique = (seen: Set<string>, at: ItemRef, text: string, kind: string): void => {
+      if (!recordUniqueDocIssue(out, log, seen, 'error', at, text, kind)) return;
+      failed = true;
+    };
+    const failTyped: FailFn = (at, text, kind) => failUnique(typedSeen, at, text, kind);
+    const info = typeOfExport(ts, dtsChecker, ex.resolved);
+    if (typed.length) {
+      reportDocMeta(failTyped, typedItem, tmeta, TYPE_DOC_MSG);
+    } else {
+      reportDocMeta(fail, item, vmeta, DOC_MSG);
+    }
+    const needsValueDocs = item.runtime || !typed.length;
+    const inferredThrows = throwMap.get(`${item.key}:${item.name}`);
+    if (info.params.length)
+      reportParamDocs(fail, item, info.params, needsValueDocs ? vmeta.tags : [], info.bagRefs);
+    const ret = needsValueDocs ? returnTag(vmeta.tags) : undefined;
+    if (needsValueDocs && !!info.kind && inferredThrows) {
+      for (const err of throwsCoverageIssues(vmeta.tags, throwInfo(inferredThrows))) {
+        fail(item, err, 'throws');
       }
-      const needsValueDocs = item.runtime || !typed.length;
-      const inferredThrows = throwMap.get(`${item.key}:${item.name}`);
-      const paramTags = needsValueDocs
-        ? vmeta.tags
-            .filter((tag) => tag.name === 'param')
-            .map(parseParam)
-            .filter((tag) => tag.name)
-        : [];
-      if (info.params.length) {
-        const paramMap = new Map(paramTags.map((tag) => [tag.name, tag.desc]));
-        for (const name of info.params) {
-          const desc = paramMap.get(name);
-          if (desc === undefined) {
-            failed = true;
-            out.failures += 1;
-            logIssue(log, colorOn, 'error', item, `missing @param ${name}`, 'param');
-            continue;
-          }
-          if (info.bagRefs[name] && !hasAnyLinkTarget(desc, info.bagRefs[name])) {
-            failed = true;
-            out.failures += 1;
-            logIssue(
-              log,
-              colorOn,
-              'error',
-              item,
-              `@param ${name} should link to ${linkTargetMsg(info.bagRefs[name])}`,
-              'param'
+    }
+    reportReturnDoc(fail, item, info.returns, ret);
+    if (typed.length) {
+      for (const member of docItems(ts, tsdoc, dtsChecker, ex.resolved)) {
+        const memberItem = itemAt(typedItem, member.owner, member.ownerName);
+        const inline =
+          member.inline || sourceInline(srcIndex, memberItem.dtsFile, memberItem.name, member.name);
+        reportDocMeta(failTyped, memberItem, member, memberDocMsg(member.name), () => {
+          if (hasDocText(member) && inline) {
+            failTyped(
+              memberItem,
+              `member ${member.name} must not mix JSDoc with inline comment`,
+              'member'
             );
           }
-          if (isTrivial(desc, name)) {
-            failed = true;
-            out.failures += 1;
-            logIssue(log, colorOn, 'error', item, `trivial @param ${name} description`, 'param');
-          }
-        }
-        for (const tag of paramTags) {
-          if (!info.params.includes(tag.name)) {
-            failed = true;
-            out.failures += 1;
-            logIssue(log, colorOn, 'error', item, `unknown @param ${tag.name}`, 'param');
-          }
-        }
-      }
-      const ret = needsValueDocs ? vmeta.tags.find((tag) => tag.name === 'returns') : undefined;
-      if (needsValueDocs && !!info.kind && inferredThrows) {
-        for (const err of throwsCoverageIssues(vmeta.tags, {
-          direct: new Set(inferredThrows.direct),
-          thrown: new Set(inferredThrows.thrown),
-          unknown: inferredThrows.unknown,
-        })) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, err, 'throws');
-        }
-      }
-      if (info.returns) {
-        if (!ret) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, 'missing @returns', 'return');
-        } else if (isTrivial(parseReturn(ret))) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, 'trivial @returns description', 'return');
-        }
-      }
-      if (typed.length) {
-        for (const member of docItems(ts, tsdoc, dtsChecker, resolved)) {
-          const memberItem = itemAt(typedItem, member.owner, member.ownerName);
-          for (const err of member.errors) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `invalid TSDoc for ${member.name}: ${err}`,
-                'tsdoc'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          for (const err of linkIssues(member.docProse, member.tags)) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `${member.name}: ${err}`,
-                'link'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          for (const err of throwsIssues(member.tags)) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `${member.name}: ${err}`,
-                'throws'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          const inline =
-            member.inline ||
-            sourceInline(srcIndex, memberItem.dtsFile, memberItem.name, member.name);
-          if ((member.docs.trim() || member.tags.length) && inline) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `member ${member.name} must not mix JSDoc with inline comment`,
-                'member'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          if (!member.docs.trim() && !member.tags.length) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `missing member JSDoc for ${member.name}`,
-                'member'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-            continue;
-          }
-          if (member.tags.length && member.single) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `tagged member JSDoc for ${member.name} must be multiline`,
-                'format'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          if (!member.tags.length && member.plainLongSingle) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `single-line plain member JSDoc for ${member.name} must use short form`,
-                'format'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          if (member.tags.some((tag) => tag.name === 'example')) {
-            if (
-              logUniqueIssue(
-                log,
-                typedSeen,
-                colorOn,
-                'error',
-                memberItem,
-                `typed member ${member.name} must not use @example`,
-                'example'
-              )
-            ) {
-              failed = true;
-              out.failures += 1;
-            }
-          }
-          const memberTags = member.tags
-            .filter((tag) => tag.name === 'param')
-            .map(parseParam)
-            .filter((tag) => tag.name);
-          const memberMap = new Map(memberTags.map((tag) => [tag.name, tag.desc]));
-          const memberRet = member.tags.find(
-            (tag) => tag.name === 'returns' || tag.name === 'return'
+        });
+        if (!hasDocText(member)) continue;
+        const memberTags = paramTagRows(member.tags);
+        const memberRet = returnTag(member.tags, true);
+        const viaRef = member.ref?.hasDocs && !memberTags.length && !memberRet;
+        if (!viaRef) {
+          reportParamDocs(
+            failTyped,
+            memberItem,
+            member.info.params,
+            member.tags,
+            member.bagRefs,
+            member.name
           );
-          const viaRef = member.ref?.hasDocs && !memberTags.length && !memberRet;
-          for (const name of member.info.params) {
-            if (viaRef) break;
-            const desc = memberMap.get(name);
-            if (desc === undefined) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `missing @param ${member.name}.${name}`,
-                  'param'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-              continue;
-            }
-            const ref = member.bagRefs.get(name);
-            if (ref && !hasAnyLinkTarget(desc, ref)) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `@param ${member.name}.${name} should link to ${linkTargetMsg(ref)}`,
-                  'param'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-            }
-            if (isTrivial(desc, name)) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `trivial @param ${member.name}.${name} description`,
-                  'param'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-            }
-          }
-          for (const tag of memberTags) {
-            if (!member.info.params.includes(tag.name)) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `unknown @param ${member.name}.${tag.name}`,
-                  'param'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-            }
-          }
-          if (member.info.returns && !viaRef) {
-            if (!memberRet) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `missing @returns for ${member.name}`,
-                  'return'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-            } else if (isTrivial(parseReturn(memberRet))) {
-              if (
-                logUniqueIssue(
-                  log,
-                  typedSeen,
-                  colorOn,
-                  'error',
-                  memberItem,
-                  `trivial @returns for ${member.name}`,
-                  'return'
-                )
-              ) {
-                failed = true;
-                out.failures += 1;
-              }
-            }
-          }
+          reportReturnDoc(failTyped, memberItem, member.info.returns, memberRet, member.name);
         }
       }
-      const examples = needsValueDocs ? vmeta.examples : [];
-      const needsExample = needsValueDocs && !!info.kind && !info.fnParams.length;
-      if (needsExample) {
-        if (!examples.length) {
-          failed = true;
-          out.failures += 1;
-          logIssue(log, colorOn, 'error', item, 'missing @example', 'example');
-        }
-      }
-      if (examples.length) {
-        for (let i = 0; i < examples.length; i++) {
-          for (const err of examples[i].errors) {
-            failed = true;
-            out.failures += 1;
-            logIssue(log, colorOn, 'error', item, `example ${i + 1}: ${err}`, 'example');
-          }
-          if (!examples[i].code) continue;
-          const msg = await tryExample(examples[i].code, item, ctx, ts, {
-            checkTypes: checkExampleTypes,
-            runCode: opts.runCode,
-          });
-          if (!msg) continue;
-          failed = true;
-          out.failures += 1;
-          logIssue(
-            log,
-            colorOn,
-            'error',
-            item,
-            `example ${i + 1}: ${msg}`,
-            item.runtime ? 'exec' : 'type'
-          );
-        }
-      }
-      if (!failed) out.passed += 1;
     }
+    const examples = needsValueDocs ? vmeta.examples : [];
+    const needsExample = needsValueDocs && !!info.kind && !info.fnParams.length;
+    if (needsExample) {
+      if (!examples.length) {
+        fail(item, 'missing @example', 'example');
+      }
+    }
+    if (examples.length) {
+      for (let i = 0; i < examples.length; i++) {
+        for (const err of examples[i].errors) {
+          fail(item, `example ${i + 1}: ${err}`, 'example');
+        }
+        if (!examples[i].code) continue;
+        const msg = await tryExample(examples[i].code, item, ctx, ts, {
+          checkTypes: checkExampleTypes,
+          runCode: opts.runCode,
+        });
+        if (!msg) continue;
+        fail(item, `example ${i + 1}: ${msg}`, item.runtime ? 'exec' : 'type');
+      }
+    }
+    if (!failed) out.passed += 1;
   }
-  printIssues('tsdoc', log, colorOn);
-  if (out.failures || out.warnings) {
-    console.error(`${status(out.failures ? 'error' : 'warn', colorOn)} summary: ${summary(out)}`);
-    err('JSDoc check found issues');
-  }
-  console.log(`${status('pass', colorOn)} summary: ${summary(out)}`);
+  reportIssues('tsdoc', log, out, colorOn, 'JSDoc check found issues', 'fail');
 };
 
 export const __TEST: TestApi = {
-  bindOf: bindOf,
-  dtsPathOf: dtsPathOf,
+  bindName: bindName,
+  dtsPath: dtsPath,
   docShape: docShape,
+  examplePatternErrors: examplePatternErrors,
   exampleDoc: exampleDoc,
   inject: inject,
   isIgnored: isIgnored,
   isTrivial: isTrivial,
-  jsPathOf: jsPathOf,
+  jsPath: jsPath,
   normalizeDoc: normalizeDoc,
   parseParam: parseParam,
   parseReturn: parseReturn,
@@ -2692,15 +2127,4 @@ export const __TEST: TestApi = {
   sweepTemps: sweepTemps,
 };
 
-const main = async (): Promise<void> => {
-  try {
-    await runCli(process.argv.slice(2));
-  } catch (err) {
-    console.error((err as Error).message);
-    process.exitCode = 1;
-  }
-};
-
-const entry: string | undefined = process.argv[1];
-const self: string = fileURLToPath(import.meta.url);
-if (!bundled() && entry && realpathSync(resolve(entry)) === realpathSync(self)) void main();
+runSelf(import.meta.url, runCli);
