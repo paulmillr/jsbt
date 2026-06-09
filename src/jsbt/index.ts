@@ -125,8 +125,7 @@ const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
 process.argv[1] = workerData.entry;
 await import(workerData.self);`;
-const CHECK_NOTE =
-  'Checker may return not real errors or flag correct code; it is here to point at issues, not something that should have strict zero errors';
+const CHECK_NOTE = 'Treat these results as suggestions, not strict errors';
 const QUIET_ENV = {
   npm_config_audit: 'false',
   npm_config_fund: 'false',
