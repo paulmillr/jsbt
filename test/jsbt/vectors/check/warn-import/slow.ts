@@ -7,7 +7,7 @@ Atomics.wait(block, 0, 0, 20);
  * Use the slow export.
  * ```ts
  * import { slow } from '@jsbt-test/check-import/slow.js';
- * slow;
+ * console.log(slow);
  * ```
  */
 export const slow = 42;

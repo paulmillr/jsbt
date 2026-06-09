@@ -4,7 +4,7 @@
  * Use the slow export.
  * ```ts
  * import { slow } from '@jsbt-test/check-import/slow.js';
- * slow;
+ * console.log(slow);
  * ```
  */
 export declare const slow: 42;

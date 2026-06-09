@@ -507,6 +507,17 @@ should('check accepts a second-arg selector and runs only tsdoc', async () => {
   assert.match(plain(res), checkSummary([['tsdoc', 4]]));
 });
 
+should('check accepts a patterns selector without defaulting to all checks', async () => {
+  const cwd = fixture('fail-src');
+  const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'patterns'], cwd));
+  assert.equal(res.ok, true, all(res));
+  assert.doesNotMatch(plain(res), /\[ERROR\] \(readme\)/);
+  assert.doesNotMatch(plain(res), /\[ERROR\] \(treeshake\)/);
+  assert.doesNotMatch(plain(res), /\[ERROR\] \(tsdoc\)/);
+  assert.doesNotMatch(plain(res), /\[ERROR\] \(jsr\)/);
+  assert.match(plain(res), checkSummary([['patterns', 0]]));
+});
+
 should('check accepts a jsrpublish selector and asks for full output', async () => {
   const cwd = fixture('pass-root');
   let full = false;

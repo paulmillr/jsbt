@@ -4,7 +4,7 @@
  * Use the root export.
  * ```ts
  * import { fast } from '@jsbt-test/check-import';
- * fast;
+ * console.log(fast);
  * ```
  */
 export const fast = 1;

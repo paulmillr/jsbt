@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-accepted-probes",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-group-format",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

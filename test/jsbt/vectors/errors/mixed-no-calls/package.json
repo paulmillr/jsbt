@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-mixed-no-calls",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

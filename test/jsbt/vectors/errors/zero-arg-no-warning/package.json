@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-zero-arg-no-warning",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

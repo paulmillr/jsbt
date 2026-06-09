@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-object-methods",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

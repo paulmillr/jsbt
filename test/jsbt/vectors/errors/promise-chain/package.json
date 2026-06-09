@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-promise-chain",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

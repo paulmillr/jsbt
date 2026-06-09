@@ -1,0 +1,8 @@
+{
+  "name": "@jsbt-test/errors-wrapper-label",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}
