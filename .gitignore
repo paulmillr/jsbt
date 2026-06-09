@@ -7,3 +7,6 @@ node_modules
 /test/build
 /test/compiled
 /jsbt
+/test/jsbt/build/patterns/
+/test/jsbt/vectors/npm-check/test/build
+/test/jsbt/vectors/errors/pass/test/
