@@ -1,0 +1,10 @@
+{
+  "name": "@jsbt-test/npm-check-wrong",
+  "version": "0.0.0",
+  "exports": {
+    ".": "./wrong.ts"
+  },
+  "publish": {
+    "include": ["jsr.json"]
+  }
+}

@@ -1,4 +1,4 @@
-import { deepStrictEqual, doesNotMatch, match } from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -32,21 +32,23 @@ should('errors ignores Promise chain methods in examples', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/promise-chain');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     new RegExp(
       'wrong privateKey=false\\n' +
         '- index\\.ts:parsePrivateKey: "privateKey" expected string, got type=boolean'
-    )
+    ).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
-    /wrong text=false\n- index\.ts:parsePackets: "text" expected string, got type=boolean/
+  deepStrictEqual(
+    /wrong text=false\n- index\.ts:parsePackets: "text" expected string, got type=boolean/.test(
+      res.stdout
+    ),
+    true
   );
-  doesNotMatch(res.stderr, /example probe failed/);
-  doesNotMatch(res.stdout, /\.then/);
-  doesNotMatch(res.stdout, /\.find/);
-  doesNotMatch(res.stdout, /wrong arg0=/);
+  deepStrictEqual(/example probe failed/.test(res.stderr), false);
+  deepStrictEqual(/\.then/.test(res.stdout), false);
+  deepStrictEqual(/\.find/.test(res.stdout), false);
+  deepStrictEqual(/wrong arg0=/.test(res.stdout), false);
 });
 
 should.runWhen(import.meta.url);

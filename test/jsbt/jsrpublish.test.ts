@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -32,23 +32,21 @@ const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
-const run = (
-  cwd: string,
-  extra: Record<string, unknown> = {}
-) => capture(() => runJsrPublish(['package.json'], { color: false, cwd, ...extra }));
+const run = (cwd: string, extra: Record<string, unknown> = {}) =>
+  capture(() => runJsrPublish(['package.json'], { color: false, cwd, ...extra }));
 
 should('jsrpublish passes when plain deno publish dry-run passes', async () => {
   let calls = 0;
   const res = await run(fixture('pass-root'), {
     runPublish: (_cwd: string, allowSlow: boolean) => {
       calls++;
-      assert.equal(allowSlow, false);
+      deepStrictEqual(allowSlow, false);
       return { status: 0, stdout: '', stderr: '' };
     },
   });
-  assert.equal(res.ok, true, all(res));
-  assert.equal(calls, 1);
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(calls, 1);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should('jsrpublish warns in compact mode when only --allow-slow-types passes', async () => {
@@ -73,46 +71,59 @@ should('jsrpublish warns in compact mode when only --allow-slow-types passes', a
             stderr: '',
           },
   });
-  assert.equal(res.ok, true, all(res));
-  assert.match(
-    plain(res),
-    /\[WARNING\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails without --allow-slow-types; rerun passes with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish-slow\)/
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(
+    /\[WARNING\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails without --allow-slow-types; rerun passes with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish-slow\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /error\[missing-explicit-type\]: missing explicit type in the public API/);
-  assert.match(plain(res), /summary: 0 passed, 1 warning, 0 failures, 0 skipped/);
+  deepStrictEqual(
+    /error\[missing-explicit-type\]: missing explicit type in the public API/.test(plain(res)),
+    true
+  );
+  deepStrictEqual(/summary: 0 passed, 1 warning, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
-should('jsrpublish fails in compact mode when publish still fails with --allow-slow-types', async () => {
-  const cwd = fixture('pass-root');
-  const file = resolve(cwd, 'src/index.ts').replace(/\\/g, '/');
-  const res = await run(cwd, {
-    full: false,
-    runPublish: (_cwd: string, allowSlow: boolean) => ({
-      status: 1,
-      stdout: allowSlow
-        ? [
-            'Check src/index.ts',
-            'error[excluded-module]: Module is excluded from publish',
-            `   --> ${file}:7:14`,
-            '  info: fix publish.exclude or graph',
-          ].join('\n')
-        : [
-            'Check src/index.ts',
-            'error[missing-explicit-type]: missing explicit type in the public API',
-            `   --> ${file}:7:14`,
-          ].join('\n'),
-      stderr: '',
-    }),
-  });
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails even with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish\)/
-  );
-  assert.match(plain(res), /error\[excluded-module\]: Module is excluded from publish/);
-  assert.doesNotMatch(plain(res), /missing explicit type in the public API/);
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 1 failure, 0 skipped/);
-});
+should(
+  'jsrpublish fails in compact mode when publish still fails with --allow-slow-types',
+  async () => {
+    const cwd = fixture('pass-root');
+    const file = resolve(cwd, 'src/index.ts').replace(/\\/g, '/');
+    const res = await run(cwd, {
+      full: false,
+      runPublish: (_cwd: string, allowSlow: boolean) => ({
+        status: 1,
+        stdout: allowSlow
+          ? [
+              'Check src/index.ts',
+              'error[excluded-module]: Module is excluded from publish',
+              `   --> ${file}:7:14`,
+              '  info: fix publish.exclude or graph',
+            ].join('\n')
+          : [
+              'Check src/index.ts',
+              'error[missing-explicit-type]: missing explicit type in the public API',
+              `   --> ${file}:7:14`,
+            ].join('\n'),
+        stderr: '',
+      }),
+    });
+    deepStrictEqual(res.ok, false);
+    deepStrictEqual(
+      /\[ERROR\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails even with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish\)/.test(
+        plain(res)
+      ),
+      true
+    );
+    deepStrictEqual(
+      /error\[excluded-module\]: Module is excluded from publish/.test(plain(res)),
+      true
+    );
+    deepStrictEqual(/missing explicit type in the public API/.test(plain(res)), false);
+    deepStrictEqual(/summary: 0 passed, 0 warnings, 1 failure, 0 skipped/.test(plain(res)), true);
+  }
+);
 
 should('jsrpublish full mode keeps full relevant output without the compact hint', async () => {
   const cwd = fixture('pass-root');
@@ -139,10 +150,10 @@ should('jsrpublish full mode keeps full relevant output without the compact hint
             stderr: '',
           },
   });
-  assert.equal(res.ok, true, all(res));
-  assert.match(plain(res), /more: line nine/);
-  assert.doesNotMatch(plain(res), /see npm run check jsrpublish for full output/);
-  assert.match(plain(res), /summary: 0 passed, 1 warning, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/more: line nine/.test(plain(res)), true);
+  deepStrictEqual(/see npm run check jsrpublish for full output/.test(plain(res)), false);
+  deepStrictEqual(/summary: 0 passed, 1 warning, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should('jsrpublish reports skipped runs when deno is unavailable', async () => {
@@ -154,12 +165,14 @@ should('jsrpublish reports skipped runs when deno is unavailable', async () => {
       stderr: '',
     }),
   });
-  assert.equal(res.ok, true, all(res));
-  assert.match(
-    plain(res),
-    /\[INFO\] \(jsrpublish\) jsr\.json:publish deno publish dry-run skipped; missing deno on PATH; install deno to run publish dry-run \(jsrpublish-skip\)/
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(
+    /\[INFO\] \(jsrpublish\) jsr\.json:publish deno publish dry-run skipped; missing deno on PATH; install deno to run publish dry-run \(jsrpublish-skip\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 0 failures, 1 skipped/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 0 failures, 1 skipped/.test(plain(res)), true);
 });
 
 should.runWhen(import.meta.url);

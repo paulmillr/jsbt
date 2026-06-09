@@ -1,0 +1,26 @@
+{
+  "name": "@jsbt-test/npm-check",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.js"
+    },
+    "./extra.js": {
+      "types": "./extra.d.mts",
+      "default": "./extra.js"
+    }
+  },
+  "sideEffects": false,
+  "devDependencies": {
+    "@paulmillr/jsbt": "file:../../../.."
+  },
+  "scripts": {
+    "check": "npx --no @paulmillr/jsbt check package.json"
+  }
+}

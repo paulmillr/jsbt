@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -45,8 +45,8 @@ const plain = (res: { stderr: string; stdout: string }) =>
 should('errors passes when examples reject wrong runtime types and return copies', async () => {
   const cwd = fixture('pass');
   const res = await capture(() => runErrors(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(plain(res), /summary: 15 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 15 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should(
@@ -55,28 +55,34 @@ should(
     const cwd = fixture('fail');
     const res = await capture(() => runErrors(['package.json'], { color: false, cwd }));
     const out = plain(res);
-    assert.equal(res.ok, false);
-    assert.match(out, /wrong secretKey=false\n- index\.ts:isValidSecretKey: NO ERROR!/);
-    assert.match(out, /- index\.ts:vague\s+: bad/);
-    assert.match(out, /wrong msg=null\n- index\.ts:badReturnedCoder\.encode: NO ERROR!/);
-    assert.match(
-      out,
+    deepStrictEqual(res.ok, false);
+    deepStrictEqual(
+      /wrong secretKey=false\n- index\.ts:isValidSecretKey: NO ERROR!/.test(out),
+      true
+    );
+    deepStrictEqual(/- index\.ts:vague\s+: bad/.test(out), true);
+    deepStrictEqual(
+      /wrong msg=null\n- index\.ts:badReturnedCoder\.encode: NO ERROR!/.test(out),
+      true
+    );
+    deepStrictEqual(
       new RegExp(
         '\\[WARNING\\] \\(errors\\) src/index\\.ts:\\d+/mutates ' +
           'valid call mutates input at arg\\[0\\]; ' +
           'document explicit mutation or copy input \\(errors-mutation\\)'
-      )
+      ).test(out),
+      true
     );
-    assert.match(
-      out,
+    deepStrictEqual(
       new RegExp(
         '\\[WARNING\\] \\(errors\\) src/index\\.ts:\\d+/aliases ' +
           'return value aliases input; ' +
           'document returned-input aliasing or copy output \\(errors-alias\\)'
-      )
+      ).test(out),
+      true
     );
-    assert.match(out, /summary: 4 passed, 2 warnings, 8 failures, 0 skipped/);
-    assert.match(out, /Errors check found issues/);
+    deepStrictEqual(/summary: 4 passed, 2 warnings, 8 failures, 0 skipped/.test(out), true);
+    deepStrictEqual(/Errors check found issues/.test(out), true);
   }
 );
 
@@ -86,12 +92,15 @@ should('check errors selector runs the standalone errors checker', async () => {
     runJsbt(['check', 'package.json', 'errors'], { color: false, cwd })
   );
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(out, /\[INFO\] \(check\) package\.json:note Checker may return not real errors/);
-  assert.match(out, /wrong secretKey=false/);
-  assert.match(out, /- index\.ts:isValidSecretKey: NO ERROR!/);
-  assert.doesNotMatch(out, /unknown:0 Errors check found issues/);
-  assert.match(out, /jsbt check done in \d+s: errors\(10, \d+s\)/);
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[INFO\] \(check\) package\.json:note Checker may return not real errors/.test(out),
+    true
+  );
+  deepStrictEqual(/wrong secretKey=false/.test(out), true);
+  deepStrictEqual(/- index\.ts:isValidSecretKey: NO ERROR!/.test(out), true);
+  deepStrictEqual(/unknown:0 Errors check found issues/.test(out), false);
+  deepStrictEqual(/jsbt check done in \d+s: errors\(10, \d+s\)/.test(out), true);
 });
 
 should('check errors selector reports unprobeable examples before audit rows', async () => {
@@ -100,16 +109,20 @@ should('check errors selector reports unprobeable examples before audit rows', a
     runJsbt(['check', 'package.json', 'errors'], { color: false, cwd })
   );
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(
-    res.seq.join('\n'),
-    /could not derive valid runtime probes from TSDoc example[\s\S]*wrong bytesLength=true/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /could not derive valid runtime probes from TSDoc example[\s\S]*wrong bytesLength=true/.test(
+      res.seq.join('\n')
+    ),
+    true
   );
-  assert.match(
-    out,
-    /wrong bytesLength=true\n- index\.ts:randomBytes: "bytesLength" expected number, got boolean/
+  deepStrictEqual(
+    /wrong bytesLength=true\n- index\.ts:randomBytes: "bytesLength" expected number, got boolean/.test(
+      out
+    ),
+    true
   );
-  assert.doesNotMatch(out, /wrong 32=/);
+  deepStrictEqual(/wrong 32=/.test(out), false);
 });
 
 should.runWhen(import.meta.url);

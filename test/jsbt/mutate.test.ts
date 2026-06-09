@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -37,46 +37,52 @@ const plain = (res: { stderr: string; stdout: string }) =>
 should('mutate passes on immutable root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await capture(() => runMutate(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('mutate reports mutable object and array exports', async () => {
   const cwd = fixture('fail-mutate');
   const res = await capture(() => runMutate(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(mutate\) 2x mutable array export; add Object\.freeze around it \(mutate\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(mutate\) 2x mutable array export; add Object\.freeze around it \(mutate\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/
+  deepStrictEqual(
+    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /\n  index\.js:mutableArray/);
-  assert.match(plain(res), /\n  index\.js:mutableObject/);
-  assert.match(plain(res), /\n  sub\.js:mutableSub/);
-  assert.match(plain(res), /\n  index\.js:frozenShallow\.nestedArray/);
-  assert.match(plain(res), /\n  index\.js:frozenShallow\.nestedObject/);
-  assert.doesNotMatch(plain(res), /frozenArray/);
-  assert.doesNotMatch(plain(res), /frozenObject/);
-  assert.doesNotMatch(plain(res), /nestedBytes/);
-  assert.doesNotMatch(plain(res), /bytes/);
-  assert.doesNotMatch(plain(res), /words/);
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 5 failures, 0 skipped/);
-  assert.match(plain(res), /Mutate check found issues/);
+  deepStrictEqual(/\n  index\.js:mutableArray/.test(plain(res)), true);
+  deepStrictEqual(/\n  index\.js:mutableObject/.test(plain(res)), true);
+  deepStrictEqual(/\n  sub\.js:mutableSub/.test(plain(res)), true);
+  deepStrictEqual(/\n  index\.js:frozenShallow\.nestedArray/.test(plain(res)), true);
+  deepStrictEqual(/\n  index\.js:frozenShallow\.nestedObject/.test(plain(res)), true);
+  deepStrictEqual(/frozenArray/.test(plain(res)), false);
+  deepStrictEqual(/frozenObject/.test(plain(res)), false);
+  deepStrictEqual(/nestedBytes/.test(plain(res)), false);
+  deepStrictEqual(/bytes/.test(plain(res)), false);
+  deepStrictEqual(/words/.test(plain(res)), false);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 5 failures, 0 skipped/.test(plain(res)), true);
+  deepStrictEqual(/Mutate check found issues/.test(plain(res)), true);
 });
 
 should('check-mutate alias reports mutable exports', async () => {
   const cwd = fixture('fail-mutate');
   const res = await capture(() => runJsbt(['check-mutate', 'package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /\n  index\.js:mutableObject/);
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 5 failures, 0 skipped/);
+  deepStrictEqual(/\n  index\.js:mutableObject/.test(plain(res)), true);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 5 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should.runWhen(import.meta.url);

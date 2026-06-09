@@ -6,21 +6,22 @@
  * Usage:
  *   `jsbt bundle test/build`
  *   `jsbt check package.json`
+ *   `jsbt check package.json bigint`
+ *   `jsbt check package.json bytes`
+ *   `jsbt check package.json comments`
+ *   `jsbt check package.json errors`
+ *   `jsbt check package.json importtime`
+ *   `jsbt check package.json jsdoc`
+ *   `jsbt check package.json jsr`
+ *   `jsbt check package.json jsrpublish`
+ *   `jsbt check package.json mutate`
+ *   `jsbt check package.json patterns`
+ *   `jsbt check package.json readme`
+ *   `jsbt check package.json tests`
+ *   `jsbt check package.json treeshake`
  *   `jsbt check package.json tsdoc`
- *   `jsbt check:install package.json`
- *   `jsbt check:bigint package.json`
- *   `jsbt check:comments package.json`
- *   `jsbt check:errors package.json`
- *   `jsbt check:importtime package.json`
- *   `jsbt check:jsdoc package.json`
- *   `jsbt check:jsr package.json`
- *   `jsbt check:jsrpublish package.json`
- *   `jsbt check:mutate package.json`
- *   `jsbt check:patterns package.json`
- *   `jsbt check:readme package.json`
- *   `jsbt check:tests package.json`
- *   `jsbt check:treeshake package.json test/build/out-treeshake`
- *   `jsbt check:typeimport package.json`
+ *   `jsbt check package.json typeimport`
+ *   `jsbt check-install package.json`
  * @module
  */
 import * as TSDoc from '@microsoft/tsdoc';
@@ -97,31 +98,28 @@ type CheckWorkerData = {
 const usage = `usage:
   jsbt bundle <build-dir> [--auto] [--no-prefix]
   jsbt check <package.json>
-  jsbt check:install <package.json>
-  jsbt check:bigint <package.json>
-  jsbt check:bytes <package.json>
-  jsbt check:comments <package.json>
-  jsbt check:errors <package.json>
-  jsbt check:importtime <package.json>
-  jsbt check:jsr <package.json>
-  jsbt check:jsrpublish <package.json>
-  jsbt check:mutate <package.json>
-  jsbt check:patterns <package.json>
-  jsbt check:readme <package.json>
-  jsbt check:tests <package.json>
-  jsbt check:typeimport <package.json>
-  jsbt check:treeshake <package.json> <out-dir>
-  jsbt check:jsdoc <package.json>
-
-aliases for all commands:
-  jsbt check:treeshake
-  jsbt check-treeshake
-  jsbt treeshake
+  jsbt check <package.json> bigint
+  jsbt check <package.json> bytes
+  jsbt check <package.json> comments
+  jsbt check <package.json> errors
+  jsbt check <package.json> importtime
+  jsbt check <package.json> jsdoc
+  jsbt check <package.json> jsr
+  jsbt check <package.json> jsrpublish
+  jsbt check <package.json> mutate
+  jsbt check <package.json> patterns
+  jsbt check <package.json> readme
+  jsbt check <package.json> tests
+  jsbt check <package.json> treeshake [out-dir]
+  jsbt check <package.json> tsdoc
+  jsbt check <package.json> typeimport
+  jsbt check-install <package.json>
 
 examples:
   npx --no @paulmillr/jsbt bundle test/build
   npx --no @paulmillr/jsbt check package.json
-  npx --no @paulmillr/jsbt check:treeshake package.json test/build/out-treeshake`;
+  npm run check bigint
+  npx --no @paulmillr/jsbt check package.json treeshake`;
 const CHECK_OUT = 'test/build/out-treeshake';
 const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
@@ -150,23 +148,7 @@ const CHECK_ALIASES = {
   'check-patterns': 'patterns',
   'check-readme': 'readme',
   'check-tests': 'tests',
-  'check-treeshake': 'treeshake',
   'check-typeimport': 'typeimport',
-
-  'check:bigint': 'bigint',
-  'check:bytes': 'bytes',
-  'check:comments': 'comments',
-  'check:errors': 'errors',
-  'check:importtime': 'importtime',
-  'check:jsdoc': 'tsdoc',
-  'check:jsr': 'jsr',
-  'check:jsrpublish': 'jsrpublish',
-  'check:mutate': 'mutate',
-  'check:patterns': 'patterns',
-  'check:readme': 'readme',
-  'check:tests': 'tests',
-  'check:treeshake': 'treeshake',
-  'check:typeimport': 'typeimport',
 
   bigint: 'bigint',
   bytes: 'bytes',
@@ -182,6 +164,7 @@ const CHECK_ALIASES = {
   tests: 'tests',
   treeshake: 'treeshake',
   typeimport: 'typeimport',
+  tsdoc: 'tsdoc',
 } as const satisfies Record<string, CheckHead>;
 const issueLines = (text: string): { cont: string[]; line: string; plain: string }[] => {
   const out: { cont: string[]; line: string; plain: string }[] = [];
@@ -336,8 +319,23 @@ const pickErrors = (res: Capture, on: boolean): Pick => {
     lines: sentinel ? [] : out.lines,
   };
 };
-const pickLogs = (head: CheckHead, res: Capture): string[] =>
-  textLines(res.stdout).filter((line) => head === 'errors' || MUTATION_LOG.test(line));
+const pickErrorExamples = (res: Capture, on: boolean): Pick => {
+  const issues: Issue[] = [];
+  for (const item of issueLines(res.stderr)) {
+    if (!item.plain.includes('(errors-example)')) continue;
+    if (!item.plain.includes('could not derive valid runtime probes')) continue;
+    const ref = parseRef(untag(item.plain));
+    issues.push({
+      level: 'WARNING',
+      ref: ref || { file: 'unknown', issue: untag(item.plain), sym: '0' },
+    });
+  }
+  return { count: issues.length, fatal: false, lines: groupIssues('errors', issues, on) };
+};
+const pickLogs = (head: CheckHead, res: Capture, full = false): string[] =>
+  textLines(res.stdout, full).filter(
+    (line) => full || head === 'errors' || MUTATION_LOG.test(line)
+  );
 const checkHead = (name: string | undefined): CheckHead | undefined =>
   name && Object.hasOwn(CHECK_ALIASES, name)
     ? CHECK_ALIASES[name as keyof typeof CHECK_ALIASES]
@@ -373,7 +371,7 @@ const checkTasks = {
     runTreeShaking([args.pkgArg, args.outArg], {
       cwd: opts.cwd,
       onIssue: (issue) => tree.push(issue),
-      quiet: true,
+      quiet: !args.head,
     }),
   tsdoc: (args, opts) =>
     runTSDoc([args.pkgArg], {
@@ -427,7 +425,12 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   let hasFail = false;
   const check = (head: CheckHead, serial?: boolean): CheckRun => ({
     head,
-    pick: (res) => (head === 'errors' ? pickErrors(res, colorOn) : pickIssues(head, res, colorOn)),
+    pick: (res) =>
+      head === 'errors'
+        ? args.head
+          ? pickErrors(res, colorOn)
+          : pickErrorExamples(res, colorOn)
+        : pickIssues(head, res, colorOn),
     serial,
   });
   const allChecks: CheckRun[] = [
@@ -478,7 +481,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   ];
   const list = args.head
     ? allChecks.filter((item) => item.head === args.head)
-    : allChecks.filter((item) => item.head !== 'errors' && item.head !== 'patterns');
+    : allChecks.filter((item) => item.head !== 'patterns');
   const res: TimedCapture[] = [];
   const save = async (i: number, fn: () => Promise<Capture>): Promise<void> => {
     res[i] = await timed(fn);
@@ -500,9 +503,10 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     if (out.fatal) hasFail = true;
     if (item.head === 'errors') {
       for (const line of out.lines) console.error(line);
-      for (const line of pickLogs(item.head, cur)) console.log(line);
+      if (args.head) for (const line of pickLogs(item.head, cur)) console.log(line);
     } else {
-      for (const line of pickLogs(item.head, cur)) console.log(line);
+      const full = !!args.head && item.head === 'treeshake';
+      for (const line of pickLogs(item.head, cur, full)) console.log(line);
       for (const line of out.lines) console.error(line);
     }
     counts.push({ count: out.count, head: item.head, ms: cur.ms });
@@ -541,7 +545,6 @@ const cmdRun = {
   'check-patterns': runPatterns,
   'check-readme': runReadme,
   'check-tests': runTests,
-  'check-treeshake': (argv, opts) => runTreeShaking(argv, { cwd: opts.cwd }),
   'check-typeimport': runTypeImport,
   comments: runComments,
   error: runErrors,

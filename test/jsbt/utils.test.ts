@@ -287,24 +287,12 @@ should('table renders grouped rows with ansi-aware widths', () => {
   const sep = `${bar}\u253c${bar}\u253c${bar}`;
   print.drawHeader(sizes, ['module', 'export', 'result']);
   let prev: string[] | undefined;
-  prev = print.printRow(
-    ['core', 'all', '\x1b[32mok\x1b[0m'],
-    prev,
-    sizes,
-    ['module', 'export']
-  );
-  prev = print.printRow(
-    ['core', 'hash', '\x1b[33mslow\x1b[0m'],
-    prev,
-    sizes,
-    ['module', 'export']
-  );
-  prev = print.printRow(
-    ['extra', 'all', '\x1b[31merror\x1b[0m'],
-    prev,
-    sizes,
-    ['module', 'export']
-  );
+  prev = print.printRow(['core', 'all', '\x1b[32mok\x1b[0m'], prev, sizes, ['module', 'export']);
+  prev = print.printRow(['core', 'hash', '\x1b[33mslow\x1b[0m'], prev, sizes, ['module', 'export']);
+  prev = print.printRow(['extra', 'all', '\x1b[31merror\x1b[0m'], prev, sizes, [
+    'module',
+    'export',
+  ]);
   print.drawSeparator(
     sizes,
     sizes.map(() => true)
@@ -324,9 +312,7 @@ should('reportIssues can make warning-only results fatal with checker-specific t
   const issues = [makeIssue('warn', 'README.md', '1/usage', 'js->ts', 'fence-mismatch')];
   const res = { failures: 0, passed: 0, skipped: 0, warnings: 1 };
   deepStrictEqual(
-    capture(() =>
-      reportIssues('readme', issues, res, false, 'README check found issues', 'error')
-    ),
+    capture(() => reportIssues('readme', issues, res, false, 'README check found issues', 'error')),
     {
       error: 'README check found issues',
       out: [

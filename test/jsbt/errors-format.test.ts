@@ -1,4 +1,4 @@
-import { deepStrictEqual, match } from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -52,7 +52,7 @@ should('errors colors audit group headers', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/group-format');
   const res = await capture(() => runCli(['package.json'], { color: true, cwd }));
   deepStrictEqual(res.ok, true);
-  match(res.stdout, /\x1b\[32mwrong msg=false\x1b\[0m\n- index\.ts:one: /);
+  deepStrictEqual(/\x1b\[32mwrong msg=false\x1b\[0m\n- index\.ts:one: /.test(res.stdout), true);
 });
 
 should('errors does not require generic value labels in expected/got messages', async () => {

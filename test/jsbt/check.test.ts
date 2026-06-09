@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -208,107 +208,124 @@ const typeImportProof = () => {
 should('readme passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runReadme(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('readme reports wrong example on multi-module fixture', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => runReadme(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(all(res), /README\.md:\d+\/usage/);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 1 failure, 0 skipped/);
-  assert.match(all(res), /README check found issues/);
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/README\.md:\d+\/usage/.test(all(res)), true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 1 failure, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/README check found issues/.test(all(res)), true);
 });
 
 should('tsdoc passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 5 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 5 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('tsdoc reports missing docs on multi-module fixture', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(all(res), /broken\.d\.mts:\d+\/broken/);
-  assert.match(all(res), /missing JSDoc/);
-  assert.match(all(res), /missing @param value/);
-  assert.match(all(res), /missing @returns/);
-  assert.match(all(res), /missing @example/);
-  assert.match(all(res), /summary: 2 passed, 0 warnings, 4 failures, 0 skipped/);
-  assert.match(all(res), /JSDoc check found issues/);
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/broken\.d\.mts:\d+\/broken/.test(all(res)), true);
+  deepStrictEqual(/missing JSDoc/.test(all(res)), true);
+  deepStrictEqual(/missing @param value/.test(all(res)), true);
+  deepStrictEqual(/missing @returns/.test(all(res)), true);
+  deepStrictEqual(/missing @example/.test(all(res)), true);
+  deepStrictEqual(/summary: 2 passed, 0 warnings, 4 failures, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/JSDoc check found issues/.test(all(res)), true);
 });
 
 should('tsdoc unwraps TArg and TRet in bag link targets', async () => {
   const cwd = fixture('fail-wrapper-link');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(
-    out,
-    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/Surface @param sign\.options should link to \{@link SignOptions\} \(param\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/Surface @param sign\.options should link to \{@link SignOptions\} \(param\)/.test(
+      out
+    ),
+    true
   );
-  assert.match(
-    out,
-    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/Surface @param verify\.options should link to \{@link VerifyOptions\} \(param\)/
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/Surface @param verify\.options should link to \{@link VerifyOptions\} \(param\)/.test(
+      out
+    ),
+    true
   );
-  assert.doesNotMatch(out, /\{@link TArg\}/);
-  assert.doesNotMatch(out, /\{@link TRet\}/);
-  assert.match(out, /summary: 4 passed, 0 warnings, 2 failures, 0 skipped/);
+  deepStrictEqual(/\{@link TArg\}/.test(out), false);
+  deepStrictEqual(/\{@link TRet\}/.test(out), false);
+  deepStrictEqual(/summary: 4 passed, 0 warnings, 2 failures, 0 skipped/.test(out), true);
 });
 
 should('tsdoc unwraps nested TRet callable intersections', async () => {
   const cwd = fixture('pass-nested-wrapper');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, true);
-  assert.doesNotMatch(out, /missing @param args/);
-  assert.doesNotMatch(out, /missing @param hash\.msg/);
-  assert.doesNotMatch(out, /missing @param hash\.opts/);
-  assert.doesNotMatch(out, /unknown @param log\.url/);
-  assert.doesNotMatch(out, /unknown @param log\.opts/);
-  assert.doesNotMatch(out, /unknown @param msg/);
-  assert.doesNotMatch(out, /unknown @param opts/);
-  assert.match(out, /summary: 3 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/missing @param args/.test(out), false);
+  deepStrictEqual(/missing @param hash\.msg/.test(out), false);
+  deepStrictEqual(/missing @param hash\.opts/.test(out), false);
+  deepStrictEqual(/unknown @param log\.url/.test(out), false);
+  deepStrictEqual(/unknown @param log\.opts/.test(out), false);
+  deepStrictEqual(/unknown @param msg/.test(out), false);
+  deepStrictEqual(/unknown @param opts/.test(out), false);
+  deepStrictEqual(/summary: 3 passed, 0 warnings, 0 failures, 0 skipped/.test(out), true);
 });
 
 should('tsdoc rejects synthetic args docs for nested wrappers', async () => {
   const cwd = fixture('fail-nested-wrapper-args');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(out, /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha missing @param msg \(param\)/);
-  assert.match(out, /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha missing @param opts \(param\)/);
-  assert.match(out, /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha unknown @param args \(param\)/);
-  assert.match(out, /summary: 0 passed, 0 warnings, 3 failures, 0 skipped/);
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha missing @param msg \(param\)/.test(out),
+    true
+  );
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha missing @param opts \(param\)/.test(out),
+    true
+  );
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha unknown @param args \(param\)/.test(out),
+    true
+  );
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 3 failures, 0 skipped/.test(out), true);
 });
 
 should('tsdoc rejects wrapper links for nested callable option bags', async () => {
   const cwd = fixture('fail-nested-wrapper-link');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(
-    out,
-    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha @param opts should link to \{@link OutputOpts\} \(param\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) index\.d\.mts:\d+\/sha @param opts should link to \{@link OutputOpts\} \(param\)/.test(
+      out
+    ),
+    true
   );
-  assert.match(out, /summary: 0 passed, 0 warnings, 1 failure, 0 skipped/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 1 failure, 0 skipped/.test(out), true);
 });
 
 should('tsdoc blames original typed declarations instead of re-exports', async () => {
   const cwd = fixture('fail-reexport-member');
   const res = await run(cwd, () => runTSDoc(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(
-    out,
-    /\[ERROR\] \(tsdoc\) types\.ts:\d+\/OutputOpts missing member JSDoc for dkLen \(member\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) types\.ts:\d+\/OutputOpts missing member JSDoc for dkLen \(member\)/.test(
+      out
+    ),
+    true
   );
-  assert.doesNotMatch(out, /index\.d\.mts:\d+\/OutputOpts missing member JSDoc for dkLen/);
-  assert.doesNotMatch(out, /web\.d\.mts:\d+\/OutputOpts missing member JSDoc for dkLen/);
-  assert.match(out, /summary: 1 passed, 0 warnings, 1 failure, 0 skipped/);
+  deepStrictEqual(/index\.d\.mts:\d+\/OutputOpts missing member JSDoc for dkLen/.test(out), false);
+  deepStrictEqual(/web\.d\.mts:\d+\/OutputOpts missing member JSDoc for dkLen/.test(out), false);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 1 failure, 0 skipped/.test(out), true);
 });
 
 should('treeshake passes on root-entry fixture', async () => {
@@ -316,8 +333,8 @@ should('treeshake passes on root-entry fixture', async () => {
   const res = await run(cwd, () =>
     runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
   );
-  assert.equal(res.ok, true);
-  assert.doesNotMatch(all(res), /found unused locals/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/found unused locals/.test(all(res)), false);
 });
 
 should('treeshake ignores declaration-only type exports', async () => {
@@ -325,9 +342,9 @@ should('treeshake ignores declaration-only type exports', async () => {
   const res = await run(cwd, () =>
     runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
   );
-  assert.equal(res.ok, true);
-  assert.doesNotMatch(all(res), /TypeOnly/);
-  assert.doesNotMatch(all(res), /found unused locals/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/TypeOnly/.test(all(res)), false);
+  deepStrictEqual(/found unused locals/.test(all(res)), false);
 });
 
 should('treeshake reports unused locals on multi-module fixture', async () => {
@@ -335,145 +352,160 @@ should('treeshake reports unused locals on multi-module fixture', async () => {
   const res = await run(cwd, () =>
     runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
   );
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(all(res), /found unused locals in 3 release bundles/);
+  deepStrictEqual(/found unused locals in 3 release bundles/.test(all(res)), true);
 });
 
 should('comments passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runComments(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('comments reports long prose and inline comments on multi-module fixture', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => runComments(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(
-    all(res),
-    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/.test(
+      all(res)
+    ),
+    true
   );
-  assert.match(
-    all(res),
-    /\[ERROR\] \(comments\) src\/broken\.ts:\d+\/inline-comment line exceeds 100 chars with inline comment; move comment above the code \(inline-comment\)/
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) src\/broken\.ts:\d+\/inline-comment line exceeds 100 chars with inline comment; move comment above the code \(inline-comment\)/.test(
+      all(res)
+    ),
+    true
   );
-  assert.doesNotMatch(all(res), /src\/dupe\.ts:inline-comment/);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 4 failures, 0 skipped/);
-  assert.match(all(res), /Comments check found issues/);
+  deepStrictEqual(/src\/dupe\.ts:inline-comment/.test(all(res)), false);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 4 failures, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/Comments check found issues/.test(all(res)), true);
 });
 
 should('bigint passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runBigInt(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('bigint reports raw bigint literals and suggests BigInt helpers', async () => {
   const cwd = fixture('fail-bigint');
   const res = await run(cwd, () => runBigInt(['package.json'], { color: false, cwd }));
   const out = plain(res);
-  assert.equal(res.ok, false);
-  assert.match(
-    out,
-    /\[ERROR\] \(bigint\) 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(bigint\) 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/.test(
+      out
+    ),
+    true
   );
-  assert.match(out, /1n -> \/\* @__PURE__ \*\/ BigInt\(1\)/);
-  assert.match(out, /-1n -> \/\* @__PURE__ \*\/ BigInt\(-1\)/);
-  assert.match(
-    out,
-    /0x123456789abcdef123456789n -> \/\* @__PURE__ \*\/ BigInt\('0x123456789abcdef123456789'\)/
+  deepStrictEqual(/1n -> \/\* @__PURE__ \*\/ BigInt\(1\)/.test(out), true);
+  deepStrictEqual(/-1n -> \/\* @__PURE__ \*\/ BigInt\(-1\)/.test(out), true);
+  deepStrictEqual(
+    /0x123456789abcdef123456789n -> \/\* @__PURE__ \*\/ BigInt\('0x123456789abcdef123456789'\)/.test(
+      out
+    ),
+    true
   );
-  assert.match(all(res), /summary: 0 passed, 0 warnings, 3 failures, 0 skipped/);
-  assert.match(all(res), /BigInt check found issues/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 3 failures, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/BigInt check found issues/.test(all(res)), true);
 });
 
 should('importtime passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runImportTime(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /module/);
-  assert.match(all(res), /index\.js/);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/module/.test(all(res)), true);
+  deepStrictEqual(/index\.js/.test(all(res)), true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('importtime warns on slow public entry and prints table', async () => {
   const cwd = fixture('warn-import');
   const res = await run(cwd, () => runImportTime(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /module/);
-  assert.match(all(res), /slow\.js/);
-  assert.match(all(res), /limit/);
-  assert.match(all(res), /slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/);
-  assert.doesNotMatch(all(res), /import exceeds/);
-  assert.match(all(res), /summary: 1 passed, 1 warning, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/module/.test(all(res)), true);
+  deepStrictEqual(/slow\.js/.test(all(res)), true);
+  deepStrictEqual(/limit/.test(all(res)), true);
+  deepStrictEqual(/slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(all(res)), true);
+  deepStrictEqual(/import exceeds/.test(all(res)), false);
+  deepStrictEqual(/summary: 1 passed, 1 warning, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('importtime skips root trap modules', async () => {
   const cwd = fixture('skip-import');
   const res = await run(cwd, () => runImportTime(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /index\.js/);
-  assert.match(all(res), /\bskip\b/);
-  assert.doesNotMatch(all(res), /failed to import root module cannot be imported/);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 1 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/index\.js/.test(all(res)), true);
+  deepStrictEqual(/\bskip\b/.test(all(res)), true);
+  deepStrictEqual(/failed to import root module cannot be imported/.test(all(res)), false);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 1 skipped/.test(all(res)), true);
 });
 
 should('importtime fails on very slow public entry', async () => {
   const cwd = fixture('fail-import');
   const res = await run(cwd, () => runImportTime(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(all(res), /slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 1 failure, 0 skipped/);
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(all(res)), true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 1 failure, 0 skipped/.test(all(res)), true);
 });
 
 should('typeimport passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => runTypeImport(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true);
-  assert.match(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should('typeimport reports local import(...) types in public declarations', async () => {
   const cwd = fixture('fail-typeimport');
   const res = await run(cwd, () => runTypeImport(['package.json'], { color: false, cwd }));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Pair \} from '\.\/types\.ts'; export type \{ Pair \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/
+  deepStrictEqual(
+    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Pair \} from '\.\/types\.ts'; export type \{ Pair \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(all(res), /summary: 0 passed, 0 warnings, 2 failures, 0 skipped/);
-  assert.match(all(res), /Type import check found issues/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 2 failures, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/Type import check found issues/.test(all(res)), true);
 });
 
 should('typeimport proof prefers local import type plus local export type', () => {
   const res = typeImportProof();
-  assert.equal(res.good.ok, true, res.good.text);
-  assert.doesNotMatch(res.good.dts, /import\("\.\/x\.ts"\)\.Foo/);
-  assert.match(res.good.dts, /import type \{ Foo \} from '\.\/x\.ts';/);
-  assert.equal(res.bad.ok, false);
-  assert.match(res.bad.text, /Cannot find name 'Foo'/);
+  deepStrictEqual(res.good.ok, true, res.good.text);
+  deepStrictEqual(/import\("\.\/x\.ts"\)\.Foo/.test(res.good.dts), false);
+  deepStrictEqual(/import type \{ Foo \} from '\.\/x\.ts';/.test(res.good.dts), true);
+  deepStrictEqual(res.bad.ok, false);
+  deepStrictEqual(/Cannot find name 'Foo'/.test(res.bad.text), true);
 });
 
 should('check passes on root-entry fixture with default out dir', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, true, all(res));
-  assert.match(
-    plain(res),
-    /\[INFO\] \(check\) package\.json:note Checker may return not real errors or flag correct code; it is here to point at issues, not something that should have strict zero errors/
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(
+    /\[INFO\] \(check\) package\.json:note Checker may return not real errors or flag correct code; it is here to point at issues, not something that should have strict zero errors/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    all(res),
+  deepStrictEqual(
     checkSummary([
       ['readme', 0],
       ['treeshake', 0],
@@ -482,40 +514,60 @@ should('check passes on root-entry fixture with default out dir', async () => {
       ['jsr', 0],
       ['jsrpublish', 0],
       ['comments', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
       ['importtime', 0],
-    ])
+    ]).test(all(res)),
+    true
   );
 });
 
 should('check accepts a second-arg selector and runs only tsdoc', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'tsdoc'], cwd));
-  assert.equal(res.ok, false);
-  assert.match(plain(res), /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(readme\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(treeshake\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(jsr\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(comments\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(bytes\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(mutate\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tests\)/);
-  assert.doesNotMatch(plain(res), /\[(?:ERROR|WARNING)\] \(importtime\)/);
-  assert.match(plain(res), checkSummary([['tsdoc', 4]]));
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/.test(plain(res)),
+    true
+  );
+  deepStrictEqual(/\[ERROR\] \(readme\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(treeshake\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(jsr\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(comments\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(bytes\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(mutate\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tests\)/.test(plain(res)), false);
+  deepStrictEqual(/\[(?:ERROR|WARNING)\] \(importtime\)/.test(plain(res)), false);
+  deepStrictEqual(checkSummary([['tsdoc', 4]]).test(plain(res)), true);
+});
+
+should('check treeshake selector prints standalone treeshake table', async () => {
+  const cwd = fixture('pass-root');
+  const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'treeshake'], cwd));
+  const out = plain(res);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(
+    /module\s+\u2502export\s+\u2502min bundle\s+\u2502LOC\s+\u2502min KB/.test(out),
+    true
+  );
+  deepStrictEqual(/@jsbt-test\/check-root\s+\u2502/.test(out), true);
+  deepStrictEqual(/_tree_shaking_jsbt-test-check-root\.min\.js/.test(out), true);
+  deepStrictEqual(/index\s+\u2502all\s+\u2502\s+index\/_tree_shaking_all\.min\.js/.test(out), true);
+  deepStrictEqual(checkSummary([['treeshake', 0]]).test(out), true);
 });
 
 should('check accepts a patterns selector without defaulting to all checks', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'patterns'], cwd));
-  assert.equal(res.ok, true, all(res));
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(readme\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(treeshake\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tsdoc\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(jsr\)/);
-  assert.match(plain(res), checkSummary([['patterns', 0]]));
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/\[ERROR\] \(readme\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(treeshake\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tsdoc\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(jsr\)/.test(plain(res)), false);
+  deepStrictEqual(checkSummary([['patterns', 0]]).test(plain(res)), true);
 });
 
 should('check accepts a jsrpublish selector and asks for full output', async () => {
@@ -530,9 +582,9 @@ should('check accepts a jsrpublish selector and asks for full output', async () 
       },
     })
   );
-  assert.equal(res.ok, true, all(res));
-  assert.equal(full, true);
-  assert.match(plain(res), checkSummary([['jsrpublish', 0]]));
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(full, true);
+  deepStrictEqual(checkSummary([['jsrpublish', 0]]).test(plain(res)), true);
 });
 
 should('check keeps a non-selector second arg as treeshake out dir', async () => {
@@ -540,13 +592,14 @@ should('check keeps a non-selector second arg as treeshake out dir', async () =>
   const res = await run(cwd, () =>
     checkJsbt(['check', 'package.json', 'test/build/custom-treeshake'], cwd)
   );
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/custom-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/custom-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
+  deepStrictEqual(
     checkSummary([
       ['tsdoc', 4],
       ['comments', 4],
@@ -555,12 +608,14 @@ should('check keeps a non-selector second arg as treeshake out dir', async () =>
       ['jsr', 1],
       ['typeimport', 0],
       ['jsrpublish', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
       ['importtime', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
@@ -569,24 +624,25 @@ should('check replays fs-modify activity when log level allows it', async () => 
   const res = await withEnv('JSBT_LOG_LEVEL', '1', () =>
     run(cwd, () => checkJsbt(['check', 'package.json'], cwd))
   );
-  assert.equal(res.ok, true);
-  assert.match(all(res), /> cd /);
-  assert.match(all(res), /> npm install/);
-  assert.doesNotMatch(all(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(/> cd /.test(all(res)), true);
+  deepStrictEqual(/> npm install/.test(all(res)), true);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), false);
 });
 
 should('check reports importtime warnings without failing', async () => {
   const cwd = fixture('warn-import');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, true);
-  assert.match(
-    plain(res),
-    /\[WARNING\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/
+  deepStrictEqual(res.ok, true);
+  deepStrictEqual(
+    /\[WARNING\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /import exceeds/);
-  assert.doesNotMatch(plain(res), /module\s+│file/);
-  assert.match(
-    plain(res),
+  deepStrictEqual(/import exceeds/.test(plain(res)), false);
+  deepStrictEqual(/module\s+│file/.test(plain(res)), false);
+  deepStrictEqual(
     checkSummary([
       ['importtime', 1],
       ['readme', 0],
@@ -596,25 +652,28 @@ should('check reports importtime warnings without failing', async () => {
       ['jsr', 0],
       ['jsrpublish', 0],
       ['comments', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
 should('check fails on importtime errors without table', async () => {
   const cwd = fixture('fail-import');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /module\s+│file/);
-  assert.match(
-    plain(res),
+  deepStrictEqual(/module\s+│file/.test(plain(res)), false);
+  deepStrictEqual(
     checkSummary([
       ['importtime', 1],
       ['readme', 0],
@@ -624,19 +683,23 @@ should('check fails on importtime errors without table', async () => {
       ['jsr', 0],
       ['jsrpublish', 0],
       ['comments', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
 should('check keeps importtime on the serial lane', () => {
   const src = readFileSync(resolve('src/jsbt/index.ts'), 'utf8');
-  assert.match(
-    src,
-    /{\s*head: 'importtime',[\s\S]*?pick: \(res\) => pickIssues\('importtime', res, colorOn\),[\s\S]*?serial: true,\s*}/
+  deepStrictEqual(
+    /{\s*head: 'importtime',[\s\S]*?pick: \(res\) => pickIssues\('importtime', res, colorOn\),[\s\S]*?serial: true,\s*}/.test(
+      src
+    ),
+    true
   );
 });
 
@@ -649,32 +712,36 @@ should('worker-backed checks exit after imported modules leave handles open', as
   ]) {
     const res = await workerJsbt(cwd, argv);
     const text = [all(res), res.error].filter(Boolean).join('\n');
-    assert.equal(res.timedOut, false, text);
-    assert.equal(res.code, 0, text);
-    assert.match(text, /summary: 1 passed, 0 warnings, 0 failures, 0 skipped|jsbt check done in/);
+    deepStrictEqual(res.timedOut, false, text);
+    deepStrictEqual(res.code, 0, text);
+    deepStrictEqual(
+      /summary: 1 passed, 0 warnings, 0 failures, 0 skipped|jsbt check done in/.test(text),
+      true
+    );
   }
 });
 
 should('check reports bigint issues and keeps other checks green', async () => {
   const cwd = fixture('fail-bigint');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(bigint\) 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(bigint\) 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(readme\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(treeshake\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tsdoc\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(typeimport\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(jsr\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(comments\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(bytes\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(mutate\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tests\)/);
-  assert.doesNotMatch(plain(res), /\[(?:ERROR|WARNING)\] \(importtime\)/);
-  assert.match(
-    plain(res),
+  deepStrictEqual(/\[ERROR\] \(readme\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(treeshake\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tsdoc\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(typeimport\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(jsr\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(comments\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(bytes\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(mutate\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tests\)/.test(plain(res)), false);
+  deepStrictEqual(/\[(?:ERROR|WARNING)\] \(importtime\)/.test(plain(res)), false);
+  deepStrictEqual(
     checkSummary([
       ['bigint', 3],
       ['readme', 0],
@@ -684,38 +751,43 @@ should('check reports bigint issues and keeps other checks green', async () => {
       ['jsr', 0],
       ['jsrpublish', 0],
       ['comments', 0],
+      ['errors', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
       ['importtime', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
 should('check reports typeimport issues and keeps other checks green', async () => {
   const cwd = fixture('fail-typeimport');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Pair \} from '\.\/types\.ts'; export type \{ Pair \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/
+  deepStrictEqual(
+    /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Pair \} from '\.\/types\.ts'; export type \{ Pair \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(readme\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(treeshake\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tsdoc\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(jsr\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(comments\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(bigint\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(bytes\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(mutate\)/);
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(tests\)/);
-  assert.doesNotMatch(plain(res), /\[(?:ERROR|WARNING)\] \(importtime\)/);
-  assert.match(
-    plain(res),
+  deepStrictEqual(/\[ERROR\] \(readme\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(treeshake\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tsdoc\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(jsr\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(comments\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(bigint\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(bytes\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(mutate\)/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] \(tests\)/.test(plain(res)), false);
+  deepStrictEqual(/\[(?:ERROR|WARNING)\] \(importtime\)/.test(plain(res)), false);
+  deepStrictEqual(
     checkSummary([
       ['typeimport', 2],
       ['readme', 0],
@@ -724,50 +796,66 @@ should('check reports typeimport issues and keeps other checks green', async () 
       ['jsr', 0],
       ['jsrpublish', 0],
       ['comments', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
       ['importtime', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
 should('check runs all checks before failing', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(readme\) README\.md:12\/usage Argument of type 'string' is not assignable to parameter of type 'number'\. \(type\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(readme\) README\.md:12\/usage Argument of type 'string' is not assignable to parameter of type 'number'\. \(type\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/
+  deepStrictEqual(
+    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/broken\.js -> \.\/src\/broken\.ts/
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/.test(plain(res)),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/broken\.js -> \.\/src\/broken\.ts/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /\[ERROR\] \(bigint\)/);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(comments\) src\/broken\.ts:\d+\/inline-comment line exceeds 100 chars with inline comment; move comment above the code \(inline-comment\)/
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(
-    plain(res),
-    /\[ERROR\] \(comments\) src\/alpha\.ts:\d+\/comment comment line exceeds 100 chars; reword comment \(comment\)/
+  deepStrictEqual(/\[ERROR\] \(bigint\)/.test(plain(res)), false);
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) src\/broken\.ts:\d+\/inline-comment line exceeds 100 chars with inline comment; move comment above the code \(inline-comment\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /src\/dupe\.ts:\d+\/inline-comment/);
-  assert.doesNotMatch(plain(res), /module\s+│export/);
-  assert.doesNotMatch(plain(res), /summary:/);
-  assert.match(
-    plain(res),
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) src\/alpha\.ts:\d+\/comment comment line exceeds 100 chars; reword comment \(comment\)/.test(
+      plain(res)
+    ),
+    false
+  );
+  deepStrictEqual(/src\/dupe\.ts:\d+\/inline-comment/.test(plain(res)), false);
+  deepStrictEqual(/module\s+│export/.test(plain(res)), false);
+  deepStrictEqual(/summary:/.test(plain(res)), false);
+  deepStrictEqual(
     checkSummary([
       ['tsdoc', 4],
       ['comments', 4],
@@ -776,12 +864,14 @@ should('check runs all checks before failing', async () => {
       ['jsr', 1],
       ['typeimport', 0],
       ['jsrpublish', 0],
+      ['errors', 0],
       ['bigint', 0],
       ['bytes', 0],
       ['mutate', 0],
       ['tests', 0],
       ['importtime', 0],
-    ])
+    ]).test(plain(res)),
+    true
   );
 });
 
@@ -790,25 +880,32 @@ should('check keeps detailed issues when color is enabled', async () => {
   const res = await run(cwd, () =>
     runJsbt(['check', 'package.json'], { color: true, cwd, runJsrPublish: okJsrPublish })
   );
-  assert.equal(res.ok, false);
-  assert.match(all(res), /\[\x1b\[31mERROR\x1b\[0m\] \(readme\)/);
-  assert.match(plain(res), /\[ERROR\] \(readme\) README\.md:12\/usage/);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n(?:  .+\n)*  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/\[\x1b\[31mERROR\x1b\[0m\] \(readme\)/.test(all(res)), true);
+  deepStrictEqual(/\[ERROR\] \(readme\) README\.md:12\/usage/.test(plain(res)), true);
+  deepStrictEqual(
+    /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n(?:  .+\n)*  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/
+  deepStrictEqual(
+    /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/.test(plain(res)),
+    true
   );
-  assert.doesNotMatch(plain(res), /src\/dupe\.ts:\d+\/inline-comment/);
-  assert.match(all(res), /\x1b\[33m(?:\d+h \d+min \d+s|\d+min \d+s|\d+s)\x1b\[0m/);
+  deepStrictEqual(
+    /\[ERROR\] \(comments\) 3x comment line exceeds 100 chars; reword comment \(comment\)\n  src\/alpha\.ts:\d+\/comment\n  src\/index\.ts:\d+\/comment\n  src\/note\.ts:\d+\/comment/.test(
+      plain(res)
+    ),
+    true
+  );
+  deepStrictEqual(/src\/dupe\.ts:\d+\/inline-comment/.test(plain(res)), false);
+  deepStrictEqual(/\x1b\[33m(?:\d+h \d+min \d+s|\d+min \d+s|\d+s)\x1b\[0m/.test(all(res)), true);
 });
 
 should('FORCE_COLOR overrides NO_COLOR', () => {
-  assert.equal(wantColor({ FORCE_COLOR: '1', NO_COLOR: '1' }, false), true);
-  assert.equal(wantColor({ CLICOLOR_FORCE: '1', NO_COLOR: '1' }, false), true);
+  deepStrictEqual(wantColor({ FORCE_COLOR: '1', NO_COLOR: '1' }, false), true);
+  deepStrictEqual(wantColor({ CLICOLOR_FORCE: '1', NO_COLOR: '1' }, false), true);
 });
 
 should('bundled importtime does not run imported subcommands', async () => {
@@ -836,9 +933,9 @@ should('bundled importtime does not run imported subcommands', async () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     });
     const text = all(res);
-    assert.equal(res.ok, true, text);
-    assert.doesNotMatch(text, /expected <package\.json>/);
-    assert.match(text, /summary: 1 passed, 0 warnings, 0 failures, 1 skipped/);
+    deepStrictEqual(res.ok, true, text);
+    deepStrictEqual(/expected <package\.json>/.test(text), false);
+    deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 1 skipped/.test(text), true);
   } finally {
     process.argv = prevArgv;
     process.chdir(prevCwd);

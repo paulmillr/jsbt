@@ -1,4 +1,4 @@
-import { deepStrictEqual, match } from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as ts from 'typescript';
@@ -190,6 +190,11 @@ should('patterns CLI scans source files and skips tests', async () => {
   writeFileSync(join(TMP, 'test/bad.test.ts'), 'const value = 1;\nvoid value;\n');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd: TMP }));
   deepStrictEqual(res.ok, true);
-  match(res.stdout, /\[pass\] summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(
+    /\[pass\] summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(res.stdout),
+    true
+  );
   deepStrictEqual(res.stderr, '');
 });
+
+should.runWhen(import.meta.url);

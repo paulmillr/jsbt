@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -38,8 +38,8 @@ const run = (cwd: string) => capture(() => runJsr(['package.json'], { color: fal
 should('jsr passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd);
-  assert.equal(res.ok, true, all(res));
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should(
@@ -47,112 +47,144 @@ should(
   async () => {
     const cwd = fixture('pass-src');
     const res = await run(cwd);
-    assert.equal(res.ok, true, all(res));
-    assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+    deepStrictEqual(res.ok, true, all(res));
+    deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
   }
 );
 
 should('jsr accepts type-only public source deps from devDependencies', async () => {
   const cwd = fixture('pass-typeonly-dev');
   const res = await run(cwd);
-  assert.equal(res.ok, true, all(res));
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should('jsr forces import mappings for optional peer runtime deps', async () => {
   const cwd = fixture('fail-optional-peer-import');
   const res = await run(cwd);
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @awasm\/compiler -> jsr:@awasm\/compiler@0\.1\.1/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @awasm\/compiler -> jsr:@awasm\/compiler@0\.1\.1/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(
-    plain(res),
-    /\[ERROR\] \(jsr\) package\.json:dependencies add package dependency for exported source import @awasm\/compiler \(jsr-dep\)/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) package\.json:dependencies add package dependency for exported source import @awasm\/compiler \(jsr-dep\)/.test(
+      plain(res)
+    ),
+    false
   );
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 1 failure, 0 skipped/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 1 failure, 0 skipped/.test(plain(res)), true);
 });
 
 should('jsr reports gitignored module graph paths with publish.exclude unignore hint', async () => {
   const cwd = fixture('fail-gitignored-graph');
   const res = await run(cwd);
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) 2x unignore gitignored module graph path; add publish\.exclude entry !src\/generated \(jsr-gitignore\)\n  src\/generated\/index\.ts:gitignore\n  src\/generated\/util\.js:gitignore/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) 2x unignore gitignored module graph path; add publish\.exclude entry !src\/generated \(jsr-gitignore\)\n  src\/generated\/index\.ts:gitignore\n  src\/generated\/util\.js:gitignore/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 2 failures, 0 skipped/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 2 failures, 0 skipped/.test(plain(res)), true);
 });
 
-should('jsr accepts gitignored module graph paths when publish.exclude already unignores them', async () => {
-  const cwd = fixture('pass-gitignored-unignored');
-  const res = await run(cwd);
-  assert.equal(res.ok, true, all(res));
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
-});
+should(
+  'jsr accepts gitignored module graph paths when publish.exclude already unignores them',
+  async () => {
+    const cwd = fixture('pass-gitignored-unignored');
+    const res = await run(cwd);
+    deepStrictEqual(res.ok, true, all(res));
+    deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
+  }
+);
 
 should('jsr reports export, import, publish, version, and name mismatches', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd);
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) jsr\.json:version version mismatch; expected 1\.2\.3 from package\.json \(jsr-version\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) jsr\.json:version version mismatch; expected 1\.2\.3 from package\.json \(jsr-version\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) jsr\.json:name name mismatch; expected @paulmillr\/micro-jsr-fail from package\.json \(jsr-name\)/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) jsr\.json:name name mismatch; expected @paulmillr\/micro-jsr-fail from package\.json \(jsr-name\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/util\.js -> \.\/src\/util\.ts/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/util\.js -> \.\/src\/util\.ts/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) remove unexpected jsr export mapping \(jsr-export-extra\)\n  jsr\.json:exports \.\/extra\.js -> \.\/src\/extra\.ts/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) remove unexpected jsr export mapping \(jsr-export-extra\)\n  jsr\.json:exports \.\/extra\.js -> \.\/src\/extra\.ts/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) remove unexpected jsr import mapping \(jsr-import-extra\)\n  jsr\.json:imports unused -> jsr:@paulmillr\/unused/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) remove unexpected jsr import mapping \(jsr-import-extra\)\n  jsr\.json:imports unused -> jsr:@paulmillr\/unused/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) 2x add required publish entry \(jsr-publish-required\)\n  jsr\.json:publish LICENSE\n  jsr\.json:publish README\.md/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) 2x add required publish entry \(jsr-publish-required\)\n  jsr\.json:publish LICENSE\n  jsr\.json:publish README\.md/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) 2x add publish coverage for exported source graph \(jsr-publish\)\n  jsr\.json:publish src\/shared\.ts\n  jsr\.json:publish src\/util\.ts/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) 2x add publish coverage for exported source graph \(jsr-publish\)\n  jsr\.json:publish src\/shared\.ts\n  jsr\.json:publish src\/util\.ts/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) remove non-source publish entry \(jsr-publish-source\)\n  jsr\.json:publish util\.js/
+  deepStrictEqual(
+    /\[ERROR\] \(jsr\) remove non-source publish entry \(jsr-publish-source\)\n  jsr\.json:publish util\.js/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 12 failures, 0 skipped/);
-  assert.match(plain(res), /JSR check found issues/);
+  deepStrictEqual(/summary: 0 passed, 0 warnings, 12 failures, 0 skipped/.test(plain(res)), true);
+  deepStrictEqual(/JSR check found issues/.test(plain(res)), true);
 });
 
-should('jsr reports stale import versions from package.json deps while allowing jsr package remaps', async () => {
-  const cwd = fixture('fail-version');
-  const res = await run(cwd);
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes@\^2\.2\.0\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed@\^0\.8\.0/
-  );
-  assert.doesNotMatch(plain(res), /summary: 1 passed/);
-  assert.match(plain(res), /summary: 0 passed, 0 warnings, 2 failures, 0 skipped/);
-});
+should(
+  'jsr reports stale import versions from package.json deps while allowing jsr package remaps',
+  async () => {
+    const cwd = fixture('fail-version');
+    const res = await run(cwd);
+    deepStrictEqual(res.ok, false);
+    deepStrictEqual(
+      /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes@\^2\.2\.0\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed@\^0\.8\.0/.test(
+        plain(res)
+      ),
+      true
+    );
+    deepStrictEqual(/summary: 1 passed/.test(plain(res)), false);
+    deepStrictEqual(/summary: 0 passed, 0 warnings, 2 failures, 0 skipped/.test(plain(res)), true);
+  }
+);
 
 should('check-jsr alias runs jsr checker', async () => {
   const cwd = fixture('pass-root');
   const res = await capture(() => runJsbt(['check-jsr', 'package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true, all(res));
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should.runWhen(import.meta.url);

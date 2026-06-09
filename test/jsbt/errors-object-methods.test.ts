@@ -1,4 +1,4 @@
-import { deepStrictEqual, doesNotMatch, match } from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -33,181 +33,188 @@ should('errors probes documented public object method examples with method label
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
-    /wrong seed=false\n- index\.ts:suite\.keygen\s+: "seed" expected Uint8Array, got type=boolean/
+  deepStrictEqual(
+    /wrong seed=false\n- index\.ts:suite\.keygen\s+: "seed" expected Uint8Array, got type=boolean/.test(
+      res.stdout
+    ),
+    true
   );
-  match(
-    res.stdout,
-    /wrong msg=false[\s\S]*- index\.ts:suite\.sign\s+: "msg" expected Uint8Array, got type=boolean/
+  deepStrictEqual(
+    /wrong msg=false[\s\S]*- index\.ts:suite\.sign\s+: "msg" expected Uint8Array, got type=boolean/.test(
+      res.stdout
+    ),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong sig=false[\\s\\S]*',
       '- index\\.ts:suite\\.verify\\s+: ',
       '"sig" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong secretKey=false[\\s\\S]*',
       '- index\\.ts:suite\\.getPublicKey\\s+: ',
       '"secretKey" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong secretKey=false[\\s\\S]*',
       '- index\\.ts:suite\\.utils\\.isValidSecretKey\\s+: ',
       '"secretKey" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /wrong arg\d+=/);
-  doesNotMatch(res.stderr, /could not derive valid runtime probes/);
+  deepStrictEqual(/wrong arg\d+=/.test(res.stdout), false);
+  deepStrictEqual(/could not derive valid runtime probes/.test(res.stderr), false);
 });
 
 should('errors labels dynamically discovered returned methods from method docs', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong plaintext=false[\\s\\S]*',
       '- index\\.ts:makeBox\\.encrypt: ',
       '"plaintext" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong ciphertext=false[\\s\\S]*',
       '- index\\.ts:makeBox\\.decrypt: ',
       '"ciphertext" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong output=false[\\s\\S]*',
       '- index\\.ts:box\\.encrypt\\s+: ',
       '"output" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /wrong arg\d+=/);
+  deepStrictEqual(/wrong arg\d+=/.test(res.stdout), false);
 });
 
 should('errors replays chain self expressions before probing consuming methods', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong output=false[\\s\\S]*',
       '- index\\.ts:makeChain\\.update\\.digestInto\\s*: ',
       '"output" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /chain has been destroyed/);
-  doesNotMatch(res.stdout, /makeChain\(key\)\.update/);
+  deepStrictEqual(/chain has been destroyed/.test(res.stdout), false);
+  deepStrictEqual(/makeChain\(key\)\.update/.test(res.stdout), false);
 });
 
 should('errors reuses example args when probing returned suite methods', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong msg=false[\\s\\S]*',
       '- index\\.ts:makeReturnedSuite\\.sign\\s*: ',
       '"msg" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong sig=false[\\s\\S]*',
       '- index\\.ts:makeReturnedSuite\\.verify\\s*: ',
       '"sig" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong publicKey=false[\\s\\S]*',
       '- index\\.ts:makeReturnedSuite\\.verify\\s*: ',
       '"publicKey" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /makeReturnedSuite\.(?:sign|verify)[^\n]+undefined/);
+  deepStrictEqual(/makeReturnedSuite\.(?:sign|verify)[^\n]+undefined/.test(res.stdout), false);
 });
 
 should('errors derives sibling returned-suite args from keygen and sign methods', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong sig=false[\\s\\S]*',
       '- index\\.ts:makeRegistry\\.short\\.verify\\s*: ',
       '"sig" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong publicKey=false[\\s\\S]*',
       '- index\\.ts:makeRegistry\\.short\\.verify\\s*: ',
       '"publicKey" expected Uint8Array, got type=boolean',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /makeRegistry\.(?:long|short)\.verify[^\n]+undefined/);
+  deepStrictEqual(/makeRegistry\.(?:long|short)\.verify[^\n]+undefined/.test(res.stdout), false);
 });
 
 should('errors derives hashed signer args without optional runtime guard noise', async () => {
   const cwd = resolve('test/jsbt/vectors/errors/object-methods');
   const res = await capture(() => runCli(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, true);
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong publicKey=false[\\s\\S]*',
       '- index\\.ts:makeHashedRegistry\\.long\\.verify\\s*: ',
       '"publicKey" expected public key',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong publicKey=false[\\s\\S]*',
       '- index\\.ts:makeHashedRegistry\\.short\\.verify\\s*: ',
       '"publicKey" expected public key',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong publicKey=false[\\s\\S]*',
       '- index\\.ts:registry\\.long\\.verify\\s*: ',
       '"publicKey" expected public key',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  match(
-    res.stdout,
+  deepStrictEqual(
     rx([
       'wrong signature=false[\\s\\S]*',
       '- index\\.ts:makeHashedRegistry\\.short\\.verify\\s*: ',
       '"signature" expected signature',
-    ])
+    ]).test(res.stdout),
+    true
   );
-  doesNotMatch(res.stdout, /wrong unusedArg=/);
-  doesNotMatch(res.stdout, /makeHashedRegistry\.(?:long|short)\.(?:sign|verify)[^\n]+undefined/);
+  deepStrictEqual(/wrong unusedArg=/.test(res.stdout), false);
+  deepStrictEqual(
+    /makeHashedRegistry\.(?:long|short)\.(?:sign|verify)[^\n]+undefined/.test(res.stdout),
+    false
+  );
 });
 
 should.runWhen(import.meta.url);

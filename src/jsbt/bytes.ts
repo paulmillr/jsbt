@@ -338,7 +338,7 @@ const genAliasMsg = (name: Typed, alias: string, raw: string, mode: Mode): strin
     `avoid generic typed-array alias ${alias} (${genericDef(alias, raw)});`,
     `define ${rawDef(name, alias)}, then`,
   ].join(' ');
-  return `${base}${modeUse(alias, mode)}`;
+  return `${base} ${modeUse(alias, mode)}`;
 };
 const inMsg = (name: Typed, alias: string): string =>
   `use ${name} in input types instead of ${labelIn(name, alias)}`;

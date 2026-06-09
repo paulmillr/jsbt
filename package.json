@@ -29,8 +29,9 @@
     "build": "tsc -p tsconfig.example.json && npm run bundle:bin && chmod +x jsbt.bin.js",
     "bundle": "esbuild src/jsbt/index.ts --bundle --platform=node --format=esm --target=node22",
     "bundle:bin": "npm run bundle -- --define:__JSBT_BUNDLE__=true --outfile=jsbt.bin.js --banner:js='#!/usr/bin/env node'",
+    "clean": "node --experimental-strip-types test/jsbt/clean.ts",
     "format": "npx prettier --write src",
-    "test": "echo 'No test'",
+    "test": "node --experimental-strip-types test/index.ts",
     "test:bun": "echo 'No bun'",
     "test:deno": "echo 'No deno'"
   },

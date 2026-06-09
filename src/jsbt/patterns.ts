@@ -100,6 +100,8 @@ const lineSpan = (src: any, node: any): number => {
     src.getLineAndCharacterOfPosition(end).line - src.getLineAndCharacterOfPosition(start).line + 1
   );
 };
+const lineOf = (src: any, node: any): number =>
+  src.getLineAndCharacterOfPosition(nodeStart(src, node)).line;
 const simpleValue = (ts: TsLike, node: any): boolean =>
   isNode(ts, node, 'Identifier') ||
   isNode(ts, node, 'PropertyAccessExpression') ||
@@ -324,8 +326,11 @@ const checkAliases = (
   }
 };
 const checkBraces = (ts: TsLike, src: any, node: any, issues: PatternIssue[]): void => {
+  // TypeScript expression nodes exclude surrounding `if (` / `)`, so line-span the head too.
+  const headMulti = (stmt: any): boolean => lineOf(src, node) + 1 < lineOf(src, stmt);
   const needs = (stmt: any, cond: any): boolean =>
-    !isNode(ts, stmt, 'Block') && (spanMulti(src, cond) || spanMulti(src, stmt));
+    !isNode(ts, stmt, 'Block') &&
+    (spanMulti(src, cond) || headMulti(stmt) || spanMulti(src, stmt));
   const anyMulti = (items: any[]): boolean => items.some((item) => item && spanMulti(src, item));
   if (isNode(ts, node, 'IfStatement')) {
     if (needs(node.thenStatement, node.expression)) {
@@ -344,14 +349,16 @@ const checkBraces = (ts: TsLike, src: any, node: any, issues: PatternIssue[]): v
     const head = [node.initializer, node.condition, node.incrementor];
     if (
       !isNode(ts, node.statement, 'Block') &&
-      (anyMulti(head) || spanMulti(src, node.statement))
+      (anyMulti(head) || headMulti(node.statement) || spanMulti(src, node.statement))
     ) {
       emit(issues, src, node, 'error', 'braces', 'multiline for condition or body must use braces');
     }
   } else if (isNode(ts, node, 'ForOfStatement') || isNode(ts, node, 'ForInStatement')) {
     if (
       !isNode(ts, node.statement, 'Block') &&
-      (anyMulti([node.initializer, node.expression]) || spanMulti(src, node.statement))
+      (anyMulti([node.initializer, node.expression]) ||
+        headMulti(node.statement) ||
+        spanMulti(src, node.statement))
     ) {
       emit(issues, src, node, 'error', 'braces', 'multiline for condition or body must use braces');
     }

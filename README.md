@@ -150,7 +150,22 @@ Current subcommands:
 
 ```
 jsbt esbuild <build-dir> [--auto] [--no-prefix]
-jsbt check <package.json> [check-name|out-dir] [out-dir]
+jsbt check <package.json>
+jsbt check <package.json> bigint
+jsbt check <package.json> bytes
+jsbt check <package.json> comments
+jsbt check <package.json> errors
+jsbt check <package.json> importtime
+jsbt check <package.json> jsdoc
+jsbt check <package.json> jsr
+jsbt check <package.json> jsrpublish
+jsbt check <package.json> mutate
+jsbt check <package.json> patterns
+jsbt check <package.json> readme
+jsbt check <package.json> tests
+jsbt check <package.json> treeshake [out-dir]
+jsbt check <package.json> tsdoc
+jsbt check <package.json> typeimport
 jsbt check-install <package.json>
 jsbt bigint <package.json>
 jsbt bytes <package.json>
@@ -165,6 +180,26 @@ jsbt tests <package.json>
 jsbt treeshake <package.json> <out-dir>
 jsbt typeimport <package.json>
 jsbt tsdoc <package.json>
+```
+
+With the standard package script:
+
+```sh
+npm run check bigint
+npm run check bytes
+npm run check comments
+npm run check errors
+npm run check importtime
+npm run check jsdoc
+npm run check jsr
+npm run check jsrpublish
+npm run check mutate
+npm run check patterns
+npm run check readme
+npm run check tests
+npm run check treeshake
+npm run check tsdoc
+npm run check typeimport
 ```
 
 The published package exposes a single bin, so all of these work through:

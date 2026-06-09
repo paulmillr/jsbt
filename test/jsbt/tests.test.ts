@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -39,9 +39,9 @@ should('tests passes runnable test and benchmark entries', async () => {
   const res = await capture(() =>
     runTests(['package.json'], { color: false, cwd, limit: 2, timeoutMs: 1000 })
   );
-  assert.equal(res.ok, true, all(res));
-  assert.match(all(res), /summary: 3 passed, 0 warnings, 0 failures, 0 skipped/);
-  assert.doesNotMatch(all(res), /benchmark helper should not run/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 3 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
+  deepStrictEqual(/benchmark helper should not run/.test(all(res)), false);
 });
 
 should('tests reports crashed entries but treats timeout as smoke pass', async () => {
@@ -49,25 +49,29 @@ should('tests reports crashed entries but treats timeout as smoke pass', async (
   const res = await capture(() =>
     runTests(['package.json'], { color: false, cwd, limit: 2, timeoutMs: 100 })
   );
-  assert.equal(res.ok, false);
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(tests\) test\/benchmark\/crash\.ts:exec exited 1 Error: broken benchmark fixture \(tests\)/
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(
+    /\[ERROR\] \(tests\) test\/benchmark\/crash\.ts:exec exited 1 Error: broken benchmark fixture \(tests\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.match(
-    plain(res),
-    /\[ERROR\] \(tests\) test\/broken\.test\.ts:exec exited 1 Error: broken test fixture \(tests\)/
+  deepStrictEqual(
+    /\[ERROR\] \(tests\) test\/broken\.test\.ts:exec exited 1 Error: broken test fixture \(tests\)/.test(
+      plain(res)
+    ),
+    true
   );
-  assert.doesNotMatch(plain(res), /test\/hang\.test\.ts:timeout/);
-  assert.match(plain(res), /summary: 1 passed, 0 warnings, 2 failures, 0 skipped/);
-  assert.match(plain(res), /Tests check found issues/);
+  deepStrictEqual(/test\/hang\.test\.ts:timeout/.test(plain(res)), false);
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 2 failures, 0 skipped/.test(plain(res)), true);
+  deepStrictEqual(/Tests check found issues/.test(plain(res)), true);
 });
 
 should('check-tests alias runs tests checker', async () => {
   const cwd = fixture('pass');
   const res = await capture(() => runJsbt(['check-tests', 'package.json'], { color: false, cwd }));
-  assert.equal(res.ok, true, all(res));
-  assert.match(all(res), /summary: 3 passed, 0 warnings, 0 failures, 0 skipped/);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 3 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), true);
 });
 
 should.runWhen(import.meta.url);

@@ -1,12 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
 import { resolve } from 'node:path';
-import {
-  dtsPathOf,
-  exportPathOf,
-  jsPathOf,
-  publicEntries,
-  readPkg,
-} from '../../src/jsbt/public.ts';
+import { dtsPath, exportPath, jsPath, publicEntries, readPkg } from '../../src/jsbt/public.ts';
 import { should } from '../../src/test.ts';
 
 should('public path helpers walk nested export condition objects', () => {
@@ -15,28 +9,28 @@ should('public path helpers walk nested export condition objects', () => {
     require: './index.cjs',
     types: './index.d.ts',
   };
-  deepStrictEqual(jsPathOf(value), './index.mjs');
-  deepStrictEqual(dtsPathOf(value), './index.d.ts');
+  deepStrictEqual(jsPath(value), './index.mjs');
+  deepStrictEqual(dtsPath(value), './index.d.ts');
 });
 
 should('public declaration paths fall back from JS leaves', () => {
-  deepStrictEqual(jsPathOf({ browser: './browser.js' }), './browser.js');
-  deepStrictEqual(dtsPathOf({ node: './node.cjs' }), './node.d.ts');
-  deepStrictEqual(dtsPathOf('./types.d.mts'), './types.d.mts');
+  deepStrictEqual(jsPath({ browser: './browser.js' }), './browser.js');
+  deepStrictEqual(dtsPath({ node: './node.cjs' }), './node.d.ts');
+  deepStrictEqual(dtsPath('./types.d.mts'), './types.d.mts');
 });
 
-should('exportPathOf walks export maps with caller-owned leaf policy', () => {
+should('exportPath walks export maps with caller-owned leaf policy', () => {
   const value = {
     import: './esm.mjs',
     node: { default: './node.js' },
     require: './cjs.cjs',
   };
   deepStrictEqual(
-    exportPathOf(value, (path) => (path.endsWith('.js') ? path : '')),
+    exportPath(value, (path) => (path.endsWith('.js') ? path : '')),
     './node.js'
   );
   deepStrictEqual(
-    exportPathOf(value, (path) => (path.endsWith('.cjs') ? path : '')),
+    exportPath(value, (path) => (path.endsWith('.cjs') ? path : '')),
     './cjs.cjs'
   );
 });

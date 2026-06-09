@@ -1,5 +1,5 @@
-import { type TArg, type TRet } from '@noble/hashes/utils.js';
-export { type TArg, type TRet } from '@noble/hashes/utils.js';
+import { type TArg, type TRet } from './helpers.ts';
+export { type TArg, type TRet } from './helpers.ts';
 
 export function raw(): Uint8Array {
   return 1 as any;

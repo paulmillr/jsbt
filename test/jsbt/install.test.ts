@@ -1,4 +1,4 @@
-import * as assert from 'node:assert';
+import { deepStrictEqual } from 'node:assert';
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
@@ -20,7 +20,7 @@ const scripts = (cwd: string) => JSON.parse(read(cwd)).scripts;
 should('check-install rewrites legacy check scripts', async () => {
   const cwd = seed('legacy');
   await runJsbt(['check-install', 'package.json'], { cwd });
-  assert.deepStrictEqual(scripts(cwd), {
+  deepStrictEqual(scripts(cwd), {
     build: 'tsc',
     'build:release': 'npx --no @paulmillr/jsbt esbuild test/build',
     check: 'npx --no @paulmillr/jsbt check package.json',
@@ -28,14 +28,14 @@ should('check-install rewrites legacy check scripts', async () => {
     format: "prettier --write 'index.ts' 'test/*.{js,ts}'",
     test: 'node --experimental-strip-types test/index.ts',
   });
-  assert.equal(read(cwd).endsWith('\n'), true);
+  deepStrictEqual(read(cwd).endsWith('\n'), true);
   rmSync(cwd, { force: true, recursive: true });
 });
 
 should('check-install preserves a legacy build prelude before unified check', async () => {
   const cwd = seed('legacy-build');
   await runJsbt(['check-install', 'package.json'], { cwd });
-  assert.deepStrictEqual(scripts(cwd), {
+  deepStrictEqual(scripts(cwd), {
     build: 'tsc',
     'build:release': 'npx --no @paulmillr/jsbt esbuild test/build',
     check: 'npm run build && npx --no @paulmillr/jsbt check package.json',
@@ -51,7 +51,7 @@ should('check-install is idempotent', async () => {
   await runJsbt(['check-install', 'package.json'], { cwd });
   const once = read(cwd);
   await runJsbt(['check-install', 'package.json'], { cwd });
-  assert.deepStrictEqual(read(cwd), once);
+  deepStrictEqual(read(cwd), once);
   rmSync(cwd, { force: true, recursive: true });
 });
 
@@ -60,7 +60,7 @@ should('check-install keeps a preserved build prelude on rerun', async () => {
   await runJsbt(['check-install', 'package.json'], { cwd });
   const once = read(cwd);
   await runJsbt(['check-install', 'package.json'], { cwd });
-  assert.deepStrictEqual(read(cwd), once);
+  deepStrictEqual(read(cwd), once);
   rmSync(cwd, { force: true, recursive: true });
 });
 
