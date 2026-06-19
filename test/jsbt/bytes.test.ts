@@ -508,7 +508,7 @@ should('bytes polarity helpers handle deep shapes with isolated declarations', (
 should('check includes bytes results', async () => {
   const cwd = resolve('test/jsbt/vectors/check/pass-root');
   const res = await capture(() =>
-    runJsbt(['check', 'package.json'], { color: false, cwd, runJsrPublish: okJsrPublish })
+    runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish })
   );
   deepStrictEqual(res.ok, true);
   const heads = [
@@ -537,7 +537,7 @@ should('check includes bytes results', async () => {
 should('check groups repeated bytes actions without changing counts', async () => {
   const cwd = resolve('test/jsbt/vectors/bytes-wrap');
   const res = await capture(() =>
-    runJsbt(['check', 'package.json'], { color: false, cwd, runJsrPublish: okJsrPublish })
+    runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish })
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(

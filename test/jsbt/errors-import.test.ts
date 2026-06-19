@@ -12,7 +12,9 @@ const capture = async (fn: () => Promise<void>) => {
   let stderr = '';
   try {
     console.log = (...args) => {
-      stdout += `${args.map((arg) => String(arg)).join(' ')}\n`;
+      const line = args.map((arg) => String(arg)).join(' ');
+      if (/^(?:write|delete)\t.*\/\.__errors-check-/.test(line)) return;
+      stdout += `${line}\n`;
     };
     console.error = (...args) => {
       stderr += `${args.map((arg) => String(arg)).join(' ')}\n`;

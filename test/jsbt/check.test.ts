@@ -497,10 +497,10 @@ should('typeimport proof prefers local import type plus local export type', () =
 
 should('check passes on root-entry fixture with default out dir', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /\[INFO\] \(check\) package\.json:note Checker may return not real errors or flag correct code; it is here to point at issues, not something that should have strict zero errors/.test(
+    /\[INFO\] \(check\) package\.json:note Treat these results as suggestions, not strict errors/.test(
       plain(res)
     ),
     true
@@ -525,9 +525,25 @@ should('check passes on root-entry fixture with default out dir', async () => {
   );
 });
 
+should('check accepts --project directory and runs from another cwd', async () => {
+  const cwd = fixture('pass-root');
+  const res = await run(cwd, () =>
+    checkJsbt(['check', '--project=test/jsbt/vectors/check/pass-root', 'comments'], BASE)
+  );
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(checkSummary([['comments', 0]]).test(plain(res)), true);
+});
+
+should('check rejects the removed package.json positional argument', async () => {
+  const cwd = fixture('pass-root');
+  const res = await capture(() => checkJsbt(['check', 'package.json'], cwd));
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/package\.json positional argument was removed/.test(plain(res)), true);
+});
+
 should('check accepts a second-arg selector and runs only tsdoc', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'tsdoc'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check', 'tsdoc'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(tsdoc\) broken\.d\.mts:1\/broken missing JSDoc \(docs\)/.test(plain(res)),
@@ -546,7 +562,7 @@ should('check accepts a second-arg selector and runs only tsdoc', async () => {
 
 should('check treeshake selector prints standalone treeshake table', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'treeshake'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check', 'treeshake'], cwd));
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
@@ -561,7 +577,7 @@ should('check treeshake selector prints standalone treeshake table', async () =>
 
 should('check accepts a patterns selector without defaulting to all checks', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json', 'patterns'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check', 'patterns'], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/\[ERROR\] \(readme\)/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] \(treeshake\)/.test(plain(res)), false);
@@ -574,7 +590,7 @@ should('check accepts a jsrpublish selector and asks for full output', async () 
   const cwd = fixture('pass-root');
   let full = false;
   const res = await run(cwd, () =>
-    runJsbt(['check', 'package.json', 'jsrpublish'], {
+    runJsbt(['check', 'jsrpublish'], {
       color: false,
       cwd,
       runJsrPublish: async (_argv, opts) => {
@@ -589,9 +605,7 @@ should('check accepts a jsrpublish selector and asks for full output', async () 
 
 should('check keeps a non-selector second arg as treeshake out dir', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () =>
-    checkJsbt(['check', 'package.json', 'test/build/custom-treeshake'], cwd)
-  );
+  const res = await run(cwd, () => checkJsbt(['check', 'test/build/custom-treeshake'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(treeshake\) 3x unused \(treeshake\)\n  test\/build\/custom-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/custom-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
@@ -619,20 +633,17 @@ should('check keeps a non-selector second arg as treeshake out dir', async () =>
   );
 });
 
-should('check replays fs-modify activity when log level allows it', async () => {
+should('check replays fs-modify activity outside os tmpdir', async () => {
   const cwd = fixture('pass-root');
-  const res = await withEnv('JSBT_LOG_LEVEL', '1', () =>
-    run(cwd, () => checkJsbt(['check', 'package.json'], cwd))
-  );
+  const res = await withEnv('JSBT_LOG_LEVEL', '0', () => run(cwd, () => checkJsbt(['check'], cwd)));
   deepStrictEqual(res.ok, true);
-  deepStrictEqual(/> cd /.test(all(res)), true);
-  deepStrictEqual(/> npm install/.test(all(res)), true);
+  deepStrictEqual(/install\t/.test(all(res)), true);
   deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), false);
 });
 
 should('check reports importtime warnings without failing', async () => {
   const cwd = fixture('warn-import');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, true);
   deepStrictEqual(
     /\[WARNING\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(
@@ -664,7 +675,7 @@ should('check reports importtime warnings without failing', async () => {
 
 should('check fails on importtime errors without table', async () => {
   const cwd = fixture('fail-import');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(importtime\) slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(
@@ -708,7 +719,7 @@ should('worker-backed checks exit after imported modules leave handles open', as
   for (const argv of [
     ['importtime', 'package.json'],
     ['mutate', 'package.json'],
-    ['check', 'package.json', 'mutate'],
+    ['check', 'mutate'],
   ]) {
     const res = await workerJsbt(cwd, argv);
     const text = [all(res), res.error].filter(Boolean).join('\n');
@@ -723,7 +734,7 @@ should('worker-backed checks exit after imported modules leave handles open', as
 
 should('check reports bigint issues and keeps other checks green', async () => {
   const cwd = fixture('fail-bigint');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(bigint\) 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/.test(
@@ -763,7 +774,7 @@ should('check reports bigint issues and keeps other checks green', async () => {
 
 should('check reports typeimport issues and keeps other checks green', async () => {
   const cwd = fixture('fail-typeimport');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
@@ -809,7 +820,7 @@ should('check reports typeimport issues and keeps other checks green', async () 
 
 should('check runs all checks before failing', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'package.json'], cwd));
+  const res = await run(cwd, () => checkJsbt(['check'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] \(readme\) README\.md:12\/usage Argument of type 'string' is not assignable to parameter of type 'number'\. \(type\)/.test(
@@ -878,7 +889,7 @@ should('check runs all checks before failing', async () => {
 should('check keeps detailed issues when color is enabled', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () =>
-    runJsbt(['check', 'package.json'], { color: true, cwd, runJsrPublish: okJsrPublish })
+    runJsbt(['check'], { color: true, cwd, runJsrPublish: okJsrPublish })
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(/\[\x1b\[31mERROR\x1b\[0m\] \(readme\)/.test(all(res)), true);

@@ -97,13 +97,11 @@ function calcMean<T extends number | bigint>(list: T[]): T {
   // @ts-ignore
   return calcSum(list, isBig) / tlen;
 }
-function calcDeviation<T extends number | bigint>(list: T[]): number {
-  const isBig = isFirstBig(list);
-  const mean = calcMean(list);
-  const square = isBig ? (a: bigint) => a ** 2n : (a: number) => a ** 2;
-  // @ts-ignore
-  const diffs = list.map((val) => square(val - mean));
-  const variance = Number(calcSum(diffs, isBig)) / list.length - 1;
+function calcDeviation(list: bigint[]): number {
+  if (list.length < 2) return 0;
+  const mean = Number(calcSum(list)) / list.length;
+  const variance =
+    list.reduce((sum, val) => sum + (Number(val) - mean) ** 2, 0) / (list.length - 1);
   return Math.sqrt(variance);
 }
 // Mutates array by sorting it
@@ -136,7 +134,11 @@ function calcStats(list: bigint[]): {
 }
 // @ts-ignore
 const getTime: () => bigint = process.hrtime.bigint;
-async function benchmarkRaw(callback: CbFn, maxRunTime: bigint = SECOND): Promise<BenchStats> {
+let defaultMaxRunTime = SECOND;
+async function benchmarkRaw(
+  callback: CbFn,
+  maxRunTime: bigint = defaultMaxRunTime
+): Promise<BenchStats> {
   if (typeof callback !== 'function') throw new Error('callback must be a function');
   // measurements contain sample timings
   // `new Array(30_000_000)` pre-allocation is in some cases more efficient for
@@ -170,10 +172,13 @@ export type BenchOpts = {
 
 function parseMaxRunTime(val: number | undefined) {
   if (val === undefined) return;
-  if (typeof val !== 'number' || val < 0.1 || val > 60)
+  if (typeof val !== 'number' || !Number.isFinite(val) || val < 0.1 || val > 60)
     throw new Error('must be between 0.1 and 60 sec');
-  let tenth = BigInt(val * 10);
-  return (tenth * SECOND) / 10n;
+  return (BigInt(Math.round(val * 1000)) * SECOND) / 1000n;
+}
+
+function setMaxRunTime(val: number): void {
+  defaultMaxRunTime = parseMaxRunTime(val) ?? SECOND;
 }
 
 export async function bench(
@@ -182,12 +187,12 @@ export async function bench(
   opts: BenchOpts = {}
 ): Promise<BenchStats | undefined> {
   if (typeof label !== 'string') throw new Error('benchmark label must be a string');
-  if (typeof opts !== 'object')
+  if (!opts || typeof opts !== 'object')
     throw new Error('benchmark opts must be an object, got: ' + typeof opts);
   let { multiplier, unit, maxRunTimeSec, mode } = opts;
   let { stats, perSecStr, perItemStr, measurements } = await benchmarkRaw(
     fn,
-    parseMaxRunTime(maxRunTimeSec)
+    mode === 'runOnce' ? 0n : parseMaxRunTime(maxRunTimeSec)
   );
   let OUTPUT = `${label} `;
   if (mode === 'runOnce') {
@@ -217,12 +222,14 @@ export default bench;
 export const utils: {
   getTime: typeof getTime;
   logMem: typeof logMem;
+  setMaxRunTime: typeof setMaxRunTime;
   formatDuration: typeof formatDuration;
   calcStats: typeof calcStats;
   benchmarkRaw: typeof benchmarkRaw;
 } = {
   getTime,
   logMem,
+  setMaxRunTime,
   formatDuration,
   calcStats,
   benchmarkRaw,

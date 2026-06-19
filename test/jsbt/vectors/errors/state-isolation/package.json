@@ -1,0 +1,7 @@
+{
+  "name": "@jsbt-test/errors-state-isolation",
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

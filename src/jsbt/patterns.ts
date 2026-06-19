@@ -12,6 +12,7 @@ Rules:
 import { readFileSync } from 'node:fs';
 import {
   cliArgs,
+  createCachedSourceFile,
   emptyResult,
   loadTypeScriptApi,
   makeIssue,
@@ -329,8 +330,7 @@ const checkBraces = (ts: TsLike, src: any, node: any, issues: PatternIssue[]): v
   // TypeScript expression nodes exclude surrounding `if (` / `)`, so line-span the head too.
   const headMulti = (stmt: any): boolean => lineOf(src, node) + 1 < lineOf(src, stmt);
   const needs = (stmt: any, cond: any): boolean =>
-    !isNode(ts, stmt, 'Block') &&
-    (spanMulti(src, cond) || headMulti(stmt) || spanMulti(src, stmt));
+    !isNode(ts, stmt, 'Block') && (spanMulti(src, cond) || headMulti(stmt) || spanMulti(src, stmt));
   const anyMulti = (items: any[]): boolean => items.some((item) => item && spanMulti(src, item));
   if (isNode(ts, node, 'IfStatement')) {
     if (needs(node.thenStatement, node.expression)) {
@@ -379,7 +379,7 @@ const byPosition = (a: PatternIssue, b: PatternIssue): number =>
   a.line - b.line || a.col - b.col || a.issue.localeCompare(b.issue);
 
 export const scanPatternText = (ts: TsLike, file: string, text: string): PatternIssue[] => {
-  const src = ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true);
+  const src = createCachedSourceFile(ts, file, text);
   const issues: PatternIssue[] = [];
   const imports = collectImports(ts, src);
   const helpers = collectHelpers(ts, src, issues);

@@ -14,6 +14,7 @@ Rules:
   - error messages must not print secret byte values
  */
 import { existsSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { publicCtx, publicEntries, type PublicCtx } from './public.ts';
 import {
@@ -130,6 +131,7 @@ const usage = usageText('errors', 'check-errors.ts');
 
 const TIMEOUT = 120_000;
 const MAX_PROBES_PER_ARG = 12;
+const PROBE_LIMIT = Math.max(1, Math.min(availableParallelism?.() || 4, 16));
 const loadTs = (pkgFile: string): TsLike => {
   return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createSourceFile']);
 };
@@ -1506,18 +1508,21 @@ try {
     probed: 0,
     rejects: [],
   });
-}`;
+}
+`;
+type ProbeRun = { idx: number; item: Work; rel: string; res: Probe };
 const probe = async (
   ctx: PublicCtx,
   specs: Map<string, string>,
   work: Work,
-  timeoutMs = TIMEOUT
+  timeoutMs: number
 ): Promise<Probe> => {
   return withTempFile(
     resolve(ctx.cwd, 'test', 'build'),
     { code: harness(work, harnessCode(specs, work)), ext: 'ts', prefix: '.__errors-check-' },
     async (file) => {
-      // The generated harness sends every finding in one message, then the worker can be stopped.
+      // Keep each example in its own worker: package modules, globals, timers, and timeouts
+      // must not leak from one public example probe into another.
       return await runWorker<Probe>(workerCode, {
         data: { file: fileUrl(file) },
         error: (error) => ({ error, issues: [], probed: 0, rejects: [] }),
@@ -1534,6 +1539,32 @@ const probe = async (
       });
     }
   );
+};
+const runProbeLimit = async (
+  ctx: PublicCtx,
+  specs: Map<string, string>,
+  items: Work[],
+  limit: number,
+  timeoutMs: number
+): Promise<ProbeRun[]> => {
+  const out = new Array<ProbeRun>(items.length);
+  let pos = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const idx = pos++;
+      if (idx >= items.length) return;
+      const item = items[idx];
+      out[idx] = {
+        idx,
+        item,
+        rel: relName(ctx.cwd, item.file),
+        res: await probe(ctx, specs, item, timeoutMs),
+      };
+    }
+  };
+  const n = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: n }, worker));
+  return out;
 };
 const auditLines = (items: Audit[], colorOn: boolean): string[] => {
   const groups = new Map<string, { msg: string; name: string }[]>();
@@ -1567,7 +1598,13 @@ const finish = (res: ReturnType<typeof emptyResult>, colorOn: boolean): void => 
 
 export const runCli = async (
   argv: string[],
-  opts: { color?: boolean; cwd?: string; timeoutMs?: number } = {}
+  opts: {
+    color?: boolean;
+    cwd?: string;
+    examplesOnly?: boolean;
+    limit?: number;
+    timeoutMs?: number;
+  } = {}
 ): Promise<void> => {
   const cli = cliArgs(argv, usage, opts.color);
   if (!cli) return;
@@ -1607,9 +1644,18 @@ export const runCli = async (
       'errors-example'
     );
   }
-  for (const item of items) {
-    const rel = relName(ctx.cwd, item.file);
-    const res = await probe(ctx, specs, item, opts.timeoutMs || TIMEOUT);
+  if (opts.examplesOnly) {
+    printIssues('errors', logs, colorOn);
+    return finish(out, colorOn);
+  }
+  const runs = await runProbeLimit(
+    ctx,
+    specs,
+    items,
+    opts.limit || PROBE_LIMIT,
+    opts.timeoutMs || TIMEOUT
+  );
+  for (const { item, rel, res } of runs) {
     if (res.error) {
       recordIssue(
         out,

@@ -5,7 +5,7 @@ do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm in
 
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
 Like `jsbt bundle`, it runs `npm install` in the selected run/build directory before checking.
-File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
+File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 All writes and any other modifications from this script MUST stay under the selected run/build directory.
 This checker takes only a package.json path, uses `test/build` next to it as the run directory, and

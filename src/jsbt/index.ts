@@ -4,23 +4,24 @@
  * `jsbt` dispatches the shared build and audit helpers shipped by `@paulmillr/jsbt`.
  *
  * Usage:
- *   `jsbt bundle test/build`
- *   `jsbt check package.json`
- *   `jsbt check package.json bigint`
- *   `jsbt check package.json bytes`
- *   `jsbt check package.json comments`
- *   `jsbt check package.json errors`
- *   `jsbt check package.json importtime`
- *   `jsbt check package.json jsdoc`
- *   `jsbt check package.json jsr`
- *   `jsbt check package.json jsrpublish`
- *   `jsbt check package.json mutate`
- *   `jsbt check package.json patterns`
- *   `jsbt check package.json readme`
- *   `jsbt check package.json tests`
- *   `jsbt check package.json treeshake`
- *   `jsbt check package.json tsdoc`
- *   `jsbt check package.json typeimport`
+ *   `jsbt bundle`
+ *   `jsbt check`
+ *   `jsbt check --project=directory`
+ *   `jsbt check bigint`
+ *   `jsbt check bytes`
+ *   `jsbt check comments`
+ *   `jsbt check errors`
+ *   `jsbt check importtime`
+ *   `jsbt check jsdoc`
+ *   `jsbt check jsr`
+ *   `jsbt check jsrpublish`
+ *   `jsbt check mutate`
+ *   `jsbt check patterns`
+ *   `jsbt check readme`
+ *   `jsbt check tests`
+ *   `jsbt check treeshake`
+ *   `jsbt check tsdoc`
+ *   `jsbt check typeimport`
  *   `jsbt check-install package.json`
  * @module
  */
@@ -56,6 +57,7 @@ import {
   stripAnsi,
   textLines,
   wantColor,
+  withSourceFileCache,
   type Issue,
   type Level,
   type Ref,
@@ -89,37 +91,39 @@ type CheckTask = (args: CheckArgs, opts: Opts, tree: TreeIssue[]) => Promise<voi
 type CheckWorkerData = {
   args: CheckArgs;
   entry: string;
-  head: CheckHead;
+  head?: CheckHead;
+  heads?: CheckHead[];
   kind: typeof CHECK_WORKER;
   opts: { color?: boolean; cwd?: string };
   self: string;
 };
 
 const usage = `usage:
-  jsbt bundle <build-dir> [--auto] [--no-prefix]
-  jsbt check <package.json>
-  jsbt check <package.json> bigint
-  jsbt check <package.json> bytes
-  jsbt check <package.json> comments
-  jsbt check <package.json> errors
-  jsbt check <package.json> importtime
-  jsbt check <package.json> jsdoc
-  jsbt check <package.json> jsr
-  jsbt check <package.json> jsrpublish
-  jsbt check <package.json> mutate
-  jsbt check <package.json> patterns
-  jsbt check <package.json> readme
-  jsbt check <package.json> tests
-  jsbt check <package.json> treeshake [out-dir]
-  jsbt check <package.json> tsdoc
-  jsbt check <package.json> typeimport
+  jsbt bundle [--dir=<build-dir>] [--no-prefix] [--stats]
+  jsbt check [--project=<directory>]
+  jsbt check [--project=<directory>] bigint
+  jsbt check [--project=<directory>] bytes
+  jsbt check [--project=<directory>] comments
+  jsbt check [--project=<directory>] errors
+  jsbt check [--project=<directory>] importtime
+  jsbt check [--project=<directory>] jsdoc
+  jsbt check [--project=<directory>] jsr
+  jsbt check [--project=<directory>] jsrpublish
+  jsbt check [--project=<directory>] mutate
+  jsbt check [--project=<directory>] patterns
+  jsbt check [--project=<directory>] readme
+  jsbt check [--project=<directory>] tests
+  jsbt check [--project=<directory>] treeshake [out-dir]
+  jsbt check [--project=<directory>] tsdoc
+  jsbt check [--project=<directory>] typeimport
   jsbt check-install <package.json>
 
 examples:
-  npx --no @paulmillr/jsbt bundle test/build
-  npx --no @paulmillr/jsbt check package.json
+  npx --no @paulmillr/jsbt bundle
+  npx --no @paulmillr/jsbt check
+  npx --no @paulmillr/jsbt check --project=packages/pkg-a
   npm run check bigint
-  npx --no @paulmillr/jsbt check package.json treeshake`;
+  npx --no @paulmillr/jsbt check treeshake`;
 const CHECK_OUT = 'test/build/out-treeshake';
 const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
@@ -133,7 +137,7 @@ const QUIET_ENV = {
   npm_config_progress: 'false',
   npm_config_update_notifier: 'false',
 } as const;
-const MUTATION_LOG = /^(?:delete\t|write\t|> cd |>\s+npm install$)/;
+const MUTATION_LOG = /^(?:delete\t|install\t|write\t)/;
 const CHECK_ALIASES = {
   'check-bigint': 'bigint',
   'check-bytes': 'bytes',
@@ -165,6 +169,14 @@ const CHECK_ALIASES = {
   typeimport: 'typeimport',
   tsdoc: 'tsdoc',
 } as const satisfies Record<string, CheckHead>;
+const SHARED_WORKER_CHECKS = new Set<CheckHead>([
+  'bigint',
+  'bytes',
+  'comments',
+  'jsr',
+  'patterns',
+  'typeimport',
+]);
 const issueLines = (text: string): { cont: string[]; line: string; plain: string }[] => {
   const out: { cont: string[]; line: string; plain: string }[] = [];
   let prev: { cont: string[]; line: string; plain: string } | undefined;
@@ -341,18 +353,47 @@ const checkHead = (name: string | undefined): CheckHead | undefined =>
     : undefined;
 const checkArgs = (argv: string[]) => {
   if (argv.includes('--help') || argv.includes('-h'))
-    return { head: undefined, help: true, outArg: '', pkgArg: '' };
-  if (argv.length < 1 || argv.length > 3)
-    err('expected <package.json> [check-name|out-dir] [out-dir]');
-  const head = checkHead(argv[1]);
-  if (head) return { head, help: false, outArg: argv[2] || CHECK_OUT, pkgArg: argv[0] };
-  return { head: undefined, help: false, outArg: argv[1] || CHECK_OUT, pkgArg: argv[0] };
+    return { head: undefined, help: true, outArg: '', pkgArg: '', projectArg: '.' };
+  const rest: string[] = [];
+  let projectArg = '.';
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--project') {
+      const value = argv[++i];
+      if (!value) err('expected directory after --project');
+      projectArg = value;
+      continue;
+    }
+    if (arg.startsWith('--project=')) {
+      projectArg = arg.slice('--project='.length);
+      if (!projectArg) err('expected directory after --project=');
+      continue;
+    }
+    if (arg.startsWith('-')) err(`unknown check option: ${arg}`);
+    rest.push(arg);
+  }
+  if (rest.some((arg) => arg === 'package.json' || /[/\\]package\.json$/.test(arg)))
+    err(
+      'package.json positional argument was removed; use jsbt check or jsbt check --project=<directory>'
+    );
+  if (rest.length > 2) err('expected [--project=<directory>] [check-name|out-dir] [out-dir]');
+  const head = checkHead(rest[0]);
+  if (head)
+    return { head, help: false, outArg: rest[1] || CHECK_OUT, pkgArg: 'package.json', projectArg };
+  if (rest.length > 1) err('expected [--project=<directory>] [check-name|out-dir] [out-dir]');
+  return {
+    head: undefined,
+    help: false,
+    outArg: rest[0] || CHECK_OUT,
+    pkgArg: 'package.json',
+    projectArg,
+  };
 };
 const checkTasks = {
   bigint: (args, opts) => runBigInt([args.pkgArg], opts),
   bytes: (args, opts) => runBytes([args.pkgArg], opts),
   comments: (args, opts) => runComments([args.pkgArg], opts),
-  errors: (args, opts) => runErrors([args.pkgArg], opts),
+  errors: (args, opts) => runErrors([args.pkgArg], { ...opts, examplesOnly: !args.head }),
   importtime: (args, opts) =>
     runImportTime([args.pkgArg], { color: opts.color, cwd: opts.cwd, quiet: true }),
   jsr: (args, opts) => runJsr([args.pkgArg], opts),
@@ -386,17 +427,31 @@ const runCheckTask = async (head: CheckHead, args: CheckArgs, opts: Opts): Promi
   if (tree.length) res.tree = tree;
   return res;
 };
+const runCheckTaskTimed = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<TimedCapture> =>
+  timed(() => runCheckTask(head, args, opts));
 const runWorkerMain = async () => {
   const data = workerData as CheckWorkerData;
   try {
+    if (data.heads) {
+      const out = await withSourceFileCache(async () => {
+        const captures: TimedCapture[] = [];
+        for (const head of data.heads!)
+          captures.push(await runCheckTaskTimed(head, data.args, data.opts));
+        return captures;
+      });
+      parentPort?.postMessage(out);
+      return;
+    }
+    if (!data.head) throw new Error('missing check worker head');
     parentPort?.postMessage(await runCheckTask(data.head, data.args, data.opts));
   } catch (error) {
-    parentPort?.postMessage({
+    const res = {
       error: (error as Error).message,
       ok: false,
       stderr: '',
       stdout: '',
-    } satisfies Capture);
+    } satisfies Capture;
+    parentPort?.postMessage(data.heads ? data.heads.map(() => ({ ...res, ms: 0 })) : res);
   }
 };
 const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<Capture> =>
@@ -413,9 +468,28 @@ const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<C
     },
     error: (error) => ({ error, ok: false, stderr: '', stdout: '' }),
   });
+const runCheckBatchWorker = (
+  heads: CheckHead[],
+  args: CheckArgs,
+  opts: Opts
+): Promise<TimedCapture[]> =>
+  runWorker<TimedCapture[]>(WORKER, {
+    data: {
+      args,
+      entry: fileURLToPath(import.meta.url),
+      heads,
+      kind: CHECK_WORKER,
+      opts: { color: opts.color, cwd: opts.cwd },
+      self: import.meta.url,
+    },
+    error: (error) =>
+      heads.map((head) => ({ error, head, ms: 0, ok: false, stderr: '', stdout: '' })),
+  });
 const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   const args = checkArgs(argv);
   if (args.help) return console.log(usage);
+  const projectCwd = resolve(opts.cwd || process.cwd(), args.projectArg);
+  const taskOpts = { ...opts, cwd: projectCwd };
   const colorOn = opts.color ?? wantColor();
   console.log(
     formatIssue('INFO', 'check', { file: args.pkgArg, issue: CHECK_NOTE, sym: 'note' }, colorOn)
@@ -437,7 +511,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     {
       head: 'treeshake',
       pick: (res) => {
-        const issues: Issue[] = (res.tree || []).map((item) => treeIssueLog(opts.cwd, item));
+        const issues: Issue[] = (res.tree || []).map((item) => treeIssueLog(taskOpts.cwd, item));
         if (issues.length || !res.error) {
           return {
             count: issues.length,
@@ -487,11 +561,26 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   };
   const serial = async () => {
     for (const [i, item] of list.entries())
-      if (item.serial) await save(i, () => runCheckTask(item.head, args, opts));
+      if (item.serial) await save(i, () => runCheckTask(item.head, args, taskOpts));
   };
-  const parallel = list.map((item, i) =>
-    item.serial ? Promise.resolve() : save(i, () => runCheckWorker(item.head, args, opts))
-  );
+  const shared = list
+    .map((item, i) => ({ i, item }))
+    .filter(({ item }) => !item.serial && SHARED_WORKER_CHECKS.has(item.head));
+  const parallel: Promise<void>[] = [];
+  if (shared.length)
+    parallel.push(
+      runCheckBatchWorker(
+        shared.map(({ item }) => item.head),
+        args,
+        taskOpts
+      ).then((batch) => {
+        for (const [pos, { i }] of shared.entries()) res[i] = batch[pos];
+      })
+    );
+  for (const [i, item] of list.entries()) {
+    if (item.serial || SHARED_WORKER_CHECKS.has(item.head)) continue;
+    parallel.push(save(i, () => runCheckWorker(item.head, args, taskOpts)));
+  }
   await Promise.all([...parallel, serial()]);
   const totalMs = Date.now() - totalStart;
   const counts: CheckCount[] = [];

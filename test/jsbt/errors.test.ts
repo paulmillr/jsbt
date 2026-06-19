@@ -88,13 +88,13 @@ should(
 
 should('check errors selector runs the standalone errors checker', async () => {
   const cwd = fixture('fail');
-  const res = await capture(() =>
-    runJsbt(['check', 'package.json', 'errors'], { color: false, cwd })
-  );
+  const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
   const out = plain(res);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[INFO\] \(check\) package\.json:note Checker may return not real errors/.test(out),
+    /\[INFO\] \(check\) package\.json:note Treat these results as suggestions, not strict errors/.test(
+      out
+    ),
     true
   );
   deepStrictEqual(/wrong secretKey=false/.test(out), true);
@@ -105,9 +105,7 @@ should('check errors selector runs the standalone errors checker', async () => {
 
 should('check errors selector reports unprobeable examples before audit rows', async () => {
   const cwd = fixture('mixed-no-calls');
-  const res = await capture(() =>
-    runJsbt(['check', 'package.json', 'errors'], { color: false, cwd })
-  );
+  const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
   const out = plain(res);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
@@ -123,6 +121,26 @@ should('check errors selector reports unprobeable examples before audit rows', a
     true
   );
   deepStrictEqual(/wrong 32=/.test(out), false);
+});
+
+should('errors keeps runtime probes isolated per example', async () => {
+  const cwd = fixture('state-isolation');
+  const res = await capture(() => runErrors(['package.json'], { color: false, cwd, limit: 1 }));
+  const out = plain(res);
+  deepStrictEqual(res.ok, true, out);
+  deepStrictEqual(/state leaked/.test(out), false);
+  deepStrictEqual(/summary: \d+ passed, 0 warnings, 0 failures, 0 skipped/.test(out), true);
+});
+
+should('errors keeps timeout failures scoped to the hung example', async () => {
+  const cwd = fixture('timeout-isolation');
+  const res = await capture(() =>
+    runErrors(['package.json'], { color: false, cwd, limit: 1, timeoutMs: 200 })
+  );
+  const out = plain(res);
+  deepStrictEqual(res.ok, true, out);
+  deepStrictEqual((out.match(/timed out after 200ms/g) || []).length, 1, out);
+  deepStrictEqual(/summary: \d+ passed, 1 warning, 0 failures, 0 skipped/.test(out), true);
 });
 
 should.runWhen(import.meta.url);

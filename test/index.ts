@@ -1,6 +1,7 @@
 import { should } from '../src/test.ts';
 
 import './jsbt/bin.test.ts';
+import './jsbt/bundle.test.ts';
 import './jsbt/bytes.test.ts';
 import './jsbt/camel-parts.test.ts';
 import './jsbt/check.test.ts';

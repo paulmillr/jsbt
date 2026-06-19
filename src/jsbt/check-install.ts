@@ -12,13 +12,14 @@ import { pkgArgs, pkgTarget, readText, runSelf, usageText } from './utils.ts';
 type RawPkg = Record<string, unknown> & { scripts?: Record<string, unknown> };
 
 const usage = usageText('check-install', 'jsbt/check-install.ts');
-const CHECK_MAIN = 'npx --no @paulmillr/jsbt check package.json';
+const CHECK_MAIN = 'npx --no @paulmillr/jsbt check';
+const CHECK_MAIN_OLD = 'npx --no @paulmillr/jsbt check package.json';
 const LEGACY_MAIN = 'npm run check:readme && npm run check:treeshake && npm run check:jsdoc';
 
 const isCheck = (key: string) => key === 'check' || key.startsWith('check:');
 const checkPrefix = (value: unknown): string => {
   if (typeof value !== 'string') return '';
-  for (const tail of [CHECK_MAIN, LEGACY_MAIN])
+  for (const tail of [CHECK_MAIN, CHECK_MAIN_OLD, LEGACY_MAIN])
     if (value.endsWith(tail)) return value.slice(0, -tail.length);
   return '';
 };

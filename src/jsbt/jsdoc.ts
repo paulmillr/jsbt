@@ -6,7 +6,7 @@ Do not call raw fs delete/write helpers or raw `npm install` directly here.
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`,
 then run it after a fresh build.
 Like `jsbt bundle`, it runs `npm install` in the selected run/build directory before checking.
-File writes/deletes log through `fs-modify.ts` and honor `JSBT_LOG_LEVEL`.
+File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 It audits the built public `.d.ts` export surface, requires JSDoc on every public export,
 checks callable `@param` / `@returns` tags against the exported type shape,

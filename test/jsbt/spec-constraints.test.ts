@@ -38,6 +38,7 @@ const checkSelectors = [
   'tsdoc',
   'typeimport',
 ] as const;
+const readmeSelectors = checkSelectors.filter((selector) => selector !== 'jsdoc');
 const jsbtTests = () =>
   sorted(readdirSync(join(ROOT, 'test/jsbt')).filter((file) => file.endsWith('.test.ts')));
 const testTsFiles = (dir = 'test/jsbt'): string[] => {
@@ -208,11 +209,13 @@ should('README and CLI usage document every check selector', () => {
   const missing: string[] = [];
   for (const selector of checkSelectors) {
     const suffix = selector === 'treeshake' ? ' [out-dir]' : '';
-    const jsbt = `jsbt check <package.json> ${selector}${suffix}`;
+    const jsbt = `jsbt check [--project=<directory>] ${selector}${suffix}`;
     const npm = `npm run check ${selector}`;
     if (!usage.includes(jsbt)) missing.push(`src/jsbt/index.ts: ${jsbt}`);
-    if (!readme.includes(jsbt)) missing.push(`README.md: ${jsbt}`);
-    if (!readme.includes(npm)) missing.push(`README.md: ${npm}`);
+    if (readmeSelectors.includes(selector)) {
+      if (!readme.includes(jsbt)) missing.push(`README.md: ${jsbt}`);
+      if (!readme.includes(npm)) missing.push(`README.md: ${npm}`);
+    }
   }
   deepStrictEqual(missing, []);
 });

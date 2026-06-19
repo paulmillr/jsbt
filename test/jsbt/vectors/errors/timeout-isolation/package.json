@@ -1,0 +1,7 @@
+{
+  "name": "@jsbt-test/errors-timeout-isolation",
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  }
+}

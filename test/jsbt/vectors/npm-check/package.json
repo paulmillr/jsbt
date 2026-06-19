@@ -21,6 +21,6 @@
     "@paulmillr/jsbt": "file:../../../.."
   },
   "scripts": {
-    "check": "npx --no @paulmillr/jsbt check package.json"
+    "check": "npx --no @paulmillr/jsbt check"
   }
 }

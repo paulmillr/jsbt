@@ -92,7 +92,12 @@ export type TsCheck = {
   ModuleResolutionKind?: { Bundler?: unknown; NodeNext?: unknown };
   ScriptTarget: { ESNext: unknown };
   createCompilerHost: (opts: Record<string, unknown>) => TsHost;
-  createProgram: (files: string[], opts: Record<string, unknown>, host?: TsHost) => unknown;
+  createProgram: (
+    files: string[],
+    opts: Record<string, unknown>,
+    host?: TsHost,
+    oldProgram?: unknown
+  ) => unknown;
   createSourceFile: (file: string, text: string, target: unknown, setParents?: boolean) => unknown;
   findConfigFile?: (
     dir: string,
@@ -164,9 +169,44 @@ export const tsSourceRel = (rel: string): string =>
     .replace(/^\.\//, '');
 export const readText = (file: string): string => readFileSync(file, 'utf8');
 export const readJson = <T>(file: string): T => JSON.parse(readText(file)) as T;
+let sourceFileCaches = new WeakMap<
+  object,
+  Map<string, { parents: boolean; source: unknown; target: unknown; text: string }>
+>();
+let sourceFileCacheDepth = 0;
+export const withSourceFileCache = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+  sourceFileCacheDepth += 1;
+  try {
+    return await fn();
+  } finally {
+    sourceFileCacheDepth -= 1;
+    if (sourceFileCacheDepth === 0) sourceFileCaches = new WeakMap();
+  }
+};
+export const createCachedSourceFile = <T>(
+  ts: TsSourceApi<T>,
+  file: string,
+  text: string,
+  target: unknown = ts.ScriptTarget.ESNext,
+  setParents = true
+): T => {
+  if (sourceFileCacheDepth <= 0) return ts.createSourceFile(file, text, target, setParents);
+  const key = `${resolve(file)}\0${String(target)}\0${setParents ? '1' : '0'}`;
+  let cache = sourceFileCaches.get(ts as object);
+  if (!cache) {
+    cache = new Map();
+    sourceFileCaches.set(ts as object, cache);
+  }
+  const prev = cache.get(key);
+  if (prev && prev.text === text && prev.target === target && prev.parents === setParents)
+    return prev.source as T;
+  const source = ts.createSourceFile(file, text, target, setParents);
+  cache.set(key, { parents: setParents, source, target, text });
+  return source;
+};
 export const readSource = <T>(ts: TsSourceApi<T>, file: string): { source: T; text: string } => {
   const text = readText(file);
-  return { source: ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true), text };
+  return { source: createCachedSourceFile(ts, file, text), text };
 };
 export const textLines = (text = '', trimEnd = false): string[] =>
   text
@@ -343,6 +383,7 @@ export const makeTypeCheck = (
   const sys = ts.sys;
   const cache = new Map<string, unknown>();
   let code = '';
+  let oldProgram: unknown;
   host.fileExists = (name) => (resolve(name) === file ? true : fileExists(name));
   host.readFile = (name) => (resolve(name) === file ? code : readFile(name));
   host.getCurrentDirectory = () => cwd;
@@ -361,7 +402,8 @@ export const makeTypeCheck = (
   };
   return (value) => {
     code = value;
-    const prog = ts.createProgram([file], opts, host);
+    const prog = ts.createProgram([file], opts, host, oldProgram);
+    oldProgram = prog;
     return ts
       .getPreEmitDiagnostics(prog)
       .filter((diag) => !diag.file || diag.file.fileName === file)

@@ -23,7 +23,7 @@ should('check-install rewrites legacy check scripts', async () => {
   deepStrictEqual(scripts(cwd), {
     build: 'tsc',
     'build:release': 'npx --no @paulmillr/jsbt esbuild test/build',
-    check: 'npx --no @paulmillr/jsbt check package.json',
+    check: 'npx --no @paulmillr/jsbt check',
     bench: 'node test/benchmark.ts',
     format: "prettier --write 'index.ts' 'test/*.{js,ts}'",
     test: 'node --experimental-strip-types test/index.ts',
@@ -38,7 +38,7 @@ should('check-install preserves a legacy build prelude before unified check', as
   deepStrictEqual(scripts(cwd), {
     build: 'tsc',
     'build:release': 'npx --no @paulmillr/jsbt esbuild test/build',
-    check: 'npm run build && npx --no @paulmillr/jsbt check package.json',
+    check: 'npm run build && npx --no @paulmillr/jsbt check',
     bench: 'node test/benchmark.ts',
     format: "prettier --write 'index.ts' 'test/*.{js,ts}'",
     test: 'node --experimental-strip-types test/index.ts',
