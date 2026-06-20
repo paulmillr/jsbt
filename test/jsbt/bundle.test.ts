@@ -91,10 +91,6 @@ should('bundle report starts with actual checksum lines', () => {
   deepStrictEqual(lines[1], `${minHash} test/build/out/package.min.js`);
   deepStrictEqual(lines[5].replace(/\x1b\[[0-9;]*m/g, ''), '0.50 KB +gzip');
   deepStrictEqual(
-    lines.some((line) => line.includes('zstd')),
-    false
-  );
-  deepStrictEqual(
     lines.some((line) => line.includes('shasum')),
     false
   );

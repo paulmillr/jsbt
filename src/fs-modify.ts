@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
 const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
 const BUNDLE_PREFIX = 'jsbt-bundle-';
+const CHECK_PREFIX = 'jsbt-check-';
 const err = (msg: string): never => {
   throw new Error(msg);
 };
@@ -19,15 +20,18 @@ const inOsTmpDir = (path: string): boolean => {
 const shouldLog = (path: string): boolean => !inOsTmpDir(path);
 const inBuild = (path: string): boolean =>
   path.endsWith('/test/build') || path.includes('/test/build/');
-const inBundleTmp = (path: string): boolean => {
+const inPrefixedTmp = (path: string, prefix: string): boolean => {
   if (!inOsTmpDir(path)) return false;
   const rel = relative(tmpdir(), path);
-  return (rel.split(/[\\/]/)[0] || '').startsWith(BUNDLE_PREFIX);
+  return (rel.split(/[\\/]/)[0] || '').startsWith(prefix);
 };
-const inWorkDir = (path: string): boolean => inBuild(path) || inBundleTmp(path);
+const inBundleTmp = (path: string): boolean => inPrefixedTmp(path, BUNDLE_PREFIX);
+const inCheckTmp = (path: string): boolean => inPrefixedTmp(path, CHECK_PREFIX);
+const inWorkDir = (path: string): boolean => inBuild(path) || inBundleTmp(path) || inCheckTmp(path);
+const workDirError = (path: string): string => `expected test/build or jsbt temp path: ${path}`;
 export const assertAllowed = (file: string): string => {
   if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(`expected test/build or jsbt bundle temp path: ${file}`);
+  if (!inWorkDir(file)) err(workDirError(file));
   const name = basename(file);
   if (!EXTS.some((ext) => name.endsWith(ext))) err(`refusing unexpected extension: ${file}`);
   if (!PREFIXES.some((prefix) => name.startsWith(prefix)))
@@ -50,7 +54,7 @@ export const writePkg = (file: string, data: string | Uint8Array): string => {
 };
 export const writeBundleInput = (file: string, data: string | Uint8Array): string => {
   if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(`expected test/build or jsbt bundle temp path: ${file}`);
+  if (!inWorkDir(file)) err(workDirError(file));
   if (basename(file) !== 'input.js') err(`expected input.js path: ${file}`);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, data);
@@ -64,7 +68,7 @@ export const rm = (file: string): boolean => (
 );
 export const npmInstall = (dir: string): void => {
   if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(`expected test/build or jsbt bundle temp path: ${dir}`);
+  if (!inWorkDir(dir)) err(workDirError(dir));
   const log = shouldLog(dir);
   if (log) console.log(`install\t${dir}`);
   execFileSync('npm', ['install'], {
@@ -75,7 +79,7 @@ export const npmInstall = (dir: string): void => {
 export const sweep = (dir: string): string[] => {
   if (!existsSync(dir)) return [];
   if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(`expected test/build or jsbt bundle temp path: ${dir}`);
+  if (!inWorkDir(dir)) err(workDirError(dir));
   const out: string[] = [];
   const walk = (cur: string): void => {
     for (const ent of readdirSync(cur, { withFileTypes: true }).sort((a, b) =>
@@ -106,6 +110,18 @@ export const bundleTempDir = (): string => {
 export const rmBundleTempDir = (dir: string): boolean => {
   if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
   if (!inBundleTmp(dir)) err(`expected jsbt bundle temp path: ${dir}`);
+  rmSync(dir, { force: true, recursive: true });
+  if (shouldLog(dir)) console.log(`delete\t${dir}`);
+  return true;
+};
+export const checkTempDir = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), CHECK_PREFIX));
+  if (shouldLog(dir)) console.log(`mkdir\t${dir}`);
+  return dir;
+};
+export const rmCheckTempDir = (dir: string): boolean => {
+  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
+  if (!inCheckTmp(dir)) err(`expected jsbt check temp path: ${dir}`);
   rmSync(dir, { force: true, recursive: true });
   if (shouldLog(dir)) console.log(`delete\t${dir}`);
   return true;

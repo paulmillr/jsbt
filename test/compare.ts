@@ -74,7 +74,6 @@ import compare from '../src/bench-compare.ts';
           },
         },
       },
-      //prevFile: 'bench.json',
     }
   );
 })();

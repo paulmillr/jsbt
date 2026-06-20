@@ -38,7 +38,7 @@ ENV variables:
 
 - `JSBT_FAST=1` enables parallel execution in node.js and Bun
     - `JSBT_FAST=3` values >1 will set worker count
-- `JSBT_FAST=1` enables "quiet" dot reporter
+- `JSBT_QUIET=1` enables "quiet" dot reporter
 
 ```js
 import { should } from 'micro-should';
@@ -124,7 +124,7 @@ There are following options:
 $ jsbt bundle --dir=test/build
 # (same as jsbt bundle, but uses specific dir instead of defaults)
 
-$ jsbt bundle --stats-only
+$ jsbt bundle --stats
 3790 LOC noble-hashes.js
 58.21 KB noble-hashes.min.js
 21.10 KB +gzip
@@ -133,27 +133,46 @@ $ jsbt bundle --stats-only
 ### check
 
 Runs opinionated code quality checks. Uses typescript parsing underneath.
+Temporary build artifacts are created in a per-run OS temp directory and removed after the summary.
 
 ```
-jsbt check <package.json>
-jsbt check <package.json> bigint
-jsbt check <package.json> bytes
-jsbt check <package.json> comments
-jsbt check <package.json> errors
-jsbt check <package.json> importtime
-jsbt check <package.json> jsr
-jsbt check <package.json> jsrpublish
-jsbt check <package.json> mutate
-jsbt check <package.json> patterns
-jsbt check <package.json> readme
-jsbt check <package.json> tests
-jsbt check <package.json> treeshake [out-dir]
-jsbt check <package.json> tsdoc
-jsbt check <package.json> typeimport
+jsbt check [--project=<directory>]
+jsbt check [--project=<directory>] bigint
+jsbt check [--project=<directory>] bytes
+jsbt check [--project=<directory>] comments
+jsbt check [--project=<directory>] errors
+jsbt check [--project=<directory>] importtime
+jsbt check [--project=<directory>] jsr
+jsbt check [--project=<directory>] jsrpublish
+jsbt check [--project=<directory>] mutate
+jsbt check [--project=<directory>] patterns
+jsbt check [--project=<directory>] readme
+jsbt check [--project=<directory>] treeshake
+jsbt check [--project=<directory>] tsdoc
+jsbt check [--project=<directory>] typeimport
 jsbt check-install <package.json>
 ```
 
-Subcommand summary for `check <package.json> <subcommand>`:
+With `"check": "npx --no @paulmillr/jsbt check"` in `package.json`, selectors can be run
+through npm:
+
+```
+npm run check bigint
+npm run check bytes
+npm run check comments
+npm run check errors
+npm run check importtime
+npm run check jsr
+npm run check jsrpublish
+npm run check mutate
+npm run check patterns
+npm run check readme
+npm run check treeshake
+npm run check tsdoc
+npm run check typeimport
+```
+
+Subcommand summary for `check <subcommand>`:
 
 * `bigint`: find BigInt compatibility hazards in public runtime files.
 * `bytes`: inspect byte/typed-array API surface and TypeScript-version compatibility.
@@ -165,7 +184,6 @@ Subcommand summary for `check <package.json> <subcommand>`:
 * `mutate`: detect mutation hazards in public runtime behavior.
 * `patterns`: report source patterns that are risky for published packages.
 * `readme`: type-check and run runnable README examples.
-* `tests`: run package tests and benchmark entry points.
 * `treeshake`: bundle public exports and report retained unused code.
 * `tsdoc`: audit public declaration docs and examples.
 * `typeimport`: verify imports that should be type-only.

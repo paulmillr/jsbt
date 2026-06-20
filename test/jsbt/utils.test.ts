@@ -270,7 +270,7 @@ should('resolveLocalImport builds local import candidates while caller owns acce
 
 should('makeIssue normalizes levels and optional issue kinds', () => {
   deepStrictEqual(makeIssue('warn', 'file.ts', '7/name', 'fix this', 'kind'), {
-    level: 'WARNING',
+    level: 'WARN',
     ref: { file: 'file.ts', issue: 'fix this (kind)', sym: '7/name' },
   });
   deepStrictEqual(makeIssue('INFO', 'package.json', 'check', 'all clear'), {
@@ -316,7 +316,7 @@ should('reportIssues can make warning-only results fatal with checker-specific t
     {
       error: 'README check found issues',
       out: [
-        '[WARNING] (readme) README.md:1/usage js->ts (fence-mismatch)',
+        '[WARN] readme: README.md:1/usage js->ts (fence-mismatch)',
         '[error] summary: 0 passed, 1 warning, 0 failures, 0 skipped',
       ].join('\n'),
     }
@@ -326,7 +326,7 @@ should('reportIssues can make warning-only results fatal with checker-specific t
     {
       error: 'JSDoc check found issues',
       out: [
-        '[WARNING] (tsdoc) README.md:1/usage js->ts (fence-mismatch)',
+        '[WARN] tsdoc: README.md:1/usage js->ts (fence-mismatch)',
         '[warn] summary: 0 passed, 1 warning, 0 failures, 0 skipped',
       ].join('\n'),
     }

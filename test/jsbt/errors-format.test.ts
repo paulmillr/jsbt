@@ -124,7 +124,7 @@ should('errors warns before audit when TSDoc examples do not produce probes', as
   deepStrictEqual(res, {
     ok: true,
     stderr:
-      '[WARNING] (errors) src/index.ts:1/example ' +
+      '[WARN] errors: src/index.ts:1/example ' +
       'could not derive valid runtime probes from TSDoc example (errors-example)\n' +
       '[warn] summary: 0 passed, 1 warning, 0 failures, 0 skipped\n',
     stdout: '',

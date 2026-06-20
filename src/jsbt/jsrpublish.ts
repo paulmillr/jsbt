@@ -111,7 +111,7 @@ const preview = (probe: PublishProbe, full: boolean): string[] => {
 const recordPublishIssue = (
   out: Result,
   issues: LogIssue[],
-  level: 'ERROR' | 'WARNING',
+  level: 'ERROR' | 'WARN',
   kind: string,
   text: string,
   probe: PublishProbe,
@@ -168,7 +168,7 @@ export const runCli = async (
       recordPublishIssue(
         out,
         issues,
-        'WARNING',
+        'WARN',
         'jsrpublish-slow',
         [
           'deno publish fails without --allow-slow-types;',

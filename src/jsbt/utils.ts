@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, type Dirent } from 'node:fs';
 import { createRequire } from 'node:module';
+import { cpus } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { rm, write } from '../fs-modify.ts';
+import { rm, write, writePkg } from '../fs-modify.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 
@@ -13,7 +14,7 @@ export type CliArgs = { args: PkgArgs; colorOn: boolean };
 export type PkgTarget = { cwd: string; pkgFile: string };
 export type RunDirCtx = { cwd: string; pkg: { name: string } };
 export type SourceCtx = { cwd: string; files: string[]; pkgFile: string };
-export type Level = 'ERROR' | 'INFO' | 'WARNING';
+export type Level = 'ERROR' | 'INFO' | 'WARN';
 export type Ref = { file: string; issue: string; sym: string };
 export type Issue = { level: Level; ref: Ref };
 export type IssueLevel = Level | 'error' | 'info' | 'warn';
@@ -152,6 +153,16 @@ try {
 export const stripAnsi = (line: string): string => line.replace(/\x1b\[\d+(;\d+)*m/g, '');
 export const err = (msg: string): never => {
   throw new Error(msg);
+};
+export const parseFast = (str: string | number | undefined): number => {
+  const val = str === 'true' ? 1 : Number.parseInt(String(str || ''), 10);
+  if (!Number.isSafeInteger(val) || val < 1 || val > 256) return 0;
+  return val;
+};
+export const jsbtWorkerLimit = (defaultCount: number): number => {
+  const fast = parseFast(process.env.JSBT_FAST);
+  const count = fast === 1 ? cpus().length : fast || defaultCount;
+  return Math.max(1, Math.min(count, 256));
 };
 export const camelParts = (parts: string[]): string =>
   parts.map((part, i) => (i ? part[0].toUpperCase() + part.slice(1) : part)).join('');
@@ -466,9 +477,26 @@ export const pickRunDir = (cwd: string, name: string): string => {
   }
   return dir;
 };
-export const withRunDir = <T extends RunDirCtx>(ctx: T): T & { runDir: string } => ({
+export const prepareRunDir = (cwd: string, name: string, dir: string): string => {
+  if (!isAbsolute(dir)) err(`expected absolute run dir: ${dir}`);
+  const template = join(pickRunDir(cwd, name), 'package.json');
+  const pkg = readJson<BuildPkg>(template);
+  let rewrote = false;
+  for (const deps of [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies]) {
+    if (deps?.[name] !== 'file:../..') continue;
+    deps[name] = `file:${cwd}`;
+    rewrote = true;
+  }
+  if (!rewrote) err(`expected ${template} to install ${name} as "file:../.."`);
+  writePkg(join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+  return dir;
+};
+export const withRunDir = <T extends RunDirCtx>(
+  ctx: T,
+  runDir?: string
+): T & { runDir: string } => ({
   ...ctx,
-  runDir: pickRunDir(ctx.cwd, ctx.pkg.name),
+  runDir: runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, runDir) : pickRunDir(ctx.cwd, ctx.pkg.name),
 });
 export const loadNear = <T>(
   pkgFile: string,
@@ -642,17 +670,17 @@ export const status = (name: 'error' | 'pass' | 'warn', on: boolean): string => 
   return `[${paint(name, code, on)}]`;
 };
 export const tag = (name: Level, on: boolean): string => {
-  const code = name === 'ERROR' ? color.red : name === 'WARNING' ? color.yellow : color.green;
+  const code = name === 'ERROR' ? color.red : name === 'WARN' ? color.yellow : color.green;
   return `[${paint(name, code, on)}]`;
 };
 export const formatIssue = (level: Level, head: string, ref: Ref, on: boolean): string =>
-  `${tag(level, on)} (${head}) ${ref.file}:${ref.sym} ${ref.issue}`;
+  `${tag(level, on)} ${head}: ${ref.file}:${ref.sym} ${ref.issue}`;
 export const issueKind = (text: string, kind: string): string => {
   const [first, ...rest] = text.split('\n');
   return [`${first} (${kind})`, ...rest].join('\n');
 };
 const issueLevel = (level: IssueLevel): Level =>
-  level === 'error' ? 'ERROR' : level === 'warn' ? 'WARNING' : level === 'info' ? 'INFO' : level;
+  level === 'error' ? 'ERROR' : level === 'warn' ? 'WARN' : level === 'info' ? 'INFO' : level;
 export const makeIssue = (
   level: IssueLevel,
   file: string,
@@ -665,7 +693,7 @@ export const makeIssue = (
 });
 export const countIssue = (res: Result, issues: Issue[], issue: Issue): void => {
   if (issue.level === 'ERROR') res.failures += 1;
-  else if (issue.level === 'WARNING') res.warnings += 1;
+  else if (issue.level === 'WARN') res.warnings += 1;
   else res.skipped += 1;
   issues.push(issue);
 };
@@ -781,7 +809,7 @@ const formatIssueGroup = (
   refs.length === 1 && (head === 'errors' || !refs[0].detail)
     ? [formatIssue(level, head, refs[0].ref, on)]
     : [
-        `${tag(level, on)} (${head}) ${refs.length === 1 ? issue : `${refs.length}x ${issue}`}`,
+        `${tag(level, on)} ${head}: ${refs.length === 1 ? issue : `${refs.length}x ${issue}`}`,
         ...refs.map((item) => `  ${refLoc(item.ref)}${item.detail ? ` ${item.detail}` : ''}`),
       ];
 export const groupIssues = (head: string, issues: Issue[], on: boolean): string[] => {

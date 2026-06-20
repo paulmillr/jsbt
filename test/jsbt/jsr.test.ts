@@ -1,4 +1,4 @@
-import { deepStrictEqual } from 'node:assert';
+import { deepStrictEqual, rejects } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -64,13 +64,13 @@ should('jsr forces import mappings for optional peer runtime deps', async () => 
   const res = await run(cwd);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @awasm\/compiler -> jsr:@awasm\/compiler@0\.1\.1/.test(
+    /\[ERROR\] jsr: fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @awasm\/compiler -> jsr:@awasm\/compiler@0\.1\.1/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) package\.json:dependencies add package dependency for exported source import @awasm\/compiler \(jsr-dep\)/.test(
+    /\[ERROR\] jsr: package\.json:dependencies add package dependency for exported source import @awasm\/compiler \(jsr-dep\)/.test(
       plain(res)
     ),
     false
@@ -83,7 +83,7 @@ should('jsr reports gitignored module graph paths with publish.exclude unignore 
   const res = await run(cwd);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) 2x unignore gitignored module graph path; add publish\.exclude entry !src\/generated \(jsr-gitignore\)\n  src\/generated\/index\.ts:gitignore\n  src\/generated\/util\.js:gitignore/.test(
+    /\[ERROR\] jsr: 2x unignore gitignored module graph path; add publish\.exclude entry !src\/generated \(jsr-gitignore\)\n  src\/generated\/index\.ts:gitignore\n  src\/generated\/util\.js:gitignore/.test(
       plain(res)
     ),
     true
@@ -106,55 +106,55 @@ should('jsr reports export, import, publish, version, and name mismatches', asyn
   const res = await run(cwd);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) jsr\.json:version version mismatch; expected 1\.2\.3 from package\.json \(jsr-version\)/.test(
+    /\[ERROR\] jsr: jsr\.json:version version mismatch; expected 1\.2\.3 from package\.json \(jsr-version\)/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) jsr\.json:name name mismatch; expected @paulmillr\/micro-jsr-fail from package\.json \(jsr-name\)/.test(
+    /\[ERROR\] jsr: jsr\.json:name name mismatch; expected @paulmillr\/micro-jsr-fail from package\.json \(jsr-name\)/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/util\.js -> \.\/src\/util\.ts/.test(
+    /\[ERROR\] jsr: missing jsr export mapping \(jsr-export\)\n  jsr\.json:exports \.\/util\.js -> \.\/src\/util\.ts/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) remove unexpected jsr export mapping \(jsr-export-extra\)\n  jsr\.json:exports \.\/extra\.js -> \.\/src\/extra\.ts/.test(
+    /\[ERROR\] jsr: remove unexpected jsr export mapping \(jsr-export-extra\)\n  jsr\.json:exports \.\/extra\.js -> \.\/src\/extra\.ts/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed/.test(
+    /\[ERROR\] jsr: 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) remove unexpected jsr import mapping \(jsr-import-extra\)\n  jsr\.json:imports unused -> jsr:@paulmillr\/unused/.test(
+    /\[ERROR\] jsr: remove unexpected jsr import mapping \(jsr-import-extra\)\n  jsr\.json:imports unused -> jsr:@paulmillr\/unused/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) 2x add required publish entry \(jsr-publish-required\)\n  jsr\.json:publish LICENSE\n  jsr\.json:publish README\.md/.test(
+    /\[ERROR\] jsr: 2x add required publish entry \(jsr-publish-required\)\n  jsr\.json:publish LICENSE\n  jsr\.json:publish README\.md/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) 2x add publish coverage for exported source graph \(jsr-publish\)\n  jsr\.json:publish src\/shared\.ts\n  jsr\.json:publish src\/util\.ts/.test(
+    /\[ERROR\] jsr: 2x add publish coverage for exported source graph \(jsr-publish\)\n  jsr\.json:publish src\/shared\.ts\n  jsr\.json:publish src\/util\.ts/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(jsr\) remove non-source publish entry \(jsr-publish-source\)\n  jsr\.json:publish util\.js/.test(
+    /\[ERROR\] jsr: remove non-source publish entry \(jsr-publish-source\)\n  jsr\.json:publish util\.js/.test(
       plain(res)
     ),
     true
@@ -170,7 +170,7 @@ should(
     const res = await run(cwd);
     deepStrictEqual(res.ok, false);
     deepStrictEqual(
-      /\[ERROR\] \(jsr\) 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes@\^2\.2\.0\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed@\^0\.8\.0/.test(
+      /\[ERROR\] jsr: 2x fix jsr import mapping \(jsr-import\)\n  jsr\.json:imports @noble\/hashes -> jsr:@noble\/hashes@\^2\.2\.0\n  jsr\.json:imports micro-packed -> jsr:@paulmillr\/micro-packed@\^0\.8\.0/.test(
         plain(res)
       ),
       true
@@ -180,11 +180,12 @@ should(
   }
 );
 
-should('check-jsr alias runs jsr checker', async () => {
+should('check-jsr alias is rejected by jsbt dispatcher', async () => {
   const cwd = fixture('pass-root');
-  const res = await capture(() => runJsbt(['check-jsr', 'package.json'], { color: false, cwd }));
-  deepStrictEqual(res.ok, true, all(res));
-  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
+  await rejects(
+    () => runJsbt(['check-jsr', 'package.json'], { color: false, cwd }),
+    /unknown jsbt command: check-jsr/
+  );
 });
 
 should.runWhen(import.meta.url);

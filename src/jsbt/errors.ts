@@ -24,6 +24,7 @@ import {
   emptyResult,
   fileUrl,
   ident,
+  jsbtWorkerLimit,
   lineIndex,
   loadTypeScriptApi,
   nodeStart,
@@ -131,7 +132,7 @@ const usage = usageText('errors', 'check-errors.ts');
 
 const TIMEOUT = 120_000;
 const MAX_PROBES_PER_ARG = 12;
-const PROBE_LIMIT = Math.max(1, Math.min(availableParallelism?.() || 4, 16));
+const defaultProbeLimit = (): number => Math.max(1, Math.min(availableParallelism?.() || 4, 16));
 const loadTs = (pkgFile: string): TsLike => {
   return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createSourceFile']);
 };
@@ -1429,7 +1430,7 @@ const __jsbtRun = async (records) => {
       ret = await item.ret;
     } catch (error) {
       __jsbtAdd(
-        'WARNING',
+        'WARN',
         'example',
         item.line,
         item.name,
@@ -1440,7 +1441,7 @@ const __jsbtRun = async (records) => {
     const changed = __jsbtChanged(before, __jsbtBytes(args, 'arg'));
     if (changed.length && !__jsbtDocumented)
       __jsbtAdd(
-        'WARNING',
+        'WARN',
         'mutation',
         item.line,
         item.name,
@@ -1450,7 +1451,7 @@ const __jsbtRun = async (records) => {
       );
     if (__jsbtAlias(ret, refs) && !__jsbtDocumented)
       __jsbtAdd(
-        'WARNING',
+        'WARN',
         'alias',
         item.line,
         item.name,
@@ -1512,13 +1513,13 @@ try {
 `;
 type ProbeRun = { idx: number; item: Work; rel: string; res: Probe };
 const probe = async (
-  ctx: PublicCtx,
   specs: Map<string, string>,
   work: Work,
+  runDir: string,
   timeoutMs: number
 ): Promise<Probe> => {
   return withTempFile(
-    resolve(ctx.cwd, 'test', 'build'),
+    runDir,
     { code: harness(work, harnessCode(specs, work)), ext: 'ts', prefix: '.__errors-check-' },
     async (file) => {
       // Keep each example in its own worker: package modules, globals, timers, and timeouts
@@ -1545,6 +1546,7 @@ const runProbeLimit = async (
   specs: Map<string, string>,
   items: Work[],
   limit: number,
+  runDir: string,
   timeoutMs: number
 ): Promise<ProbeRun[]> => {
   const out = new Array<ProbeRun>(items.length);
@@ -1558,7 +1560,7 @@ const runProbeLimit = async (
         idx,
         item,
         rel: relName(ctx.cwd, item.file),
-        res: await probe(ctx, specs, item, timeoutMs),
+        res: await probe(specs, item, runDir, timeoutMs),
       };
     }
   };
@@ -1603,6 +1605,7 @@ export const runCli = async (
     cwd?: string;
     examplesOnly?: boolean;
     limit?: number;
+    runDir?: string;
     timeoutMs?: number;
   } = {}
 ): Promise<void> => {
@@ -1612,6 +1615,7 @@ export const runCli = async (
   const ctx = publicCtx(args.pkgArg, opts.cwd);
   const ts = loadTs(ctx.pkgFile);
   const entries = runtimeEntries(ctx);
+  const runDir = opts.runDir || resolve(ctx.cwd, 'test', 'build');
   const specs = specMap(entries);
   const rows = workRows(ctx, ts, entries);
   const items = rows.filter((item) => item.calls.length);
@@ -1626,7 +1630,7 @@ export const runCli = async (
     recordIssue(
       out,
       logs,
-      'WARNING',
+      'WARN',
       relName(ctx.cwd, item.file),
       `${item.line}/example`,
       'could not derive valid runtime probes from TSDoc example',
@@ -1652,7 +1656,8 @@ export const runCli = async (
     ctx,
     specs,
     items,
-    opts.limit || PROBE_LIMIT,
+    opts.limit || jsbtWorkerLimit(defaultProbeLimit()),
+    runDir,
     opts.timeoutMs || TIMEOUT
   );
   for (const { item, rel, res } of runs) {
@@ -1660,7 +1665,7 @@ export const runCli = async (
       recordIssue(
         out,
         logs,
-        'WARNING',
+        'WARN',
         rel,
         `${item.line}/example`,
         'example probe failed: ' + res.error,

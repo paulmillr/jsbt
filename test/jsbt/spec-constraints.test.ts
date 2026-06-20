@@ -33,7 +33,6 @@ const checkSelectors = [
   'mutate',
   'patterns',
   'readme',
-  'tests',
   'treeshake',
   'tsdoc',
   'typeimport',
@@ -190,17 +189,33 @@ should('jsbt files with fs-modify constraints do not import raw destructive fs h
   deepStrictEqual(bad, []);
 });
 
-should('documented top-level jsbt commands are wired in dispatcher', () => {
+should('jsbt dispatcher exposes only documented top-level commands', () => {
   const src = read('src/jsbt/index.ts');
-  const documented = new Set(Array.from(src.matchAll(/^\s+jsbt\s+(\S+)/gm)).map((item) => item[1]));
+  const documented = sorted(
+    Array.from(new Set(Array.from(src.matchAll(/^\s+jsbt\s+(\S+)/gm)).map((item) => item[1])))
+  );
   const cmdRun = src.match(/const cmdRun = \{([\s\S]*?)\n\} satisfies/)?.[1] || '';
-  const wired = new Set(
-    Array.from(cmdRun.matchAll(/^\s+(?:'([^']+)'|([A-Za-z]\w*)):/gm)).map(
+  const wired = sorted(
+    Array.from(
+      new Set(
+        Array.from(cmdRun.matchAll(/^\s+(?:'([^']+)'|([A-Za-z]\w*)):/gm)).map(
+          (item) => item[1] || item[2]
+        )
+      )
+    )
+  );
+  deepStrictEqual(wired, documented);
+});
+
+should('jsbt check exposes only documented selectors', () => {
+  const src = read('src/jsbt/index.ts');
+  const aliases = src.match(/const CHECK_ALIASES = \{([\s\S]*?)\n\} as const/)?.[1] || '';
+  const wired = sorted(
+    Array.from(aliases.matchAll(/^\s+(?:'([^']+)'|([A-Za-z]\w*)):/gm)).map(
       (item) => item[1] || item[2]
     )
   );
-  const missing = sorted(Array.from(documented).filter((cmd) => !wired.has(cmd)));
-  deepStrictEqual(missing, []);
+  deepStrictEqual(wired, sorted([...checkSelectors]));
 });
 
 should('README and CLI usage document every check selector', () => {
@@ -208,8 +223,7 @@ should('README and CLI usage document every check selector', () => {
   const usage = read('src/jsbt/index.ts');
   const missing: string[] = [];
   for (const selector of checkSelectors) {
-    const suffix = selector === 'treeshake' ? ' [out-dir]' : '';
-    const jsbt = `jsbt check [--project=<directory>] ${selector}${suffix}`;
+    const jsbt = `jsbt check [--project=<directory>] ${selector}`;
     const npm = `npm run check ${selector}`;
     if (!usage.includes(jsbt)) missing.push(`src/jsbt/index.ts: ${jsbt}`);
     if (readmeSelectors.includes(selector)) {
@@ -222,10 +236,10 @@ should('README and CLI usage document every check selector', () => {
 
 should('constraint: npm run check errors prints standalone errors audit rows', () => {
   const res = runNpmCheck(['errors']);
-  fails(res);
+  passes(res);
   has(res.text, /wrong a=true\n- index\.ts:sum: NO ERROR!/);
   has(res.text, /could not derive valid runtime probes from TSDoc example/);
-  has(res.text, /jsbt check done in \d+s: errors\(\d+, \d+s\)/);
+  has(res.text, /1 check finished in \d+ sec/);
 });
 
 should('constraint: npm run check treeshake prints the standalone table', () => {
@@ -233,103 +247,99 @@ should('constraint: npm run check treeshake prints the standalone table', () => 
   passes(res);
   has(res.text, /module\s+│export\s+│min bundle\s+│LOC\s+│min KB/);
   has(res.text, /@jsbt-test\/npm-check\s+│/);
-  has(res.text, /jsbt check done in \d+s: treeshake\(0, \d+s\)/);
+  has(res.text, /1 check finished in \d+ sec/);
 });
 
 should('constraint: npm run check patterns prints pattern findings', () => {
   const res = runNpmCheck(['patterns']);
-  fails(res);
-  has(res.text, /\[ERROR\] \(patterns\) index\.ts:2:1\/unused/);
+  passes(res);
+  has(res.text, /\[WARN\] patterns: index\.ts:2:1\/unused/);
   has(res.text, /do not silence unused values with void expression statement/);
-  has(res.text, /jsbt check done in \d+s: patterns\(1, \d+s\)/);
+  has(res.text, /1 check finished in \d+ sec/);
 });
 
 should('constraint: npm run check tsdoc returns only the tsdoc subset', () => {
   const res = runNpmCheck(['tsdoc']);
-  fails(res);
-  has(res.text, /\[ERROR\] \(tsdoc\) /);
+  passes(res);
+  has(res.text, /\[WARN\] tsdoc: /);
   has(res.text, /missing JSDoc/);
   lacks(res.text, /\(readme\)/);
   lacks(res.text, /\(patterns\)/);
-  has(res.text, /jsbt check done in \d+s: tsdoc\(\d+, \d+s\)/);
+  has(res.text, /1 check finished in \d+ sec/);
 });
 
 should('constraint: npm run check readme returns only the readme subset', () => {
   const res = runNpmCheck(['readme']);
-  fails(res);
-  has(res.text, /\[ERROR\] \(readme\) README\.md:\d+\/usage/);
+  passes(res);
+  has(res.text, /\[WARN\] readme: README\.md:\d+\/usage/);
   lacks(res.text, /\(tsdoc\)/);
   lacks(res.text, /\(patterns\)/);
-  has(res.text, /jsbt check done in \d+s: readme\(1, \d+s\)/);
+  has(res.text, /1 check finished in \d+ sec/);
 });
 
 should('constraint: plain npm run check suppresses standalone audit tables and patterns', () => {
   const res = runNpmCheck();
   fails(res);
-  has(res.text, /\[ERROR\] \(readme\) /);
-  has(res.text, /\[ERROR\] \(tsdoc\) /);
-  has(res.text, /\[WARNING\] \(errors\) /);
+  has(res.text, /\[WARN\] readme: /);
+  has(res.text, /\[WARN\] tsdoc: /);
+  has(res.text, /\[WARN\] errors: /);
   has(res.text, /could not derive valid runtime probes from TSDoc example/);
   lacks(res.text, /module\s+│export\s+│min bundle/);
   lacks(res.text, /^wrong \S+=/m);
   lacks(res.text, /NO ERROR!/);
   lacks(res.text, /\(patterns\)/);
-  has(res.text, /jsbt check done in \d+s:/);
+  has(res.text, /12 checks finished in \d+ sec/);
 });
 
 should('constraint: npm run check locks output contracts for every other selector', () => {
   const contracts = {
     bigint: {
-      fail: true,
+      pass: true,
       has: [
-        /\[ERROR\] \(bigint\) replace raw bigint literal with helper const/,
+        /\[WARN\] bigint: replace raw bigint literal with helper const/,
         /index\.ts:5:20\/bigint 123n -> \/\* @__PURE__ \*\/ BigInt\(123\)/,
       ],
     },
     bytes: {
-      fail: true,
+      pass: true,
       has: [
-        /\[ERROR\] \(bytes\) index\.ts:1\/helper add canonical bytes helper types/,
+        /\[WARN\] bytes: index\.ts:1\/helper add canonical bytes helper types/,
         /wrap input type with TArg<\.\.\.>/,
         /wrap output type with TRet<\.\.\.>/,
       ],
     },
     comments: {
-      fail: true,
-      has: [/\[ERROR\] \(comments\) index\.ts:4\/comment comment line exceeds 100 chars/],
+      pass: true,
+      has: [/\[WARN\] comments: index\.ts:4\/comment comment line exceeds 100 chars/],
     },
     importtime: {
       pass: true,
-      has: [/\[WARNING\] \(importtime\) index\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/],
+      has: [/\[WARN\] importtime: index\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/],
     },
     jsdoc: {
-      fail: true,
+      pass: true,
       head: 'tsdoc',
-      has: [/\[ERROR\] \(tsdoc\) /, /missing JSDoc/],
+      has: [/\[WARN\] tsdoc: /, /missing JSDoc/],
       lacks: [/\(readme\)/, /\(patterns\)/],
     },
     jsr: {
       fail: true,
       has: [
-        /\[ERROR\] \(jsr\) fix jsr export mapping/,
+        /\[ERROR\] jsr: fix jsr export mapping/,
         /jsr\.json:name name mismatch/,
         /add required publish entry/,
       ],
     },
     jsrpublish: {
-      has: [/\[(?:ERROR|WARNING|INFO)\] \(jsrpublish\) /],
+      has: [/\[(?:ERROR|WARN|INFO)\] jsrpublish: /],
     },
     mutate: {
-      fail: true,
-      has: [/\[ERROR\] \(mutate\) index\.js:mutable mutable object export/],
-    },
-    tests: {
-      fail: true,
-      has: [/\[ERROR\] \(tests\) test\/fail\.test\.ts:exec exited 1 AssertionError/],
+      pass: true,
+      has: [/\[WARN\] mutate: index\.js:mutable mutable object export/],
     },
     typeimport: {
-      fail: true,
-      has: [/\[ERROR\] \(typeimport\) index\.d\.mts:\d+\/typeimport add import type/],
+      pass: true,
+      has: [/\[WARN\] typeimport: index\.d\.mts:\d+\/typeimport add import type/],
     },
   } as const;
   for (const [selector, contract] of Object.entries(contracts)) {
@@ -338,7 +348,7 @@ should('constraint: npm run check locks output contracts for every other selecto
     if ('pass' in contract) passes(res);
     lacks(res.text, /unknown jsbt command/, selector);
     const head = 'head' in contract ? contract.head : selector;
-    has(res.text, new RegExp(`jsbt check done in \\d+s: ${head}\\(`), selector);
+    has(res.text, /1 check finished in \d+ sec/, selector);
     for (const pattern of contract.has) has(res.text, pattern, selector);
     if ('lacks' in contract)
       for (const pattern of contract.lacks) lacks(res.text, pattern, selector);

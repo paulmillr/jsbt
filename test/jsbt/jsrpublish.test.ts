@@ -73,7 +73,7 @@ should('jsrpublish warns in compact mode when only --allow-slow-types passes', a
   });
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /\[WARNING\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails without --allow-slow-types; rerun passes with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish-slow\)/.test(
+    /\[WARN\] jsrpublish: src\/index\.ts:7:14 deno publish fails without --allow-slow-types; rerun passes with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish-slow\)/.test(
       plain(res)
     ),
     true
@@ -111,7 +111,7 @@ should(
     });
     deepStrictEqual(res.ok, false);
     deepStrictEqual(
-      /\[ERROR\] \(jsrpublish\) src\/index\.ts:7:14 deno publish fails even with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish\)/.test(
+      /\[ERROR\] jsrpublish: src\/index\.ts:7:14 deno publish fails even with --allow-slow-types; see npm run check jsrpublish for full output \(jsrpublish\)/.test(
         plain(res)
       ),
       true
@@ -167,7 +167,7 @@ should('jsrpublish reports skipped runs when deno is unavailable', async () => {
   });
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /\[INFO\] \(jsrpublish\) jsr\.json:publish deno publish dry-run skipped; missing deno on PATH; install deno to run publish dry-run \(jsrpublish-skip\)/.test(
+    /\[INFO\] jsrpublish: jsr\.json:publish deno publish dry-run skipped; missing deno on PATH; install deno to run publish dry-run \(jsrpublish-skip\)/.test(
       plain(res)
     ),
     true

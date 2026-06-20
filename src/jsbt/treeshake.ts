@@ -16,8 +16,8 @@ initializers still look non-pure, so place the PURE marker as close as possible 
 if a computed arg or top-level value still survives, a tiny pure IIFE is the next-smallest fix.
  */
 import { existsSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve } from 'node:path';
-import { constants, gzipSync, zstdCompressSync } from 'node:zlib';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { npmInstall, sweepTemps, write } from '../fs-modify.ts';
 import { exportPath, readPkg, type Pkg } from './public.ts';
 import {
@@ -31,6 +31,7 @@ import {
   makeIssue,
   nodeText,
   paint,
+  prepareRunDir,
   readSource,
   readText,
   relFile,
@@ -146,30 +147,31 @@ const parseArgs = (argv: string[]): Args => {
   if (argv.length !== 2) err('expected <package.json> and <out-dir>');
   return { help: false, outArg: argv[1], pkgArg: argv[0] };
 };
-const resolveCtx = (args: Args, cwd: string = process.cwd()): Ctx => {
+const resolveCtx = (args: Args, cwd: string = process.cwd(), outArg?: string): Ctx => {
   const base = resolve(cwd);
   const pkgFile = resolve(base, args.pkgArg);
-  const outDir = resolve(base, args.outArg);
-  const outRel = relative(base, outDir);
-  if (!outRel || outRel === '.' || outRel.startsWith('..'))
-    err(`refusing unsafe out dir ${args.outArg}; expected a child dir of ${base}`);
+  const outDir = outArg ? resolve(outArg) : resolve(base, args.outArg);
+  if (outArg && !isAbsolute(outArg)) err(`expected absolute out dir: ${outArg}`);
+  if (!outArg) {
+    const outRel = relative(base, outDir);
+    if (!outRel || outRel === '.' || outRel.startsWith('..'))
+      err(`refusing unsafe out dir ${args.outArg}; expected a child dir of ${base}`);
+  }
   return { cwd: base, outDir, pkg: readPkg(pkgFile), pkgDir: dirname(pkgFile), pkgFile };
 };
 const esbuildPkg = (pkgFile: string): string => {
   const file = resolve(dirname(pkgFile), 'test', 'build', 'package.json');
   return existsSync(file) ? file : pkgFile;
 };
-const loadDeps = (pkgFile: string): Deps => {
+const loadDepsFrom = (pkgFile: string, esbuildPkgFile: string): Deps => {
   // `esbuild` usually lives under `test/build`; TypeScript lives at the repo root.
-  const esbuild = loadModuleApi<{ build?: BuildLike }>(
-    esbuildPkg(pkgFile),
-    'esbuild',
-    'esbuild.build',
-    ['build']
-  );
+  const esbuild = loadModuleApi<{ build?: BuildLike }>(esbuildPkgFile, 'esbuild', 'esbuild.build', [
+    'build',
+  ]);
   const ts = loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
   return { build: esbuild.build as BuildLike, ts };
 };
+const loadDeps = (pkgFile: string): Deps => loadDepsFrom(pkgFile, esbuildPkg(pkgFile));
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
 const itemId = (pkg: Pkg, item: Pick<Item, 'dir' | 'export' | 'module' | 'out'>): string =>
   isPkgAll(item) ? pkg.name : `${item.module}/${item.export || ALL}`;
@@ -357,9 +359,6 @@ const writeCase = async (ctx: Ctx, build: BuildLike, item: Item): Promise<Built>
 };
 const row = (ctx: Ctx, item: Item, out: Pick<Built, 'min' | 'minFile' | 'plain'>) => {
   const gz = gzipSync(out.min, { level: 9 });
-  const zstd = zstdCompressSync(out.min, {
-    params: { [constants.ZSTD_c_compressionLevel]: 22 },
-  });
   return [
     item.module,
     item.export,
@@ -367,7 +366,6 @@ const row = (ctx: Ctx, item: Item, out: Pick<Built, 'min' | 'minFile' | 'plain'>
     paint(String(decoder.decode(out.plain).split('\n').length), color.green),
     paint(kb(out.min.length), color.green),
     size(gz.length, out.min.length),
-    size(zstd.length, out.min.length),
   ];
 };
 const treeIssue = (pkg: Pkg, item: Built, entry: AuditItem): TreeIssue => ({
@@ -391,7 +389,9 @@ export const runCli = async (
     cwd?: string;
     load?: (pkgFile: string) => Deps;
     onIssue?: (issue: TreeIssue) => void;
+    outDir?: string;
     quiet?: boolean;
+    runDir?: string;
   } = {}
 ): Promise<void> => {
   const args = parseArgs(argv);
@@ -399,14 +399,18 @@ export const runCli = async (
     console.log(usage);
     return;
   }
-  const ctx = resolveCtx(args, opts.cwd);
-  npmInstall(dirname(esbuildPkg(ctx.pkgFile)));
+  const ctx = resolveCtx(args, opts.cwd, opts.outDir);
+  const runDir = opts.runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, opts.runDir) : undefined;
+  const esbuildPkgFile = runDir ? join(runDir, 'package.json') : esbuildPkg(ctx.pkgFile);
+  npmInstall(dirname(esbuildPkgFile));
   sweepTemps(ctx.outDir);
   sweepTemps(dirname(ctx.outDir));
-  const { build, ts } = (opts.load || loadDeps)(ctx.pkgFile);
+  const { build, ts } = opts.load
+    ? opts.load(ctx.pkgFile)
+    : loadDepsFrom(ctx.pkgFile, esbuildPkgFile);
   const mods = readModules(ctx, ts);
   const items = cases(ctx.pkg, mods);
-  const headers = ['module', 'export', 'min bundle', 'LOC', 'min KB', 'gzip KB (%)', 'zstd KB (%)'];
+  const headers = ['module', 'export', 'min bundle', 'LOC', 'min KB', 'gzip KB (%)'];
   const sizes = [
     Math.max(headers[0].length, ...items.map((item) => item.module.length)),
     Math.max(headers[1].length, ...items.map((item) => item.export.length)),
@@ -414,7 +418,6 @@ export const runCli = async (
     Math.max(headers[3].length, 5),
     Math.max(headers[4].length, 6),
     Math.max(headers[5].length, 18),
-    Math.max(headers[6].length, 18),
   ];
   const print = table(console.log);
   if (!opts.quiet) print.drawHeader(sizes, headers);

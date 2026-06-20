@@ -67,7 +67,7 @@ should(
     );
     deepStrictEqual(
       new RegExp(
-        '\\[WARNING\\] \\(errors\\) src/index\\.ts:\\d+/mutates ' +
+        '\\[WARN\\] errors: src/index\\.ts:\\d+/mutates ' +
           'valid call mutates input at arg\\[0\\]; ' +
           'document explicit mutation or copy input \\(errors-mutation\\)'
       ).test(out),
@@ -75,7 +75,7 @@ should(
     );
     deepStrictEqual(
       new RegExp(
-        '\\[WARNING\\] \\(errors\\) src/index\\.ts:\\d+/aliases ' +
+        '\\[WARN\\] errors: src/index\\.ts:\\d+/aliases ' +
           'return value aliases input; ' +
           'document returned-input aliasing or copy output \\(errors-alias\\)'
       ).test(out),
@@ -91,16 +91,10 @@ should('check errors selector runs the standalone errors checker', async () => {
   const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
   const out = plain(res);
   deepStrictEqual(res.ok, false);
-  deepStrictEqual(
-    /\[INFO\] \(check\) package\.json:note Treat these results as suggestions, not strict errors/.test(
-      out
-    ),
-    true
-  );
   deepStrictEqual(/wrong secretKey=false/.test(out), true);
   deepStrictEqual(/- index\.ts:isValidSecretKey: NO ERROR!/.test(out), true);
   deepStrictEqual(/unknown:0 Errors check found issues/.test(out), false);
-  deepStrictEqual(/jsbt check done in \d+s: errors\(10, \d+s\)/.test(out), true);
+  deepStrictEqual(/1 check finished in \d+ sec/.test(out), true);
 });
 
 should('check errors selector reports unprobeable examples before audit rows', async () => {

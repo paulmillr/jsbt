@@ -1,4 +1,4 @@
-import { deepStrictEqual } from 'node:assert';
+import { deepStrictEqual, rejects } from 'node:assert';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -46,13 +46,13 @@ should('mutate reports mutable object and array exports', async () => {
   const res = await capture(() => runMutate(['package.json'], { color: false, cwd }));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(mutate\) 2x mutable array export; add Object\.freeze around it \(mutate\)/.test(
+    /\[ERROR\] mutate: 2x mutable array export; add Object\.freeze around it \(mutate\)/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/.test(
+    /\[ERROR\] mutate: 3x mutable object export; add Object\.freeze around it \(mutate\)/.test(
       plain(res)
     ),
     true
@@ -71,18 +71,12 @@ should('mutate reports mutable object and array exports', async () => {
   deepStrictEqual(/Mutate check found issues/.test(plain(res)), true);
 });
 
-should('check-mutate alias reports mutable exports', async () => {
+should('check-mutate alias is rejected by jsbt dispatcher', async () => {
   const cwd = fixture('fail-mutate');
-  const res = await capture(() => runJsbt(['check-mutate', 'package.json'], { color: false, cwd }));
-  deepStrictEqual(res.ok, false);
-  deepStrictEqual(
-    /\[ERROR\] \(mutate\) 3x mutable object export; add Object\.freeze around it \(mutate\)/.test(
-      plain(res)
-    ),
-    true
+  await rejects(
+    () => runJsbt(['check-mutate', 'package.json'], { color: false, cwd }),
+    /unknown jsbt command: check-mutate/
   );
-  deepStrictEqual(/\n  index\.js:mutableObject/.test(plain(res)), true);
-  deepStrictEqual(/summary: 0 passed, 0 warnings, 5 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should.runWhen(import.meta.url);

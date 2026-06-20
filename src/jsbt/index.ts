@@ -18,7 +18,6 @@
  *   `jsbt check mutate`
  *   `jsbt check patterns`
  *   `jsbt check readme`
- *   `jsbt check tests`
  *   `jsbt check treeshake`
  *   `jsbt check tsdoc`
  *   `jsbt check typeimport`
@@ -27,9 +26,10 @@
  */
 import * as TSDoc from '@microsoft/tsdoc';
 import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { checkTempDir, rmCheckTempDir } from '../fs-modify.ts';
 import { runCli as runBigInt } from './bigint.ts';
 import { runCli as runBuild } from './bundle.ts';
 import { runCli as runBytes } from './bytes.ts';
@@ -43,7 +43,6 @@ import { runCli as runJsrPublish } from './jsrpublish.ts';
 import { runCli as runMutate } from './mutate.ts';
 import { runCli as runPatterns } from './patterns.ts';
 import { runCli as runReadme } from './readme.ts';
-import { runCli as runTests } from './tests.ts';
 import { runCli as runTreeShaking, treeIssueLog, type TreeIssue } from './treeshake.ts';
 import { runCli as runTypeImport } from './typeimport.ts';
 import {
@@ -51,7 +50,9 @@ import {
   err,
   formatIssue,
   groupIssues,
+  jsbtWorkerLimit,
   paint,
+  parseFast,
   runWorker,
   tag as statusTag,
   stripAnsi,
@@ -63,7 +64,13 @@ import {
   type Ref,
 } from './utils.ts';
 
-type Opts = { color?: boolean; cwd?: string; runJsrPublish?: typeof runJsrPublish };
+type Opts = {
+  color?: boolean;
+  cwd?: string;
+  runDir?: string;
+  runJsrPublish?: typeof runJsrPublish;
+  treeshakeOutDir?: string;
+};
 type Capture = { error?: string; ok: boolean; stderr: string; stdout: string; tree?: TreeIssue[] };
 type TimedCapture = Capture & { ms: number };
 type Pick = { count: number; fatal: boolean; lines: string[] };
@@ -80,12 +87,10 @@ type CheckHead =
   | 'mutate'
   | 'patterns'
   | 'readme'
-  | 'tests'
   | 'treeshake'
   | 'typeimport'
   | 'tsdoc';
 type CheckRun = { head: CheckHead; pick: (res: Capture) => Pick; serial?: boolean };
-type CheckCount = { count: number; head: string; ms: number };
 type CheckArgs = ReturnType<typeof checkArgs>;
 type CheckTask = (args: CheckArgs, opts: Opts, tree: TreeIssue[]) => Promise<void>;
 type CheckWorkerData = {
@@ -94,7 +99,7 @@ type CheckWorkerData = {
   head?: CheckHead;
   heads?: CheckHead[];
   kind: typeof CHECK_WORKER;
-  opts: { color?: boolean; cwd?: string };
+  opts: { color?: boolean; cwd?: string; runDir?: string; treeshakeOutDir?: string };
   self: string;
 };
 
@@ -112,8 +117,7 @@ const usage = `usage:
   jsbt check [--project=<directory>] mutate
   jsbt check [--project=<directory>] patterns
   jsbt check [--project=<directory>] readme
-  jsbt check [--project=<directory>] tests
-  jsbt check [--project=<directory>] treeshake [out-dir]
+  jsbt check [--project=<directory>] treeshake
   jsbt check [--project=<directory>] tsdoc
   jsbt check [--project=<directory>] typeimport
   jsbt check-install <package.json>
@@ -129,7 +133,6 @@ const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
 process.argv[1] = workerData.entry;
 await import(workerData.self);`;
-const CHECK_NOTE = 'Treat these results as suggestions, not strict errors';
 const QUIET_ENV = {
   npm_config_audit: 'false',
   npm_config_fund: 'false',
@@ -139,20 +142,6 @@ const QUIET_ENV = {
 } as const;
 const MUTATION_LOG = /^(?:delete\t|install\t|write\t)/;
 const CHECK_ALIASES = {
-  'check-bigint': 'bigint',
-  'check-bytes': 'bytes',
-  'check-comments': 'comments',
-  'check-errors': 'errors',
-  'check-importtime': 'importtime',
-  'check-jsdoc': 'tsdoc',
-  'check-jsr': 'jsr',
-  'check-jsrpublish': 'jsrpublish',
-  'check-mutate': 'mutate',
-  'check-patterns': 'patterns',
-  'check-readme': 'readme',
-  'check-tests': 'tests',
-  'check-typeimport': 'typeimport',
-
   bigint: 'bigint',
   bytes: 'bytes',
   comments: 'comments',
@@ -164,25 +153,17 @@ const CHECK_ALIASES = {
   mutate: 'mutate',
   patterns: 'patterns',
   readme: 'readme',
-  tests: 'tests',
   treeshake: 'treeshake',
   typeimport: 'typeimport',
   tsdoc: 'tsdoc',
 } as const satisfies Record<string, CheckHead>;
-const SHARED_WORKER_CHECKS = new Set<CheckHead>([
-  'bigint',
-  'bytes',
-  'comments',
-  'jsr',
-  'patterns',
-  'typeimport',
-]);
+const HARD_ERROR_CHECKS = new Set<CheckHead>(['jsr', 'jsrpublish']);
 const issueLines = (text: string): { cont: string[]; line: string; plain: string }[] => {
   const out: { cont: string[]; line: string; plain: string }[] = [];
   let prev: { cont: string[]; line: string; plain: string } | undefined;
   for (const line of textLines(text, true)) {
     const plain = stripAnsi(line);
-    if (/^\[(?:error|warn|ERROR|WARNING)\]\s/.test(plain)) {
+    if (/^\[(?:error|warn|ERROR|WARN)\]\s/.test(plain)) {
       prev = plain.includes('summary:') ? undefined : { cont: [], line, plain };
       if (prev) out.push(prev);
       continue;
@@ -193,7 +174,13 @@ const issueLines = (text: string): { cont: string[]; line: string; plain: string
   return out;
 };
 const recolorShared = (line: string, level: Level, on: boolean): string =>
-  line.replace(/^\[(?:ERROR|WARNING|INFO)\]/, statusTag(level, on));
+  line.replace(/^\[(?:ERROR|WARN|INFO)\]/, statusTag(level, on));
+const downgradeErrorLine = (line: string, on: boolean): string =>
+  line.replace(/^\[(?:\x1b\[\d+(?:;\d+)*m)?ERROR(?:\x1b\[0m)?\]/, statusTag('WARN', on));
+const checkPick = (head: CheckHead, out: Pick, on: boolean): Pick =>
+  HARD_ERROR_CHECKS.has(head)
+    ? out
+    : { ...out, fatal: false, lines: out.lines.map((line) => downgradeErrorLine(line, on)) };
 const sharedIssues = (head: string, text: string, on: boolean): SharedIssue | undefined => {
   let cur = false;
   const out: string[] = [];
@@ -201,7 +188,7 @@ const sharedIssues = (head: string, text: string, on: boolean): SharedIssue | un
   let fatal = false;
   for (const line of textLines(text, true)) {
     const plain = stripAnsi(line);
-    const tag = plain.match(/^\[(ERROR|WARNING|INFO)\] \(([^)]+)\) (.+)$/);
+    const tag = plain.match(/^\[(ERROR|WARN|INFO)\] (\w+): (.+)$/);
     if (tag && tag[2] === head) {
       cur = true;
       out.push(recolorShared(line, tag[1] as Level, on));
@@ -209,7 +196,7 @@ const sharedIssues = (head: string, text: string, on: boolean): SharedIssue | un
       if (tag[1] === 'ERROR') fatal = true;
       continue;
     }
-    if (cur && !/^\[(?:error|warn|pass|ERROR|WARNING|INFO)\]\s/.test(plain)) {
+    if (cur && !/^\[(?:error|warn|pass|ERROR|WARN|INFO)\]\s/.test(plain)) {
       out.push(line);
       continue;
     }
@@ -228,14 +215,34 @@ const duration = (ms: number): string => {
   parts.push(`${seconds}s`);
   return parts.join(' ');
 };
+const secondsDuration = (ms: number): string => `${Math.max(0, Math.round(ms / 1000))} sec`;
+const checkDone = (total: number, ms: number, on: boolean): string =>
+  `${paint(String(total), color.green, on)} check${total === 1 ? '' : 's'} finished in ${secondsDuration(ms)}`;
+const checkFastWorkers = (): number => {
+  const fast = parseFast(process.env.JSBT_FAST);
+  return fast ? jsbtWorkerLimit(1) : 0;
+};
+const checkQuiet = (): boolean => {
+  const value = process.env.JSBT_QUIET;
+  return value === '1' || value === 'true';
+};
+const checkHeader = (total: number, on: boolean, quiet: boolean): string => {
+  const workers = checkFastWorkers();
+  const features = [quiet ? '+quiet' : '', workers ? `+fast-x${workers}` : ''].filter(Boolean);
+  const modes = features.length ? `(${features.join(' ')}) ` : '';
+  return `${paint(String(total), color.green, on)} check${total === 1 ? '' : 's'} ${modes}started...`;
+};
+const checkDot = (fail: boolean): void => {
+  const out = fail ? process.stderr : process.stdout;
+  out.write(fail ? '!' : '.');
+};
 const timed = async (fn: () => Promise<Capture>): Promise<TimedCapture> => {
   const start = Date.now();
   const res = await fn();
   return { ...res, ms: Date.now() - start };
 };
-const elapsed = (ms: number, on: boolean): string => paint(duration(ms), color.yellow, on);
 const untag = (line: string): string =>
-  line.replace(/^\[(?:error|pass|warn|ERROR|WARNING|INFO)\]\s*/, '').replace(/^\([^)]+\)\s*/, '');
+  line.replace(/^\[(?:error|pass|warn|ERROR|WARN|INFO)\]\s*/, '').replace(/^\([^)]+\)\s*/, '');
 const parseRef = (msg: string): Ref | undefined => {
   const hit = msg.match(/^(.+?):(.+?) \((\d+)\): (.+)$/);
   if (hit) {
@@ -295,7 +302,7 @@ const pickIssues = (head: string, res: Capture, on: boolean): Pick => {
   let fatal = !res.ok;
   const issues = issueLines(res.stderr).map((item) => {
     const msg = untag(item.plain);
-    const level: Level = /^\[(?:warn|WARNING)\]\s/.test(item.plain) ? 'WARNING' : 'ERROR';
+    const level: Level = /^\[(?:warn|WARN)\]\s/.test(item.plain) ? 'WARN' : 'ERROR';
     if (level === 'ERROR') fatal = true;
     const ref = parseRef(msg);
     if (ref && item.cont.length) ref.issue += `\n${item.cont.join('\n')}`;
@@ -337,7 +344,7 @@ const pickErrorExamples = (res: Capture, on: boolean): Pick => {
     if (!item.plain.includes('could not derive valid runtime probes')) continue;
     const ref = parseRef(untag(item.plain));
     issues.push({
-      level: 'WARNING',
+      level: 'WARN',
       ref: ref || { file: 'unknown', issue: untag(item.plain), sym: '0' },
     });
   }
@@ -347,6 +354,7 @@ const pickLogs = (head: CheckHead, res: Capture, full = false): string[] =>
   textLines(res.stdout, full).filter(
     (line) => full || head === 'errors' || MUTATION_LOG.test(line)
   );
+const warnInfoLine = (line: string): boolean => /^\[(?:WARN|INFO)\]/.test(stripAnsi(line));
 const checkHead = (name: string | undefined): CheckHead | undefined =>
   name && Object.hasOwn(CHECK_ALIASES, name)
     ? CHECK_ALIASES[name as keyof typeof CHECK_ALIASES]
@@ -376,15 +384,16 @@ const checkArgs = (argv: string[]) => {
     err(
       'package.json positional argument was removed; use jsbt check or jsbt check --project=<directory>'
     );
-  if (rest.length > 2) err('expected [--project=<directory>] [check-name|out-dir] [out-dir]');
+  if (rest.length > 1) err('expected [--project=<directory>] [check-name]');
   const head = checkHead(rest[0]);
-  if (head)
-    return { head, help: false, outArg: rest[1] || CHECK_OUT, pkgArg: 'package.json', projectArg };
-  if (rest.length > 1) err('expected [--project=<directory>] [check-name|out-dir] [out-dir]');
+  if (head) return { head, help: false, outArg: CHECK_OUT, pkgArg: 'package.json', projectArg };
+  if (rest[0] === 'tests') err(`unknown check selector: ${rest[0]}`);
+  if (rest[0]?.startsWith('check-')) err(`unknown check selector: ${rest[0]}`);
+  if (rest[0]) err(`unknown check selector: ${rest[0]}`);
   return {
     head: undefined,
     help: false,
-    outArg: rest[0] || CHECK_OUT,
+    outArg: CHECK_OUT,
     pkgArg: 'package.json',
     projectArg,
   };
@@ -393,7 +402,13 @@ const checkTasks = {
   bigint: (args, opts) => runBigInt([args.pkgArg], opts),
   bytes: (args, opts) => runBytes([args.pkgArg], opts),
   comments: (args, opts) => runComments([args.pkgArg], opts),
-  errors: (args, opts) => runErrors([args.pkgArg], { ...opts, examplesOnly: !args.head }),
+  errors: (args, opts) =>
+    runErrors([args.pkgArg], {
+      color: opts.color,
+      cwd: opts.cwd,
+      examplesOnly: !args.head,
+      runDir: opts.runDir,
+    }),
   importtime: (args, opts) =>
     runImportTime([args.pkgArg], { color: opts.color, cwd: opts.cwd, quiet: true }),
   jsr: (args, opts) => runJsr([args.pkgArg], opts),
@@ -405,19 +420,22 @@ const checkTasks = {
     }),
   mutate: (args, opts) => runMutate([args.pkgArg], opts),
   patterns: (args, opts) => runPatterns([args.pkgArg], opts),
-  readme: (args, opts) => runReadme([args.pkgArg], opts),
-  tests: (args, opts) => runTests([args.pkgArg], opts),
+  readme: (args, opts) =>
+    runReadme([args.pkgArg], { color: opts.color, cwd: opts.cwd, runDir: opts.runDir }),
   treeshake: (args, opts, tree) =>
     runTreeShaking([args.pkgArg, args.outArg], {
       cwd: opts.cwd,
       onIssue: (issue) => tree.push(issue),
+      outDir: opts.treeshakeOutDir,
       quiet: !args.head,
+      runDir: opts.runDir,
     }),
   tsdoc: (args, opts) =>
     runTSDoc([args.pkgArg], {
       color: opts.color,
       cwd: opts.cwd,
       loadTSDoc: () => TSDoc as any,
+      runDir: opts.runDir,
     }),
   typeimport: (args, opts) => runTypeImport([args.pkgArg], opts),
 } satisfies Record<CheckHead, CheckTask>;
@@ -463,199 +481,157 @@ const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<C
       entry: fileURLToPath(import.meta.url),
       head,
       kind: CHECK_WORKER,
-      opts: { color: opts.color, cwd: opts.cwd },
+      opts: {
+        color: opts.color,
+        cwd: opts.cwd,
+        runDir: opts.runDir,
+        treeshakeOutDir: opts.treeshakeOutDir,
+      },
       self: import.meta.url,
     },
     error: (error) => ({ error, ok: false, stderr: '', stdout: '' }),
   });
-const runCheckBatchWorker = (
-  heads: CheckHead[],
-  args: CheckArgs,
-  opts: Opts
-): Promise<TimedCapture[]> =>
-  runWorker<TimedCapture[]>(WORKER, {
-    data: {
-      args,
-      entry: fileURLToPath(import.meta.url),
-      heads,
-      kind: CHECK_WORKER,
-      opts: { color: opts.color, cwd: opts.cwd },
-      self: import.meta.url,
-    },
-    error: (error) =>
-      heads.map((head) => ({ error, head, ms: 0, ok: false, stderr: '', stdout: '' })),
-  });
 const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   const args = checkArgs(argv);
   if (args.help) return console.log(usage);
-  const projectCwd = resolve(opts.cwd || process.cwd(), args.projectArg);
-  const taskOpts = { ...opts, cwd: projectCwd };
-  const colorOn = opts.color ?? wantColor();
-  console.log(
-    formatIssue('INFO', 'check', { file: args.pkgArg, issue: CHECK_NOTE, sym: 'note' }, colorOn)
-  );
-  const totalStart = Date.now();
-  let hasFail = false;
-  const check = (head: CheckHead, serial?: boolean): CheckRun => ({
-    head,
-    pick: (res) =>
-      head === 'errors'
-        ? args.head
-          ? pickErrors(res, colorOn)
-          : pickErrorExamples(res, colorOn)
-        : pickIssues(head, res, colorOn),
-    serial,
-  });
-  const allChecks: CheckRun[] = [
-    check('readme', true),
-    {
-      head: 'treeshake',
-      pick: (res) => {
-        const issues: Issue[] = (res.tree || []).map((item) => treeIssueLog(taskOpts.cwd, item));
-        if (issues.length || !res.error) {
+  const checkTmp = checkTempDir();
+  try {
+    const projectCwd = resolve(opts.cwd || process.cwd(), args.projectArg);
+    const taskOpts = {
+      ...opts,
+      cwd: projectCwd,
+      runDir: join(checkTmp, 'build'),
+      treeshakeOutDir: join(checkTmp, 'out-treeshake'),
+    };
+    const colorOn = opts.color ?? wantColor();
+    const quiet = checkQuiet();
+    const progressStart = (head: string): void => {
+      if (!quiet) console.log(`☆ ${head}`);
+    };
+    const progressDone = (head: string, ok: boolean, ms: number): void => {
+      if (quiet) return checkDot(!ok);
+      const spent = ms >= 5_000 ? ` ${duration(ms)}` : '';
+      console.log(
+        paint(`${ok ? '✓' : '☓'} ${head}${spent}`, ok ? color.green : color.red, colorOn)
+      );
+    };
+    const totalStart = Date.now();
+    let hasFail = false;
+    const check = (head: CheckHead, serial?: boolean): CheckRun => ({
+      head,
+      pick: (res) =>
+        head === 'errors'
+          ? args.head
+            ? pickErrors(res, colorOn)
+            : pickErrorExamples(res, colorOn)
+          : pickIssues(head, res, colorOn),
+      serial,
+    });
+    const allChecks: CheckRun[] = [
+      check('readme', true),
+      {
+        head: 'treeshake',
+        pick: (res) => {
+          const issues: Issue[] = (res.tree || []).map((item) => treeIssueLog(taskOpts.cwd, item));
+          if (issues.length || !res.error) {
+            return {
+              count: issues.length,
+              fatal: !!issues.length,
+              lines: groupIssues('treeshake', issues, colorOn),
+            };
+          }
           return {
-            count: issues.length,
-            fatal: !!issues.length,
-            lines: groupIssues('treeshake', issues, colorOn),
+            count: 1,
+            fatal: true,
+            lines: [
+              formatIssue(
+                'ERROR',
+                'treeshake',
+                { file: 'unknown', issue: res.error, sym: '0' },
+                colorOn
+              ),
+            ],
           };
-        }
-        return {
-          count: 1,
-          fatal: true,
-          lines: [
-            formatIssue(
-              'ERROR',
-              'treeshake',
-              { file: 'unknown', issue: res.error, sym: '0' },
-              colorOn
-            ),
-          ],
-        };
+        },
+        serial: true,
       },
-      serial: true,
-    },
-    check('tsdoc', true),
-    check('typeimport'),
-    check('jsr'),
-    check('jsrpublish', true),
-    check('comments'),
-    check('patterns'),
-    check('errors', true),
-    check('bigint'),
-    check('bytes'),
-    check('mutate'),
-    check('tests'),
-    {
-      head: 'importtime',
-      pick: (res) => pickIssues('importtime', res, colorOn),
-      // Keep this policy explicit: the regression test source-scans it because timing is fragile.
-      serial: true,
-    },
-  ];
-  const list = args.head
-    ? allChecks.filter((item) => item.head === args.head)
-    : allChecks.filter((item) => item.head !== 'patterns');
-  const res: TimedCapture[] = [];
-  const save = async (i: number, fn: () => Promise<Capture>): Promise<void> => {
-    res[i] = await timed(fn);
-  };
-  const serial = async () => {
-    for (const [i, item] of list.entries())
-      if (item.serial) await save(i, () => runCheckTask(item.head, args, taskOpts));
-  };
-  const shared = list
-    .map((item, i) => ({ i, item }))
-    .filter(({ item }) => !item.serial && SHARED_WORKER_CHECKS.has(item.head));
-  const parallel: Promise<void>[] = [];
-  if (shared.length)
-    parallel.push(
-      runCheckBatchWorker(
-        shared.map(({ item }) => item.head),
-        args,
-        taskOpts
-      ).then((batch) => {
-        for (const [pos, { i }] of shared.entries()) res[i] = batch[pos];
-      })
-    );
-  for (const [i, item] of list.entries()) {
-    if (item.serial || SHARED_WORKER_CHECKS.has(item.head)) continue;
-    parallel.push(save(i, () => runCheckWorker(item.head, args, taskOpts)));
-  }
-  await Promise.all([...parallel, serial()]);
-  const totalMs = Date.now() - totalStart;
-  const counts: CheckCount[] = [];
-  for (let i = 0; i < list.length; i++) {
-    const item = list[i];
-    const cur = res[i];
-    const out = item.pick(cur);
-    if (out.fatal) hasFail = true;
-    if (item.head === 'errors') {
-      for (const line of out.lines) console.error(line);
-      if (args.head) for (const line of pickLogs(item.head, cur)) console.log(line);
-    } else {
-      const full = !!args.head && item.head === 'treeshake';
-      for (const line of pickLogs(item.head, cur, full)) console.log(line);
-      for (const line of out.lines) console.error(line);
+      check('tsdoc', true),
+      check('typeimport'),
+      check('jsr'),
+      check('jsrpublish', true),
+      check('comments'),
+      check('patterns'),
+      check('errors', true),
+      check('bigint'),
+      check('bytes'),
+      check('mutate'),
+      {
+        head: 'importtime',
+        pick: (res) => pickIssues('importtime', res, colorOn),
+        // Keep this policy explicit: the regression test source-scans it because timing is fragile.
+        serial: true,
+      },
+    ];
+    const list = args.head
+      ? allChecks.filter((item) => item.head === args.head)
+      : allChecks.filter((item) => item.head !== 'patterns');
+    console.log(checkHeader(list.length, colorOn, quiet));
+    if (!quiet) console.log();
+    const res: TimedCapture[] = [];
+    const save = async (i: number, head: CheckHead, fn: () => Promise<Capture>): Promise<void> => {
+      progressStart(head);
+      res[i] = await timed(fn);
+      progressDone(head, HARD_ERROR_CHECKS.has(head) ? res[i].ok : true, res[i].ms);
+    };
+    for (const [i, item] of list.entries()) {
+      await save(i, item.head, () =>
+        item.serial
+          ? runCheckTask(item.head, args, taskOpts)
+          : runCheckWorker(item.head, args, taskOpts)
+      );
     }
-    counts.push({ count: out.count, head: item.head, ms: cur.ms });
+    if (!quiet) console.log();
+    const totalMs = Date.now() - totalStart;
+    let diagnosticGap = false;
+    const printDiagnostic = (line: string, log: (line?: string) => void): void => {
+      if (!diagnosticGap && warnInfoLine(line)) {
+        log();
+        diagnosticGap = true;
+      }
+      log(line);
+    };
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      const cur = res[i];
+      const out = checkPick(item.head, item.pick(cur), colorOn);
+      if (out.fatal) hasFail = true;
+      if (quiet && !out.fatal) continue;
+      if (item.head === 'errors') {
+        for (const line of out.lines) printDiagnostic(line, console.error);
+        if (args.head)
+          for (const line of pickLogs(item.head, cur)) printDiagnostic(line, console.log);
+      } else {
+        const full = !!args.head && item.head === 'treeshake';
+        for (const line of pickLogs(item.head, cur, full)) printDiagnostic(line, console.log);
+        for (const line of out.lines) printDiagnostic(line, console.error);
+      }
+    }
+    const done = checkDone(list.length, totalMs, colorOn);
+    if (hasFail) {
+      console.error();
+      throw new Error(done);
+    }
+    console.log();
+    console.log(done);
+  } finally {
+    rmCheckTempDir(checkTmp);
   }
-  const summary = counts
-    .slice()
-    .sort((a, b) => b.count - a.count)
-    .map((item) => `${item.head}(${item.count}, ${elapsed(item.ms, colorOn)})`)
-    .join(', ');
-  const done = `jsbt check done in ${elapsed(totalMs, colorOn)}: ${summary}`;
-  if (!hasFail) return console.log(done);
-  throw new Error(done);
 };
 
 const cmdRun = {
-  bigint: runBigInt,
-  bytes: runBytes,
   check: runCheck,
-  'check-bigint': runBigInt,
-  'check-bytes': runBytes,
-  'check-comments': runComments,
-  'check-error': runErrors,
-  'check-errors': runErrors,
-  'check-importtime': runImportTime,
   'check-install': (argv, opts) => runCheckInstall(argv, { cwd: opts.cwd }),
-  'check-jsdoc': (argv, opts) =>
-    runTSDoc(argv, { color: opts.color, cwd: opts.cwd, loadTSDoc: () => TSDoc as any }),
-  'check-jsr': runJsr,
-  'check-jsrpublish': (argv, opts) =>
-    (opts.runJsrPublish || runJsrPublish)(argv, {
-      color: opts.color,
-      cwd: opts.cwd,
-      full: true,
-    }),
-  'check-mutate': runMutate,
-  'check-patterns': runPatterns,
-  'check-readme': runReadme,
-  'check-tests': runTests,
-  'check-typeimport': runTypeImport,
-  comments: runComments,
-  error: runErrors,
-  errors: runErrors,
   bundle: runBuild,
-  build: runBuild,
-  esbuild: runBuild,
-  importtime: runImportTime,
-  jsr: runJsr,
-  jsrpublish: (argv, opts) =>
-    (opts.runJsrPublish || runJsrPublish)(argv, {
-      color: opts.color,
-      cwd: opts.cwd,
-      full: true,
-    }),
-  mutate: runMutate,
-  patterns: runPatterns,
-  readme: runReadme,
-  tests: runTests,
-  treeshake: (argv, opts) => runTreeShaking(argv, { cwd: opts.cwd }),
-  tsdoc: (argv, opts) =>
-    runTSDoc(argv, { color: opts.color, cwd: opts.cwd, loadTSDoc: () => TSDoc as any }),
-  typeimport: runTypeImport,
 } satisfies Record<string, CmdRun>;
 type Cmd = keyof typeof cmdRun;
 const COMMANDS = new Set<Cmd>(Object.keys(cmdRun) as Cmd[]);

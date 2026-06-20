@@ -8,7 +8,7 @@
  */
 // @ts-nocheck
 // TODO: remove ^
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { utils } from './bench.ts';
 const { benchmarkRaw } = utils;
 
@@ -40,6 +40,11 @@ const pad = (s, len, end = true) => {
   const padding = ' '.repeat(diff);
   return end ? s + padding : padding + s;
 };
+const csvCell = (val: any) => {
+  const cell = stripAnsi(String(val ?? ''));
+  return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+};
+const printCsvRow = (values: any[]) => console.log(values.map(csvCell).join(','));
 function drawHeader(sizes, fields) {
   console.log(fields.map((name, i) => `${capitalize(name).padEnd(sizes[i])} `).join(NN));
 }
@@ -113,11 +118,11 @@ export type CompareOpts = {
   dims?: string[];
   filter?: string | string[];
   filterObj?: (obj: Record<string, any>) => boolean;
-  jsonOnly?: boolean;
   dryRun?: boolean;
   patchArgs?: (args: any[], obj: Record<string, any>) => any[];
   samples?: number | ((...args: any[], lib: any) => number);
-  compact?: boolean; // Compact/vertical view (MBENCH_COMPACT=1) without tables
+  format?: 'csv' | 'table';
+  compact?: boolean; // Compact/vertical view (JSBT_BENCHMARK_COMPACT=1) without tables
   metrics?: Record<
     string,
     {
@@ -128,9 +133,6 @@ export type CompareOpts = {
       compute: (obj: Record<string, any>, stats: any, perSec: bigint, ...args: any[]) => number; // Returns value str, e.g., '1684.21'
     }
   >;
-  prevFile?: string; // File path to save/load JSON (e.g., './bench-2025-11-14.json')
-  printUnchanged?: boolean; // Print row even if unchanged and comparing to previous state
-  skipThreshold?: number; // Skip if changed less than threshold percent (default: 5%)
 };
 
 const isCli = 'process' in globalThis;
@@ -138,15 +140,12 @@ function matrixOpts(opts: CompareOpts) {
   const env = isCli ? process.env : {};
   return {
     // Add default opts from env (can be overriden!)
-    filter: env.MBENCH_FILTER ? env.MBENCH_FILTER : undefined, // filter by keywords
+    filter: env.JSBT_BENCHMARK_FILTER ? env.JSBT_BENCHMARK_FILTER : undefined, // filter by keywords
     // override order and list of dimensions. disables defaults!
-    dims: env.MBENCH_DIMS ? env.MBENCH_DIMS.split(',') : undefined,
-    jsonOnly: !!+env.MBENCH_JSON,
-    dryRun: !!+env.MBENCH_DRY_RUN, // don't bench, just print table (for debug)
-    compact: !!+env.MBENCH_COMPACT,
-    loadRun: !!+env.MBENCH_DIFF ? opts.prevFile : undefined,
-    saveRun: !!+env.MBENCH_UPDATE && opts.prevFile ? opts.prevFile : undefined,
-    printUnchanged: !!+env.MBENCH_UNCHANGED,
+    dims: env.JSBT_BENCHMARK_DIMENSIONS ? env.JSBT_BENCHMARK_DIMENSIONS.split(',') : undefined,
+    dryRun: !!+env.JSBT_BENCHMARK_DRY_RUN, // don't bench, just print output (for debug)
+    format: !!+env.JSBT_BENCHMARK_TABLE ? 'table' : undefined,
+    compact: !!+env.JSBT_BENCHMARK_COMPACT,
     ...opts,
   };
 }
@@ -158,11 +157,10 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
     dims,
     filter,
     filterObj = () => true,
-    jsonOnly,
     dryRun,
-    saveRun,
     loadRun,
     compact = false,
+    format = 'csv',
     patchArgs, // patch arguments (very hacky way for decryption)
     samples: defSamples = 10, // default sample value
     skipThreshold = 5, // skip if loadRun and less than 5% difference
@@ -186,7 +184,9 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
     prevData = JSON.parse(priorJson, (k, v) => (v && v.__BigInt__ ? BigInt(v.__BigInt__) : v)).data;
   }
 
-  if (!jsonOnly) console.log(title); // Title
+  const csv = !compact && format === 'csv';
+  const table = !compact && format === 'table';
+  if (!csv) console.log(title); // Title
   // Collect dynamic dimensions
   let dynDimensions = {};
   for (const dim of libDims) dynDimensions[dim] = new Set();
@@ -226,7 +226,7 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
   const values = selected.map((i) =>
     dimensions[i] !== undefined ? Object.keys(dimensions[i]) : dynDimensions[i]
   );
-  if (!jsonOnly) {
+  if (!csv) {
     console.log(
       `Available dimensions: ${allDims
         .map((i) => {
@@ -251,7 +251,7 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
         .join(', ')
     );
     console.log('Selected:', selected.join(', '));
-    console.log('Diff mode:', loadRun ? `previous file${saveRun ? ' (update)' : ''}` : 'first row');
+    console.log('Diff mode:', loadRun ? 'previous file' : 'first row');
   }
   // selected dimensions column size
   const sizes = selected.map((i, j) =>
@@ -264,25 +264,25 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
     const { width, unit, diff } = config;
     const w = width !== undefined ? width : name.length; // Default to name.length
     extraDims[`${name}${unit ? ` ${unit}` : ''}`] = w;
-    if (diff) extraDims[`${name} %`] = 8; // '-100.01%'.length
+    if (diff && !csv) extraDims[`${name} %`] = 8; // '-100.01%'.length
   }
   Object.assign(extraDims, {
     'Ops/sec': 10,
     'Per op': 10,
-    'Diff %': 8,
-    Variability: 22,
   });
+  if (!csv) extraDims['Diff %'] = 8;
   for (const k in extraDims) extraDims[k] = Math.max(extraDims[k], k.length);
 
   sizes.push(...Object.values(extraDims));
-  if (!jsonOnly && !compact) drawHeader(sizes, selected.concat(Object.keys(extraDims)));
+  const allHeaders = selected.concat(Object.keys(extraDims));
+  if (table) drawHeader(sizes, allHeaders);
+  if (csv) printCsvRow(allHeaders);
   if (compact) console.log();
   const indices = selected.map((i) => 0); // current value indices
   let prevValues;
   let baselineOps;
   let baselinePerOps;
   let baselineMetrics;
-  const res = {};
   main: while (true) {
     const curValues = indices.map((i, j) => values[j][i]);
     if (filterValues(curValues, filter)) {
@@ -324,9 +324,7 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
         const rowKey = Object.entries(obj)
           .map(([k, v]) => `${k}=${v}`)
           .join('-');
-        const rawData = { ...obj, stats, perSec, metricValues };
         const prevRow = prevData && prevData[rowKey];
-        res[rowKey] = rawData;
         const prevMean = prevData ? (prevRow ? prevRow.stats.mean : stats.mean) : baselinePerOps;
         const prevMetrics = metricValues.map((val, i) =>
           prevData ? (prevRow ? prevRow.metricValues[i] : val) : baselineMetrics[i]
@@ -337,31 +335,34 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
           )
         );
         const needPrint = !prevData || printUnchanged || changePercent > skipThreshold;
-        if (!jsonOnly && needPrint) {
+        if (needPrint) {
+          const metricNames = Object.keys(metrics);
           const metricDisplays = metricValues
             .map((val, i) => {
-              const { unit, rev = true } = metrics[Object.keys(metrics)[i]];
-              return [`${blue}${val}${reset}`, percentNumber(val, prevMetrics[i], rev)];
+              const { diff, rev = true } = metrics[metricNames[i]];
+              const display = table || compact ? `${blue}${val}${reset}` : String(val);
+              return diff && !csv ? [display, percentNumber(val, prevMetrics[i], rev)] : [display];
             })
             .flat();
-          const allFields = curValues.concat([
+          const statFields = [
             ...metricDisplays,
-            `${green}${perSecStr}${reset}`,
-            `${blue}${perItemStr}${reset}/op`,
+            table || compact ? `${green}${perSecStr}${reset}` : perSec.toString(),
+            `${table || compact ? `${blue}${perItemStr}${reset}` : perItemStr}/op`,
             // `${percent(perSec, baselineOps, true)}`,
-            `${percent(stats.mean, prevMean)}`,
-            `${stats.rme >= 1 ? stats.formatted : ''}`,
-          ]);
+          ];
+          if (!csv) statFields.push(`${percent(stats.mean, prevMean)}`);
+          const allFields = curValues.concat(statFields);
           if (compact) {
-            const allHeaders = selected.concat(Object.keys(extraDims));
             allFields.forEach((val, i) => {
               const header = allHeaders[i];
               console.log(`${header.padEnd(15, ' ')}: ${val}`); // Fixed-width label for alignment
             });
             console.log(''); // Blank line between rows/groups
             prevValues = allFields;
-          } else {
+          } else if (table) {
             prevValues = printRow(allFields, prevValues, sizes, selected);
+          } else {
+            printCsvRow(allFields);
           }
         }
       }
@@ -378,19 +379,12 @@ async function compare(title: string, dimensions: any, libs: any, opts: CompareO
     }
   }
   // Close table (looks cleaner this way)
-  if (!compact && !jsonOnly) {
+  if (table) {
     drawSeparator(
       sizes,
       sizes.map((i) => true)
     );
   }
-  // NOTE: these done in compact format, so in case of multiple things we can just split by lines to parse
-  const json = JSON.stringify({ name: title, data: res }, (k, v) => {
-    if (typeof v === 'bigint') return { __BigInt__: v.toString(10) };
-    return v;
-  });
-  if (jsonOnly) console.log(json);
-  if (saveRun && isCli) writeFileSync(saveRun, json, 'utf8');
 }
 
 export default compare;

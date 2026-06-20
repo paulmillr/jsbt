@@ -26,9 +26,9 @@ public usage: reject placeholders like `void Symbol;`, `{} as any`, or
 alias-only `type Example = Foo;`.
 
 All writes and other modifications MUST stay under the selected run/build directory.
-This checker takes only a package.json path, uses `test/build` next to it as the run directory,
-and MUST fail if that fixture directory is missing or if `test/build/package.json`
-does not install the checked package name as `"file:../.."`.
+This checker takes only a package.json path, uses `test/build` next to it as the default run
+directory or a dispatcher-provided temp run directory, and MUST fail if the fixture template is
+missing or if `test/build/package.json` does not install the checked package name as `"file:../.."`.
  */
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -50,6 +50,7 @@ import {
   err,
   execText,
   firstText,
+  jsbtWorkerLimit,
   loadTypeScriptApi,
   makeTypeCheck,
   nodeLine,
@@ -59,12 +60,14 @@ import {
   readSource,
   recordIssue,
   reportIssues,
+  runImportFile,
   runSelf,
   runTempImport,
   sorted,
   usageText,
   wantColor,
   withRunDir,
+  withTempFile,
   type ExecRes,
   type Issue as LogIssue,
   type PkgArgs,
@@ -259,8 +262,8 @@ const tagText = (value: unknown): string => {
   if (typeof value === 'string') return value;
   return Array.isArray(value) ? partsText(value as Disp[]) : '';
 };
-const resolveCtx = (args: PkgArgs, cwd = process.cwd()): Ctx => {
-  return withRunDir(publicCtx(args.pkgArg, cwd));
+const resolveCtx = (args: PkgArgs, cwd = process.cwd(), runDir?: string): Ctx => {
+  return withRunDir(publicCtx(args.pkgArg, cwd), runDir);
 };
 const loadTs = (pkgFile: string): TsLike => {
   return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
@@ -295,6 +298,50 @@ const runCode = async (code: string, cwd: string): Promise<ExecRes> => {
     ext: 'ts',
     prefix: '.__jsdoc-check-',
   });
+};
+const runCodeInCurrentCwd = async (code: string, cwd: string): Promise<ExecRes> => {
+  return withTempFile(
+    cwd,
+    {
+      code,
+      ext: 'ts',
+      prefix: '.__jsdoc-check-',
+    },
+    (file) => runImportFile(file, { execArgv: ['--experimental-strip-types'] })
+  );
+};
+const withCwd = async <T>(cwd: string, fn: () => Promise<T>): Promise<T> => {
+  const prev = process.cwd();
+  process.chdir(cwd);
+  try {
+    return await fn();
+  } finally {
+    process.chdir(prev);
+  }
+};
+const EXAMPLE_WORKERS = 8;
+const createLimit = (limit: number) => {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const pump = (): void => {
+    while (active < limit && queue.length) {
+      active += 1;
+      queue.shift()!();
+    }
+  };
+  return <T>(fn: () => Promise<T> | T): Promise<T> =>
+    new Promise((resolve, reject) => {
+      queue.push(() => {
+        void Promise.resolve()
+          .then(fn)
+          .then(resolve, reject)
+          .finally(() => {
+            active -= 1;
+            pump();
+          });
+      });
+      pump();
+    });
 };
 const loadProgram = (ts: TsLike, files: string[], allowJs = false) =>
   ts.createProgram(files, {
@@ -1977,6 +2024,7 @@ export const runCli = async (
     loadTSDoc?: (pkgFile: string) => TSDocLike;
     loadTs?: (pkgFile: string) => TsLike;
     runCode?: (code: string, cwd: string) => ExecRes | Promise<ExecRes>;
+    runDir?: string;
   } = {}
 ): Promise<void> => {
   const args = pkgArgs(argv);
@@ -1985,7 +2033,7 @@ export const runCli = async (
     return;
   }
   const colorOn = opts.color ?? wantColor();
-  const ctx = resolveCtx(args, opts.cwd);
+  const ctx = resolveCtx(args, opts.cwd, opts.runDir);
   npmInstall(ctx.runDir);
   const log: LogIssue[] = [];
   const ts = (opts.loadTs || loadTs)(ctx.pkgFile);
@@ -2007,6 +2055,10 @@ export const runCli = async (
   );
   const throwMap = new Map(throwReports.map((item) => [`${item.key}:${item.name}`, item]));
   const out = emptyResult();
+  const rowResults: { failed: boolean }[] = [];
+  const runExample = createLimit(opts.runCode ? 1 : jsbtWorkerLimit(EXAMPLE_WORKERS));
+  const exampleRunCode = opts.runCode || runCodeInCurrentCwd;
+  const pendingExamples: Promise<() => void>[] = [];
   for (const row of analysis.rows) {
     const { ex, exported, item, mod } = row;
     if (forwardedAliasDocs(ts, mods, mod, exported, ex)) continue;
@@ -2023,14 +2075,15 @@ export const runCli = async (
       ex.decl,
       ex.decl?.name?.getText?.() || ex.resolved.getName() || item.name
     );
-    let failed = false;
+    const rowResult = { failed: false };
+    rowResults.push(rowResult);
     const fail = (at: ItemRef, text: string, kind: string): void => {
-      failed = true;
+      rowResult.failed = true;
       recordDocIssue(out, log, 'error', at, text, kind);
     };
     const failUnique = (seen: Set<string>, at: ItemRef, text: string, kind: string): void => {
       if (!recordUniqueDocIssue(out, log, seen, 'error', at, text, kind)) return;
-      failed = true;
+      rowResult.failed = true;
     };
     const failTyped: FailFn = (at, text, kind) => failUnique(typedSeen, at, text, kind);
     const info = typeOfExport(ts, dtsChecker, ex.resolved);
@@ -2094,16 +2147,27 @@ export const runCli = async (
           fail(item, `example ${i + 1}: ${err}`, 'example');
         }
         if (!examples[i].code) continue;
-        const msg = await tryExample(examples[i].code, item, ctx, ts, {
-          checkTypes: checkExampleTypes,
-          runCode: opts.runCode,
-        });
-        if (!msg) continue;
-        fail(item, `example ${i + 1}: ${msg}`, item.runtime ? 'exec' : 'type');
+        const example = examples[i];
+        const n = i + 1;
+        pendingExamples.push(
+          runExample(() =>
+            tryExample(example.code, item, ctx, ts, {
+              checkTypes: checkExampleTypes,
+              runCode: exampleRunCode,
+            })
+          ).then((msg) => () => {
+            if (!msg) return;
+            fail(item, `example ${n}: ${msg}`, item.runtime ? 'exec' : 'type');
+          })
+        );
       }
     }
-    if (!failed) out.passed += 1;
   }
+  const applyExamples = opts.runCode
+    ? await Promise.all(pendingExamples)
+    : await withCwd(ctx.runDir, () => Promise.all(pendingExamples));
+  for (const applyExample of applyExamples) applyExample();
+  for (const row of rowResults) if (!row.failed) out.passed += 1;
   reportIssues('tsdoc', log, out, colorOn, 'JSDoc check found issues', 'fail');
 };
 

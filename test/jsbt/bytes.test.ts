@@ -40,7 +40,7 @@ const all = (res: { stderr: string; stdout: string }) =>
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
 const okJsrPublish = async () => {};
-const spent = String.raw`(?:\d+h \d+min \d+s|\d+min \d+s|\d+s)`;
+const spent = String.raw`\d+ sec`;
 const load = (ver: Ver) => {
   const dir = join(ROOT, `ts-${ver}`);
   // Load each TS version in-process: spawning nested node/tsc commands gets EPERM in this harness.
@@ -155,7 +155,7 @@ should('bytes handles recursive mapped generic helper types', async () => {
   );
   deepStrictEqual(res.ok, false, all(res));
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:\d+\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[ERROR\] bytes: utils\.ts:\d+\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -206,7 +206,7 @@ should('bytes updates older helper docs to the noble-curves canonical block', as
   );
   deepStrictEqual(res.ok, false, all(res));
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:\d+\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[ERROR\] bytes: utils\.ts:\d+\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -263,7 +263,7 @@ should('bytes suggests mechanical TArg/TRet wrappers at API boundaries', async (
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[ERROR\] bytes: utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -305,7 +305,7 @@ should('bytes reports input and output typed-array issues on bytes fixture', asy
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:1\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[ERROR\] bytes: utils\.ts:1\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -511,27 +511,7 @@ should('check includes bytes results', async () => {
     runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish })
   );
   deepStrictEqual(res.ok, true);
-  const heads = [
-    'readme',
-    'treeshake',
-    'tsdoc',
-    'typeimport',
-    'jsr',
-    'jsrpublish',
-    'comments',
-    'errors',
-    'bigint',
-    'bytes',
-    'mutate',
-    'tests',
-    'importtime',
-  ];
-  deepStrictEqual(
-    new RegExp(
-      `jsbt check done in ${spent}: ${heads.map((head) => `${head}\\(0, ${spent}\\)`).join(', ')}`
-    ).test(all(res)),
-    true
-  );
+  deepStrictEqual(new RegExp(`12 checks finished in ${spent}`).test(all(res)), true);
 });
 
 should('check groups repeated bytes actions without changing counts', async () => {
@@ -541,7 +521,7 @@ should('check groups repeated bytes actions without changing counts', async () =
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[ERROR\] bytes: utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -553,35 +533,35 @@ should('check groups repeated bytes actions without changing counts', async () =
   deepStrictEqual(/export type TRet<T> = T extends unknown/.test(plain(res)), true);
   deepStrictEqual(/\? T & \(\[TypedRet<T>\] extends \[never\]/.test(plain(res)), true);
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) 2x wrap output type with TRet<\.\.\.> \(bytes-return\)\n  utils\.ts:14\/return TRet<Surface>\n  utils\.ts:16\/return TRet<Surface>/.test(
+    /\[ERROR\] bytes: 2x wrap output type with TRet<\.\.\.> \(bytes-return\)\n  utils\.ts:14\/return TRet<Surface>\n  utils\.ts:16\/return TRet<Surface>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) wrap output type with Promise<TRet<\.\.\.>> \(bytes-return\)\n  utils\.ts:18\/return Promise<TRet<Uint8Array>>/.test(
+    /\[ERROR\] bytes: wrap output type with Promise<TRet<\.\.\.>> \(bytes-return\)\n  utils\.ts:18\/return Promise<TRet<Uint8Array>>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) use Promise<TRet<\.\.\.>> instead of TRet<Promise<\.\.\.>> \(bytes-return\)\n  utils\.ts:20\/return Promise<TRet<Uint8Array>>/.test(
+    /\[ERROR\] bytes: use Promise<TRet<\.\.\.>> instead of TRet<Promise<\.\.\.>> \(bytes-return\)\n  utils\.ts:20\/return Promise<TRet<Uint8Array>>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) 2x wrap input type with TArg<\.\.\.> \(bytes-input\)\n  utils\.ts:16\/input TArg<Surface>\n  utils\.ts:16\/input TArg<Uint8Array>/.test(
+    /\[ERROR\] bytes: 2x wrap input type with TArg<\.\.\.> \(bytes-input\)\n  utils\.ts:16\/input TArg<Surface>\n  utils\.ts:16\/input TArg<Uint8Array>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:14\/return wrap output type with TRet<Surface>/.test(plain(res)),
+    /\[ERROR\] bytes: utils\.ts:14\/return wrap output type with TRet<Surface>/.test(plain(res)),
     false
   );
   deepStrictEqual(
-    /\[ERROR\] \(bytes\) utils\.ts:16\/input wrap input type with TArg<Surface>/.test(plain(res)),
+    /\[ERROR\] bytes: utils\.ts:16\/input wrap input type with TArg<Surface>/.test(plain(res)),
     false
   );
   deepStrictEqual(new RegExp(`bytes\\(7, ${spent}\\)`).test(plain(res)), true);

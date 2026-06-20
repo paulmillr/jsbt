@@ -43,7 +43,7 @@ export interface TestFunction {
   /**
    * Runs all registered tests.
    * After run, allows to run new tests without duplication: old test queue is cleaned up.
-   * @param forceSequential - when `true`, disables automatic parallelization even when MSHOULD_FAST=1.
+   * @param forceSequential - when `true`, disables automatic parallelization even when JSBT_FAST=1.
    * @returns resolved promise, after all tests have finished
    */
   run: (forceSequential?: boolean) => Promise<number>;
@@ -59,7 +59,7 @@ export interface TestFunction {
    * it.runWhen(import.meta.url)
    */
   runWhen: (importMetaUrl: string) => Promise<number | undefined>;
-  /** Parallel version, using node:cluster. Auto-selected when env var MSHOULD_FAST=1 is set. */
+  /** Parallel version, using node:cluster. Auto-selected when env var JSBT_FAST=1 is set. */
   runParallel: () => Promise<number>;
   opts: Options;
 }
@@ -81,8 +81,8 @@ const opts: Options = {
   PRINT_TREE: true,
   PRINT_MULTILINE: true,
   STOP_ON_ERROR: true,
-  QUIET: isCli && ['1', 'true'].includes(proc?.env?.MSHOULD_QUIET),
-  FAST: parseFast(proc?.env?.MSHOULD_FAST),
+  QUIET: isCli && ['1', 'true'].includes(proc?.env?.JSBT_QUIET),
+  FAST: parseFast(proc?.env?.JSBT_FAST),
 };
 
 function parseFast(str: string | number): number {
@@ -342,7 +342,6 @@ function begin(total: number, workers?: number | undefined) {
 function finalize(total: number, startTime: number) {
   isRunning = false;
   console.log();
-  if (opts.QUIET) console.log();
   const totalFailed = errorLog.length;
   const sec = Math.ceil((Date.now() - startTime) / 1000);
   const tdiff = sec < 60 ? `in ${sec} sec` : `in ${Math.floor(sec / 60)} min ${sec % 60} sec`;
@@ -420,7 +419,7 @@ async function runTestsInParallel(): Promise<number> {
   // the code is ran in primary proc
   const pr: Promise<any> = new Promise((resolve, reject) => {
     begin(total, totalW);
-    console.log();
+    if (!opts.QUIET) console.log();
     const workers: any[] = [];
     let tasksDone = 0;
     let workersDone = 0;

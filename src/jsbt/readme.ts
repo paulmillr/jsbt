@@ -8,9 +8,9 @@ Like `jsbt bundle`, it runs `npm install` in the selected run/build directory be
 File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 All writes and any other modifications from this script MUST stay under the selected run/build directory.
-This checker takes only a package.json path, uses `test/build` next to it as the run directory, and
-MUST fail if that fixture directory is missing or if `test/build/package.json` does not install the
-checked package name as `"file:../.."`.
+This checker takes only a package.json path, uses `test/build` next to it as the default run
+directory or a dispatcher-provided temp run directory, and MUST fail if the fixture template is
+missing or if `test/build/package.json` does not install the checked package name as `"file:../.."`.
  */
 import { basename, resolve } from 'node:path';
 import { npmInstall, sweepTemps } from '../fs-modify.ts';
@@ -84,7 +84,7 @@ const readPkg = (pkgFile: string): Pkg => {
   const name = typeof raw.name === 'string' ? raw.name : '';
   return { name };
 };
-const resolveCtx = (args: PkgArgs, cwd: string = process.cwd()): Ctx => {
+const resolveCtx = (args: PkgArgs, cwd: string = process.cwd(), runDir?: string): Ctx => {
   const base = resolve(cwd);
   const pkgFile = resolve(base, args.pkgArg);
   const readmeFile = resolve(base, 'README.md');
@@ -92,7 +92,7 @@ const resolveCtx = (args: PkgArgs, cwd: string = process.cwd()): Ctx => {
   guardChild(base, readmeFile, 'readme');
   const pkg = readPkg(pkgFile);
   if (!pkg.name) err(`expected package name in ${pkgFile}`);
-  return withRunDir({ cwd: base, pkg, pkgFile, readmeFile });
+  return withRunDir({ cwd: base, pkg, pkgFile, readmeFile }, runDir);
 };
 const blockLabel = (info: string) => (info.trim().split(/\s+/, 1)[0] || '').toLowerCase();
 const slug = (text: string) =>
@@ -204,6 +204,7 @@ export const runCli = async (
     cwd?: string;
     loadTs?: (pkgFile: string) => TsCheck;
     runCode?: (code: string, cwd: string, mode: Mode) => ExecRes | Promise<ExecRes>;
+    runDir?: string;
   } = {}
 ): Promise<void> => {
   const args = pkgArgs(argv);
@@ -212,7 +213,7 @@ export const runCli = async (
     return;
   }
   const colorOn = opts.color ?? wantColor();
-  const ctx = resolveCtx(args, opts.cwd);
+  const ctx = resolveCtx(args, opts.cwd, opts.runDir);
   npmInstall(ctx.runDir);
   const text = readText(ctx.readmeFile);
   const blocks = parseReadme(text);

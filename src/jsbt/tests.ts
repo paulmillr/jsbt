@@ -17,6 +17,7 @@ import {
   cliArgs,
   collectIssues,
   dirEntries,
+  jsbtWorkerLimit,
   makeIssue,
   pkgTarget,
   readText,
@@ -156,7 +157,7 @@ export const runCli = async (
   const { args, colorOn } = cli;
   const ctx = resolvePkg(args, opts.cwd);
   const timeoutMs = opts.timeoutMs || TIMEOUT;
-  const rows = await runLimit(list(ctx.cwd), opts.limit || LIMIT, (item) =>
+  const rows = await runLimit(list(ctx.cwd), opts.limit || jsbtWorkerLimit(LIMIT), (item) =>
     runOne(item, timeoutMs)
   );
   const { issues, result } = collectIssues(
