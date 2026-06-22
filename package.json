@@ -21,7 +21,7 @@
   "devDependencies": {
     "@microsoft/tsdoc": "0.16.0",
     "@types/node": "24.2.1",
-    "esbuild": "0.25.10",
+    "esbuild": "0.28.1",
     "prettier": "3.6.2",
     "typescript": "6.0.2"
   },
