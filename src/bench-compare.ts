@@ -12,8 +12,16 @@ import { utils } from './bench.ts';
 const { benchmarkRaw, formatDuration } = utils;
 
 const _c = String.fromCharCode(27);
-const red = _c + '[31m', green = _c + '[32m', gray = _c + '[2;37m', blue = _c + '[34m', reset = _c + '[0m';
-const NN = `${gray}│${reset}`, CH = `${gray}─${reset}`, LR = `${gray}┼${reset}`, RN = `${gray}├${reset}`, NL = `${gray}┤${reset}`;
+const red = _c + '[31m',
+  green = _c + '[32m',
+  gray = _c + '[2;37m',
+  blue = _c + '[34m',
+  reset = _c + '[0m';
+const NN = `${gray}│${reset}`,
+  CH = `${gray}─${reset}`,
+  LR = `${gray}┼${reset}`,
+  RN = `${gray}├${reset}`,
+  NL = `${gray}┤${reset}`;
 
 type BenchObj = Record<string, any>;
 type Column = { name: string; width: number };
@@ -93,7 +101,8 @@ function wantColor(env: Env = {}, tty = false): boolean {
 function colorEnabled(env: Env = isCli ? process.env : {}): boolean {
   return isCli && wantColor(env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
 }
-const paint = (text: string, code: string): string => (colorEnabled() ? `${code}${text}${reset}` : text);
+const paint = (text: string, code: string): string =>
+  colorEnabled() ? `${code}${text}${reset}` : text;
 const headerName = (name: string): string => normalizeLabel(name).toLowerCase();
 
 const joinBorders = (str: string): string =>
@@ -179,17 +188,22 @@ function printTableRow(
     (selected.slice(0, selected.length - 1).every((item) => !item) &&
       !!selected[selected.length - 1]);
   if (!skipSeparator) drawSeparator(columns, changed);
-  const row = values.map((val, i) => pad(!changed[i] ? ' ' : val, columns[i].width + 1, i < selectedCount));
+  const row = values.map((val, i) =>
+    pad(!changed[i] ? ' ' : val, columns[i].width + 1, i < selectedCount)
+  );
   console.log(row.join(NN));
   return values;
 }
 
 function filterValues(fields: string[], keywords: string | string[] | undefined): boolean {
   const keys = typeof keywords === 'string' ? keywords.split(',') : keywords;
-  return !keys || keys.every((key) => {
-    const parts = key.split('|');
-    return fields.some((field) => parts.some((part) => field.includes(part)));
-  });
+  return (
+    !keys ||
+    keys.every((key) => {
+      const parts = key.split('|');
+      return fields.some((field) => parts.some((part) => field.includes(part)));
+    })
+  );
 }
 function filterMatchesValue(value: string, keywords: string | string[] | undefined): boolean {
   const keys = typeof keywords === 'string' ? keywords.split(',') : keywords;
@@ -201,15 +215,22 @@ function matrixOpts(opts: CompareOpts): CompareOpts {
   const csv = envFlag(env.JSBT_CSV) || !colorEnabled(env);
   return {
     filter: env.JSBT_BENCHMARK_FILTER,
-    dimensions: env.JSBT_BENCHMARK_DIMENSIONS ? env.JSBT_BENCHMARK_DIMENSIONS.split(',') : undefined,
+    dimensions: env.JSBT_BENCHMARK_DIMENSIONS
+      ? env.JSBT_BENCHMARK_DIMENSIONS.split(',')
+      : undefined,
     dryRun: envFlag(env.JSBT_BENCHMARK_DRY_RUN),
     ...opts,
     format: csv ? 'csv' : opts.format,
   };
 }
 
-function collectDynamicDimensions(libs: Record<string, unknown>, libraryDimensions: string[]): DynamicDimensions {
-  const sets = Object.fromEntries(libraryDimensions.map((dim) => [dim, new Set<string>()])) as Record<string, Set<string>>;
+function collectDynamicDimensions(
+  libs: Record<string, unknown>,
+  libraryDimensions: string[]
+): DynamicDimensions {
+  const sets = Object.fromEntries(
+    libraryDimensions.map((dim) => [dim, new Set<string>()])
+  ) as Record<string, Set<string>>;
   const stack = Object.entries(libs).map(([key, value]) => ({ path: [key], value }));
   for (const cur of stack) {
     const dim = libraryDimensions[cur.path.length - 1];
@@ -231,7 +252,9 @@ function selectDimensions(
 ): string[] {
   const selected =
     selectedDimensions === undefined
-      ? [...Object.keys(dimensions), ...Object.keys(dynamic)].filter((dim) => defaults[dim] === undefined)
+      ? [...Object.keys(dimensions), ...Object.keys(dynamic)].filter(
+          (dim) => defaults[dim] === undefined
+        )
       : [...selectedDimensions];
   for (const dim of [...Object.keys(dynamic), ...Object.keys(dimensions)]) {
     if (defaults[dim] === undefined && !selected.includes(dim)) selected.push(dim);
@@ -268,7 +291,9 @@ function printMetadata(
   const planRows = [
     [
       'varies',
-      selected.length ? selected.map((dim) => (explicit.has(dim) ? paint(dim, blue) : dim)).join(' x ') : 'single case',
+      selected.length
+        ? selected.map((dim) => (explicit.has(dim) ? paint(dim, blue) : dim)).join(' x ')
+        : 'single case',
     ],
     ['fixed', fixed.length ? fixed.join(', ') : 'none'],
     ['compare', loadRun ? `against ${loadRun}` : 'against first row in each group'],
@@ -276,11 +301,14 @@ function printMetadata(
   ];
   const planWidth = Math.max(...planRows.map(([label]) => label.length));
   console.log(paint('benchmark plan', gray));
-  for (const [label, value] of planRows) console.log(`  ${paint(label.padEnd(planWidth), gray)}  ${value}`);
+  for (const [label, value] of planRows)
+    console.log(`  ${paint(label.padEnd(planWidth), gray)}  ${value}`);
   console.log(paint('dimensions', gray));
   const dimWidth = Math.max(0, ...allDims.map((dim) => dim.length));
   for (const dim of allDims) {
-    const name = explicit.has(dim) ? paint(dim.padEnd(dimWidth), blue) : paint(dim.padEnd(dimWidth), gray);
+    const name = explicit.has(dim)
+      ? paint(dim.padEnd(dimWidth), blue)
+      : paint(dim.padEnd(dimWidth), gray);
     const values = valuesFor(dim, dimensions, dynamic).map((value) =>
       filterMatchesValue(value, filter) ? paint(value, blue) : value
     );
@@ -308,7 +336,11 @@ function metricDefs(opts: Pick<CompareOpts, 'bytes' | 'metrics' | 'throughput'>)
     });
   }
   const throughputs =
-    opts.throughput === undefined ? [] : Array.isArray(opts.throughput) ? opts.throughput : [opts.throughput];
+    opts.throughput === undefined
+      ? []
+      : Array.isArray(opts.throughput)
+        ? opts.throughput
+        : [opts.throughput];
   for (const throughput of throughputs) {
     if (!throughput || typeof throughput !== 'object')
       throw new Error('bench-compare throughput must be an object');
@@ -321,7 +353,10 @@ function metricDefs(opts: Pick<CompareOpts, 'bytes' | 'metrics' | 'throughput'>)
       width: throughput.width,
       diff: throughput.diff ?? true,
       higherIsBetter: throughput.higherIsBetter ?? true,
-      compute: (ctx) => roundRate(perSecond(ctx.stats.mean, amountValue('throughput amount', throughput.amount, ctx))),
+      compute: (ctx) =>
+        roundRate(
+          perSecond(ctx.stats.mean, amountValue('throughput amount', throughput.amount, ctx))
+        ),
     });
   }
   const metrics = opts.metrics ?? [];
@@ -344,7 +379,12 @@ function metricDefs(opts: Pick<CompareOpts, 'bytes' | 'metrics' | 'throughput'>)
   return defs;
 }
 
-function columnsFor(selected: string[], values: string[][], metrics: MetricDef[], csv: boolean): Column[] {
+function columnsFor(
+  selected: string[],
+  values: string[][],
+  metrics: MetricDef[],
+  csv: boolean
+): Column[] {
   const cols = selected.map((name, i) => ({
     name: headerName(name),
     width: Math.max(headerName(name).length, ...values[i].map((value) => value.length)),
@@ -352,7 +392,8 @@ function columnsFor(selected: string[], values: string[][], metrics: MetricDef[]
   for (const metric of metrics) {
     const label = headerName(metric.label);
     cols.push({ name: label, width: Math.max(metric.width ?? metric.name.length, label.length) });
-    if (metric.diff && !csv) cols.push({ name: `${label} %`, width: Math.max(8, label.length + 2) });
+    if (metric.diff && !csv)
+      cols.push({ name: `${label} %`, width: Math.max(8, label.length + 2) });
   }
   cols.push(
     ...(csv
@@ -416,10 +457,7 @@ function normalizeRun(result: RunResult, iterations: number): RunResult {
   return { stats, perSec, perSecStr: perSec.toString(), perItemStr: formatDuration(stats.mean) };
 }
 
-function iterationsFor(
-  iterations: CompareIterations | undefined,
-  ctx: CompareArgsContext
-): number {
+function iterationsFor(iterations: CompareIterations | undefined, ctx: CompareArgsContext): number {
   const source = iterations ?? 1;
   return parseIterations(typeof source === 'function' ? source(ctx) : source);
 }
@@ -468,9 +506,11 @@ async function compare(
     metrics,
   } = matrixOpts(opts);
   for (const dim of libraryDimensions) {
-    if (dimensions[dim] !== undefined) throw new Error('Dimensions is static and dynamic at same time: ' + dim);
+    if (dimensions[dim] !== undefined)
+      throw new Error('Dimensions is static and dynamic at same time: ' + dim);
   }
-  if (format !== 'csv' && format !== 'table') throw new Error(`Unknown bench-compare format: ${format}`);
+  if (format !== 'csv' && format !== 'table')
+    throw new Error(`Unknown bench-compare format: ${format}`);
   const csv = format === 'csv';
   const table = format === 'table';
   const dynamic = collectDynamicDimensions(libs, libraryDimensions);
@@ -493,11 +533,15 @@ async function compare(
   main: while (true) {
     const curValues = indices.map((index, dim) => values[dim][index]);
     if (filterValues(curValues, filter)) {
-      const obj = { ...defaults, ...Object.fromEntries(curValues.map((value, i) => [selected[i], value])) };
+      const obj = {
+        ...defaults,
+        ...Object.fromEntries(curValues.map((value, i) => [selected[i], value])),
+      };
       const data = caseData(dimensions, libs, libraryDimensions, obj);
       const lib = data.lib;
       if (lib !== undefined && filterObj(obj)) {
-        if (typeof lib !== 'function') throw new Error(`Benchmark leaf is not a function: ${data.key}`);
+        if (typeof lib !== 'function')
+          throw new Error(`Benchmark leaf is not a function: ${data.key}`);
         let args = data.args;
         if (patchArgs) args = patchArgs(args, obj);
         const ctx = { obj, args };
@@ -505,7 +549,9 @@ async function compare(
         const { stats, perSec, perSecStr, perItemStr } = dryRun
           ? DRY_RESULT
           : normalizeRun(
-              await benchmarkRaw(() => runIterations(lib as (...args: any[]) => any, args, iterationCount)),
+              await benchmarkRaw(() =>
+                runIterations(lib as (...args: any[]) => any, args, iterationCount)
+              ),
               iterationCount
             );
         baselineMean ??= stats.mean;
@@ -513,9 +559,9 @@ async function compare(
         const metricValues = metricList.map((metric) => metric.compute(metricCtx));
         baselineMetrics ??= metricValues;
         const prevRow = prevData?.[data.key];
-        const prevMean = prevData ? prevRow?.stats?.mean ?? stats.mean : baselineMean;
+        const prevMean = prevData ? (prevRow?.stats?.mean ?? stats.mean) : baselineMean;
         const prevMetrics = metricValues.map((value, i) =>
-          prevData ? prevRow?.metricValues?.[i] ?? value : baselineMetrics?.[i] ?? value
+          prevData ? (prevRow?.metricValues?.[i] ?? value) : (baselineMetrics?.[i] ?? value)
         );
         const maxChange = Math.max(
           changePercent(stats.mean, prevMean),
@@ -553,7 +599,11 @@ async function compare(
       baselineMetrics = undefined;
     }
   }
-  if (table) drawSeparator(columns, columns.map(() => true));
+  if (table)
+    drawSeparator(
+      columns,
+      columns.map(() => true)
+    );
 }
 
 export default compare;

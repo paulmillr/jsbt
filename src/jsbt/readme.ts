@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
 do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
@@ -173,7 +173,7 @@ const blockMode = (label: string, kind: Kind): Mode => {
 const runCode = async (code: string, cwd: string, mode: Mode): Promise<ExecRes> => {
   return runTempImport(cwd, {
     code,
-    execArgv: mode === 'ts' ? ['--experimental-strip-types'] : [],
+    execArgv: mode === 'ts' ? [] : [],
     ext: mode,
     prefix: '.__readme-check-',
   });

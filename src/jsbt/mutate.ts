@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks public JS exports for mutable object/array constants.
 Goal:
@@ -21,11 +21,11 @@ import {
   fileUrl,
   recordIssue,
   reportIssues,
-  runWorker,
   runSelf,
+  runWorker,
   skipRootImportTrap,
-  type Issue as LogIssue,
   usageText,
+  type Issue as LogIssue,
 } from './utils.ts';
 
 type Probe = { error?: string; issues?: { issue: string; name: string }[] };

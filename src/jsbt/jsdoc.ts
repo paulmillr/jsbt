@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Destructive ops and `npm install` SHOULD use only `fs-modify.ts`.
 Do not call raw fs delete/write helpers or raw `npm install` directly here.
@@ -294,7 +294,7 @@ const loadTSDoc = (pkgFile: string): TSDocLike => {
 const runCode = async (code: string, cwd: string): Promise<ExecRes> => {
   return runTempImport(cwd, {
     code,
-    execArgv: ['--experimental-strip-types'],
+    execArgv: [],
     ext: 'ts',
     prefix: '.__jsdoc-check-',
   });
@@ -307,7 +307,7 @@ const runCodeInCurrentCwd = async (code: string, cwd: string): Promise<ExecRes> 
       ext: 'ts',
       prefix: '.__jsdoc-check-',
     },
-    (file) => runImportFile(file, { execArgv: ['--experimental-strip-types'] })
+    (file) => runImportFile(file, { execArgv: [] })
   );
 };
 const withCwd = async <T>(cwd: string, fn: () => Promise<T>): Promise<T> => {

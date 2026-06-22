@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks package test and benchmark entry scripts.
 Goal:
@@ -10,9 +10,9 @@ Rules:
   - run test files from the package root and benchmark files from their benchmark directory
   - execute scripts in parallel with a small worker limit and a per-file timeout
  */
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { spawn } from 'node:child_process';
 import {
   cliArgs,
   collectIssues,
@@ -24,9 +24,9 @@ import {
   reportIssues,
   runSelf,
   textLines,
-  type PkgArgs,
   usageText,
   wantTSFile,
+  type PkgArgs,
 } from './utils.ts';
 
 type Kind = 'benchmark' | 'test';
@@ -47,7 +47,7 @@ const usage = usageText('tests', 'check-tests.ts');
 const LIMIT = 8;
 const TIMEOUT = 10_000;
 const MAX_OUTPUT = 8192;
-const NODE_ARGS = ['--experimental-strip-types', '--disable-warning=ExperimentalWarning'] as const;
+const NODE_ARGS = ['--disable-warning=ExperimentalWarning'] as const;
 
 const resolvePkg = (args: PkgArgs, cwd = process.cwd()): { cwd: string; pkgFile: string } => {
   const { pkgFile } = pkgTarget(args.pkgArg, cwd);

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks TypeScript code for low-value patterns that agents often introduce.
 Rules:

@@ -27,7 +27,7 @@ should('check-install rewrites legacy check scripts', async () => {
     check: 'npx --no @paulmillr/jsbt check',
     bench: 'node test/benchmark.ts',
     format: "prettier --write 'index.ts' 'test/*.{js,ts}'",
-    test: 'node --experimental-strip-types test/index.ts',
+    test: 'node test/index.ts',
   });
   deepStrictEqual(read(cwd).endsWith('\n'), true);
   rmSync(cwd, { force: true, recursive: true });
@@ -42,7 +42,7 @@ should('check-install preserves a legacy build prelude before unified check', as
     check: 'npm run build && npx --no @paulmillr/jsbt check',
     bench: 'node test/benchmark.ts',
     format: "prettier --write 'index.ts' 'test/*.{js,ts}'",
-    test: 'node --experimental-strip-types test/index.ts',
+    test: 'node test/index.ts',
   });
   rmSync(cwd, { force: true, recursive: true });
 });

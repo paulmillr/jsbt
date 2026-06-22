@@ -70,9 +70,9 @@ await should.runWhen(import.meta.url);
 Run a project test entrypoint with node:
 
 ```
-node --experimental-strip-types test/index.ts
-JSBT_FAST=1 node --experimental-strip-types test/index.ts
-JSBT_QUIET=1 node --experimental-strip-types test/index.ts
+node test/index.ts
+JSBT_FAST=1 node test/index.ts
+JSBT_QUIET=1 node test/index.ts
 ```
 
 ## 2. benchmark

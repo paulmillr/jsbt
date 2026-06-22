@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks root/source TypeScript files for comment lines over 100 chars.
 Rules:

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks public JS entry import time.
 Goal:
@@ -20,13 +20,13 @@ import {
   paint,
   recordIssue,
   reportIssues,
-  runWorker,
   runSelf,
+  runWorker,
   skipRootImportTrap,
   stripAnsi,
   table,
-  type Issue as LogIssue,
   usageText,
+  type Issue as LogIssue,
 } from './utils.ts';
 
 type Probe = { error?: string; ms?: number };

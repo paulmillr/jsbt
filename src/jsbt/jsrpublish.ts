@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Destructive ops and `npm install` SHOULD use only `fs-modify.ts`.
 Do not call raw fs delete/write helpers or raw `npm install` directly here.
@@ -21,9 +21,9 @@ import {
   reportIssues,
   runSelf,
   textLines,
+  usageText,
   type Issue as LogIssue,
   type Result,
-  usageText,
 } from './utils.ts';
 
 type PublishProbe = {

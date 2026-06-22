@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks public examples for runtime validation quality.
 Goal:
@@ -29,21 +29,21 @@ import {
   loadTypeScriptApi,
   nodeStart,
   nodeText,
-  readText,
-  relName,
-  recordIssue,
-  runWorker,
-  runSelf,
-  printIssues,
   paint,
+  printIssues,
+  readText,
+  recordIssue,
+  relName,
+  runSelf,
+  runWorker,
   status,
   summary,
   tsSourceRel,
   usageText,
   walkAst,
   withTempFile,
-  type Issue as LogIssue,
   type Level,
+  type Issue as LogIssue,
 } from './utils.ts';
 
 type TsLike = {
@@ -1527,7 +1527,7 @@ const probe = async (
       return await runWorker<Probe>(workerCode, {
         data: { file: fileUrl(file) },
         error: (error) => ({ error, issues: [], probed: 0, rejects: [] }),
-        execArgv: ['--experimental-strip-types'],
+        execArgv: [],
         timeout: {
           ms: timeoutMs,
           result: () => ({

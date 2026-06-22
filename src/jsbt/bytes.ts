@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types
+#!/usr/bin/env -S node
 /**
 Checks typed-array API type usage across old and new TypeScript releases.
 Goal:
@@ -28,10 +28,10 @@ import {
   reportIssues,
   resolveLocalImport,
   runSelf,
-  type Issue as LogIssue,
   usageText,
-  wantTSFile,
   walkAst,
+  wantTSFile,
+  type Issue as LogIssue,
 } from './utils.ts';
 
 type FileCtx = {
