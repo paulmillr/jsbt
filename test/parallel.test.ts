@@ -16,4 +16,5 @@ describe('micro-interrupt-controller tests', () => {
   });
 });
 
+should.opts.FAST = 2;
 should.runParallel();

@@ -7,8 +7,8 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 1. [test](#test) 500-line simplicity with mocha-like syntax and parallelism
 2. [benchmark](#benchmark) with nanosecond resolution
 3. [CLI](#cli) to create single-file bundles; and check project for common mistakes
-4. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
-5. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
+4. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
+5. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
 
 ## Usage
 
@@ -18,80 +18,142 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 ## 1. test
 
-500-line test framework with syntax similar to Mocha / Jest / Vitest. Advantages:
-
-- Colorful tree reporter
-- +quiet mode: dot reporter
-- +fast mode: use all cores or x cores
-- No "global" magic: `it.run()` in the end simplifies logic and browser runs
-- RunWhen helper: runs from cli; doesn't run when imported (as subtest)
+Small test runner with familiar `describe` / `it`  mocha-like syntax, explicit execution, and
+optional parallelism. It is intended for tests that should run unchanged from standalone files,
+aggregate test entrypoints, and browser bundles.
 
 API:
 
-- `it(title, case)` or `should(title, case)` syntax to register a test function
-- `it.only`, `it.skip` allows to limit tests to one case / skip tests
-- `beforeEach`, `afterEach` execute code before / after function in `describe` block
-- In the end, `it.run()` or `it.runWhen(import.meta.url)` must be executed:
-    - runWhen helper ensures tests are not ran when imported from other file. It compares import.meta.url to CLI argument
+- `it(title, fn)` register sync or async tests.
+- `describe(title, fn)` groups tests and scopes `beforeEach` / `afterEach`.
+- `it.only(title, fn)` runs one test; `should.skip(title, fn)` reports a skipped test.
+- `it.serial(title, fn)` keeps a test on the main process when fast mode is enabled.
+- `it.run()` runs the current file's registered tests.
+- `it.runWhen(import.meta.url)` runs only when the file was launched directly, which keeps
+  imported subtests from running twice in aggregate test files.
 
 ENV variables:
 
-- `JSBT_FAST=1` enables parallel execution in node.js and Bun
-    - `JSBT_FAST=3` values >1 will set worker count
-- `JSBT_QUIET=1` enables "quiet" dot reporter
+- `JSBT_FAST=1` enables parallel execution with all available cores.
+- `JSBT_FAST=3` uses three workers.
+- `JSBT_FAST=-1` uses all cores minus one.
+- `JSBT_FAST=0.5` uses half of available cores.
+- `JSBT_QUIET=1` enables the dot reporter.
 
 ```js
-import { should } from 'micro-should';
-import { equal } from 'node:assert';
-should('add', () => {
-  equal(2 + 2, 4);
-});
-should('work in async env', async () => {
-  equal(await Promise.resolve(123), 123);
-});
-describe('nested', () => {
-  describe('nested 2', () => {
-    should('multiply', () => {
-      equal(2 * 2, 4);
-    });
-    should.skip('disable test by using skip', () => {
-      equal(true, false); // skip
-    });
-    // should.only('execute only one test', () => {
-    //   equal(true, true);
-    // });
+import { deepStrictEqual } from 'node:assert';
+import { beforeEach, describe, it } from '@paulmillr/jsbt/test.js';
+
+describe('math', () => {
+  let value = 0;
+
+  beforeEach(() => {
+    value = 2;
+  });
+
+  it('adds', () => {
+    deepStrictEqual(value + 2, 4);
+  });
+
+  it('works with async code', async () => {
+    deepStrictEqual(await Promise.resolve(value * 3), 6);
+  });
+
+  it.skip('documents known gaps without running them', () => {
+    deepStrictEqual(true, false);
   });
 });
 
-should.runWhen(import.meta.url); // or should.run();
+await should.runWhen(import.meta.url);
+```
+
+Run a project test entrypoint with node:
+
+```
+node --experimental-strip-types test/index.ts
+JSBT_FAST=1 node --experimental-strip-types test/index.ts
+JSBT_QUIET=1 node --experimental-strip-types test/index.ts
 ```
 
 ## 2. benchmark
 
-200-line benchmarking framework. Advantages:
+Lightweight benchmark helpers with nanosecond timing, terminal-friendly output, throughput units,
+and a matrix runner for comparing libraries, algorithms, platforms, input sizes, and other
+dimensions.
 
-- Precise: 1ns resolution using `process.hrtime`
-- Colorful and with nice units
-- Easy switch from ops/sec to mb/sec
+### bench
+
+Use `bench` for simple one-line measurements:
 
 ```js
 import bench from '@paulmillr/jsbt/bench.js';
-(async () => {
-  await bench('printing', async () => 0);
-  await bench('base', () => Promise.resolve(1));
-  await bench('sqrt', 10000, () => Math.sqrt(2));
-})();
+
+const data = new Uint8Array(1024 * 1024);
+const processBlock = () => data[0];
+
+await bench('sqrt', () => Math.sqrt(2));
+await bench('copy 1MiB', () => data.slice(), { bytes: data.byteLength });
+await bench('blocks', () => processBlock(), { throughput: { amount: 16, unit: 'blocks' } });
 ```
+
+Options:
+
+- `bytes`: bytes processed by one benchmark iteration; output is `b/sec`, `kib/sec`, `mib/sec`,
+  or `gib/sec`.
+- `throughput`: custom units processed by one iteration, for example `{ amount: 16, unit: 'blocks' }`.
+- `maxRunTimeSec`: per-benchmark runtime, from `0.1` to `60` seconds.
+- `mode: 'runOnce'`: run one measurement and print only elapsed time.
 
 Example output:
 
 ```
-getPublicKey x 6,072 ops/sec @ 164μs/op ± 8.22% [143μs..17ms]
-sign x 4,980 ops/sec @ 200μs/op
-verify x 969 ops/sec @ 1ms/op
-recoverPublicKey x 890 ops/sec @ 1ms/op
-getSharedSecret x 585 ops/sec @ 1ms/op
+sqrt x 6,072 ops/sec @ 164μs/op
+copy 1MiB x 1,420 mib/sec
+blocks x 92,400 blocks/sec
 ```
+
+### bench-compare
+
+Use `bench-compare` for benchmark matrices. Static dimensions provide benchmark arguments; nested
+library objects provide dynamic dimensions.
+
+```js
+import compare from '@paulmillr/jsbt/bench-compare.js';
+
+const sizes = {
+  '1KB': new Uint8Array(1024),
+  '1MiB': new Uint8Array(1024 * 1024),
+};
+
+const libraries = {
+  js: (buf) => buf.slice(),
+  native: (buf) => Buffer.from(buf),
+};
+
+await compare('copy', { size: sizes }, libraries, {
+  bytes: ({ args }) => args[0].byteLength,
+});
+```
+
+Common options:
+
+- `libraryDimensions`: names for nested library levels; defaults to `['name']`.
+- `defaults`: fixed dimension values that should not vary in the table.
+- `dimensions`: explicit dimension order and subset.
+- `filter`: comma-separated match terms; `a|b,c` means `(a or b) and c`.
+- `filterObj`: predicate for filtering generated benchmark cases.
+- `iterations`: repeats one measured operation and reports per-iteration timing.
+- `patchArgs`: rewrites generated benchmark arguments before calling a library function.
+- `bytes`, `throughput`, `metrics`: add throughput or custom metric columns.
+- `loadRun`, `skipThreshold`, `printUnchanged`: compare against a saved previous run.
+- `format`: `table` or `csv`; table is the default when colors are enabled, CSV otherwise.
+
+ENV variables:
+
+- `JSBT_BENCHMARK_FILTER=sha256,1MiB` filters cases by dimension values.
+- `JSBT_BENCHMARK_DIMENSIONS=algorithm,size,name` changes dimension order or visible dimensions.
+- `JSBT_BENCHMARK_DRY_RUN=1` prints the selected matrix without measuring.
+- `JSBT_CSV=1` forces CSV output.
 
 ## 3. CLI
 

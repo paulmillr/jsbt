@@ -1,8 +1,9 @@
 import { deepStrictEqual } from 'node:assert';
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { should } from '../../src/test.ts';
+import { should as test } from '../../src/test.ts';
 
+const should = Object.assign(test.serial, { runWhen: test.runWhen });
 const ROOT = resolve('test/jsbt/vectors/install');
 const TMP = resolve('test/jsbt/build/check-install');
 const { runCli: runJsbt } = await import('../../src/jsbt/index.ts');

@@ -2,8 +2,9 @@ import { deepStrictEqual } from 'node:assert';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
-import { should } from '../../src/test.ts';
+import { should as test } from '../../src/test.ts';
 
+const should = Object.assign(test.serial, { runWhen: test.runWhen });
 const ROOT = resolve('test/jsbt/vectors/bytes');
 const BUILD = resolve('test/jsbt/build/bytes-boundary');
 const POLARITY = resolve('test/jsbt/vectors/bytes-polarity');
@@ -413,20 +414,23 @@ should('bytes reports input and output typed-array issues on bytes fixture', asy
 should('bytes compatibility probes keep TS 5.6.3 / 6.0.2 matrix', () => {
   const matrix = {
     '5.6.3': {
-      args: { ok: false, pat: /TS2315: Type 'Uint8Array' is not generic/ },
-      convert: { ok: false, pat: /TS2315: Type 'Uint8Array' is not generic/ },
-      example1: { ok: true },
-      example2: { ok: false, pat: /TS2315: Type 'Uint8Array' is not generic/ },
+      args: { ok: false, pat: /not assignable to parameter of type 'Uint8Array<ArrayBuffer>'/ },
+      convert: { ok: true },
+      example1: { ok: false, pat: /not assignable to parameter of type 'BufferSource'/ },
+      example2: { ok: true },
       example3: { ok: true },
-      example4: { ok: true },
-      example5: { ok: true },
+      example4: {
+        ok: false,
+        pat: /not assignable to parameter of type 'Uint8Array<ArrayBuffer>'/,
+      },
+      example5: { ok: false, pat: /not assignable to parameter of type 'Input'/ },
       example6: { ok: true },
-      example7: { ok: true },
+      example7: { ok: false, pat: /not assignable to parameter of type 'BufferSource'/ },
       example8: { ok: true },
       example9: { ok: true },
-      example10: { ok: false, pat: /TS2315: Type 'Uint32Array' is not generic/ },
+      example10: { ok: true },
       example11: { ok: true },
-      example12: { ok: false, pat: /TS2315: Type 'Uint16Array' is not generic/ },
+      example12: { ok: true },
       example13: { ok: true },
       example14: { ok: true },
       example15: { ok: true },
@@ -434,7 +438,7 @@ should('bytes compatibility probes keep TS 5.6.3 / 6.0.2 matrix', () => {
       example17: { ok: true },
       example18: { ok: true },
       example19: { ok: true },
-      example20: { ok: true },
+      example20: { ok: false, pat: /not assignable to type 'RetDecoder'/ },
     },
     '6.0.2': {
       args: { ok: false, pat: /not assignable to parameter of type 'Uint8Array<ArrayBuffer>'/ },
@@ -521,7 +525,7 @@ should('check groups repeated bytes actions without changing counts', async () =
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] bytes: utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
+    /\[WARN\] bytes: utils\.ts:3\/helper update canonical bytes helper types in utils\.ts/.test(
       plain(res)
     ),
     true
@@ -533,25 +537,25 @@ should('check groups repeated bytes actions without changing counts', async () =
   deepStrictEqual(/export type TRet<T> = T extends unknown/.test(plain(res)), true);
   deepStrictEqual(/\? T & \(\[TypedRet<T>\] extends \[never\]/.test(plain(res)), true);
   deepStrictEqual(
-    /\[ERROR\] bytes: 2x wrap output type with TRet<\.\.\.> \(bytes-return\)\n  utils\.ts:14\/return TRet<Surface>\n  utils\.ts:16\/return TRet<Surface>/.test(
+    /\[WARN\] bytes: 2x wrap output type with TRet<\.\.\.> \(bytes-return\)\n  utils\.ts:14\/return TRet<Surface>\n  utils\.ts:16\/return TRet<Surface>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] bytes: wrap output type with Promise<TRet<\.\.\.>> \(bytes-return\)\n  utils\.ts:18\/return Promise<TRet<Uint8Array>>/.test(
+    /\[WARN\] bytes: wrap output type with Promise<TRet<\.\.\.>> \(bytes-return\)\n  utils\.ts:18\/return Promise<TRet<Uint8Array>>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] bytes: use Promise<TRet<\.\.\.>> instead of TRet<Promise<\.\.\.>> \(bytes-return\)\n  utils\.ts:20\/return Promise<TRet<Uint8Array>>/.test(
+    /\[WARN\] bytes: use Promise<TRet<\.\.\.>> instead of TRet<Promise<\.\.\.>> \(bytes-return\)\n  utils\.ts:20\/return Promise<TRet<Uint8Array>>/.test(
       plain(res)
     ),
     true
   );
   deepStrictEqual(
-    /\[ERROR\] bytes: 2x wrap input type with TArg<\.\.\.> \(bytes-input\)\n  utils\.ts:16\/input TArg<Surface>\n  utils\.ts:16\/input TArg<Uint8Array>/.test(
+    /\[WARN\] bytes: 2x wrap input type with TArg<\.\.\.> \(bytes-input\)\n  utils\.ts:16\/input TArg<Surface>\n  utils\.ts:16\/input TArg<Uint8Array>/.test(
       plain(res)
     ),
     true
@@ -564,7 +568,7 @@ should('check groups repeated bytes actions without changing counts', async () =
     /\[ERROR\] bytes: utils\.ts:16\/input wrap input type with TArg<Surface>/.test(plain(res)),
     false
   );
-  deepStrictEqual(new RegExp(`bytes\\(7, ${spent}\\)`).test(plain(res)), true);
+  deepStrictEqual(new RegExp(`12 checks finished in ${spent}`).test(plain(res)), true);
 });
 
 should.runWhen(import.meta.url);

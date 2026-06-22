@@ -216,8 +216,24 @@ const duration = (ms: number): string => {
   return parts.join(' ');
 };
 const secondsDuration = (ms: number): string => `${Math.max(0, Math.round(ms / 1000))} sec`;
-const checkDone = (total: number, ms: number, on: boolean): string =>
-  `${paint(String(total), color.green, on)} check${total === 1 ? '' : 's'} finished in ${secondsDuration(ms)}`;
+const SLOW_CHECK_MS = 10_000;
+const slowCheckStats = (items: { head: CheckHead; ms: number }[], on: boolean): string => {
+  const slow = items.filter((item) => item.ms > SLOW_CHECK_MS);
+  if (!slow.length) return '';
+  const stats = slow.map((item) => `${item.head} (${duration(item.ms)})`).join(', ');
+  return `. ${paint(`Slow checks: ${stats}.`, color.yellow, on)}`;
+};
+const checkDone = (
+  total: number,
+  ms: number,
+  on: boolean,
+  stats: { head: CheckHead; ms: number }[] = []
+): string => {
+  const count = paint(String(total), color.green, on);
+  const noun = `check${total === 1 ? '' : 's'}`;
+  const base = `${count} ${noun} finished in ${secondsDuration(ms)}`;
+  return `${base}${slowCheckStats(stats, on)}`;
+};
 const checkFastWorkers = (): number => {
   const fast = parseFast(process.env.JSBT_FAST);
   return fast ? jsbtWorkerLimit(1) : 0;
@@ -616,7 +632,8 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
         for (const line of out.lines) printDiagnostic(line, console.error);
       }
     }
-    const done = checkDone(list.length, totalMs, colorOn);
+    const stats = list.map((item, i) => ({ head: item.head, ms: res[i].ms }));
+    const done = checkDone(list.length, totalMs, colorOn, stats);
     if (hasFail) {
       console.error();
       throw new Error(done);
@@ -658,5 +675,5 @@ const main = async (): Promise<void> => {
 const entry: string | undefined = process.argv[1];
 const self: string = fileURLToPath(import.meta.url);
 const data = workerData as Partial<CheckWorkerData> | undefined;
-if (!isMainThread && data?.kind === CHECK_WORKER) void runWorkerMain();
-else if (isMainThread && entry && realpathSync(resolve(entry)) === realpathSync(self)) void main();
+if (!isMainThread && data?.kind === CHECK_WORKER) await runWorkerMain();
+else if (isMainThread && entry && realpathSync(resolve(entry)) === realpathSync(self)) await main();

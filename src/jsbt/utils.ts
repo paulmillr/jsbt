@@ -155,13 +155,21 @@ export const err = (msg: string): never => {
   throw new Error(msg);
 };
 export const parseFast = (str: string | number | undefined): number => {
-  const val = str === 'true' ? 1 : Number.parseInt(String(str || ''), 10);
-  if (!Number.isSafeInteger(val) || val < 1 || val > 256) return 0;
+  const raw = String(str || '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'true') return 1;
+  const val = Number.parseFloat(raw);
+  const ratio = val > 0 && val < 1;
+  if (!Number.isFinite(val) || val === 0 || Math.abs(val) > 256) return 0;
+  if (!ratio && !Number.isSafeInteger(val)) return 0;
   return val;
 };
 export const jsbtWorkerLimit = (defaultCount: number): number => {
   const fast = parseFast(process.env.JSBT_FAST);
-  const count = fast === 1 ? cpus().length : fast || defaultCount;
+  const max = cpus().length;
+  if (!fast) return Math.max(1, Math.min(defaultCount, 256));
+  const count = fast === 1 ? max : fast < 0 ? max + fast : fast < 1 ? Math.floor(max * fast) : fast;
   return Math.max(1, Math.min(count, 256));
 };
 export const camelParts = (parts: string[]): string =>

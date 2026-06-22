@@ -3,7 +3,10 @@
   "type": "module",
   "exports": {
     ".": "./index.js",
-    "./sub": "./sub.js"
+    "./sub": {
+      "types": "./sub.d.mts",
+      "default": "./sub.js"
+    }
   },
   "types": "./index.d.mts"
 }

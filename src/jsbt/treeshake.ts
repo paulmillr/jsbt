@@ -172,6 +172,14 @@ const loadDepsFrom = (pkgFile: string, esbuildPkgFile: string): Deps => {
   return { build: esbuild.build as BuildLike, ts };
 };
 const loadDeps = (pkgFile: string): Deps => loadDepsFrom(pkgFile, esbuildPkg(pkgFile));
+const loadRunDeps = (pkgFile: string, esbuildPkgFile: string, fallbackPkgFile?: string): Deps => {
+  try {
+    return loadDepsFrom(pkgFile, esbuildPkgFile);
+  } catch (error) {
+    if (!fallbackPkgFile || !/missing esbuild near /.test((error as Error).message)) throw error;
+    return loadDepsFrom(pkgFile, fallbackPkgFile);
+  }
+};
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
 const itemId = (pkg: Pkg, item: Pick<Item, 'dir' | 'export' | 'module' | 'out'>): string =>
   isPkgAll(item) ? pkg.name : `${item.module}/${item.export || ALL}`;
@@ -402,12 +410,13 @@ export const runCli = async (
   const ctx = resolveCtx(args, opts.cwd, opts.outDir);
   const runDir = opts.runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, opts.runDir) : undefined;
   const esbuildPkgFile = runDir ? join(runDir, 'package.json') : esbuildPkg(ctx.pkgFile);
+  const fallbackEsbuildPkgFile = runDir ? esbuildPkg(ctx.pkgFile) : undefined;
   npmInstall(dirname(esbuildPkgFile));
   sweepTemps(ctx.outDir);
   sweepTemps(dirname(ctx.outDir));
   const { build, ts } = opts.load
     ? opts.load(ctx.pkgFile)
-    : loadDepsFrom(ctx.pkgFile, esbuildPkgFile);
+    : loadRunDeps(ctx.pkgFile, esbuildPkgFile, fallbackEsbuildPkgFile);
   const mods = readModules(ctx, ts);
   const items = cases(ctx.pkg, mods);
   const headers = ['module', 'export', 'min bundle', 'LOC', 'min KB', 'gzip KB (%)'];

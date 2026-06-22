@@ -29,6 +29,22 @@ const red = _c + '[31m';
 const green = _c + '[32m';
 const blue = _c + '[34m';
 const reset = _c + '[0m';
+type Env = Record<string, string | undefined>;
+function wantColor(env: Env = {}, tty = false): boolean {
+  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
+  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
+  if (env.NO_COLOR) return false;
+  if (env.FORCE_COLOR === '0') return false;
+  if (env.CLICOLOR === '0') return false;
+  return tty;
+}
+const colorOn =
+  // @ts-ignore
+  typeof process !== 'undefined' &&
+  wantColor(process.env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
+function paint(text: string, code: string): string {
+  return colorOn ? `${code}${text}${reset}` : text;
+}
 const units = [
   { symbol: 'min', val: 60n * 10n ** 9n, threshold: 5n },
   { symbol: 's', val: 10n ** 9n, threshold: 10n },
@@ -72,6 +88,21 @@ const tTable = {
   'infinity': 1.96
 };
 const formatter = Intl.NumberFormat('en-US');
+function formatOps(value: bigint | number): string {
+  if (typeof value === 'bigint') return colorOn ? formatter.format(value) : value.toString();
+  const maximumFractionDigits = value < 10 ? 2 : value < 100 ? 1 : 0;
+  return Intl.NumberFormat('en-US', {
+    maximumFractionDigits,
+    useGrouping: colorOn,
+  }).format(value);
+}
+const displayRmeThreshold = 5;
+const byteRateUnits = [
+  { unit: 'gib', bytes: 1024 ** 3 },
+  { unit: 'mib', bytes: 1024 ** 2 },
+  { unit: 'kib', bytes: 1024 },
+  { unit: 'b', bytes: 1 },
+];
 // duration formatter
 function formatDuration(duration: any): string {
   for (let i = 0; i < units.length; i++) {
@@ -127,9 +158,10 @@ function calcStats(list: bigint[]): {
   const critical: number = tTable[Math.round(df) || 1] || tTable.infinity; // critical value
   const moe = sem * critical; // margin of error
   const rme = (moe / Number(mean)) * 100 || 0; // relative margin of error
-  const formatted = `${red}± ${rme.toFixed(2)}% (${formatDuration(min)}..${formatDuration(
-    max
-  )})${reset}`;
+  const formatted = paint(
+    `± ${rme.toFixed(2)}% (${formatDuration(min)}..${formatDuration(max)})`,
+    red
+  );
   return { rme, min, max, mean, median, formatted };
 }
 // @ts-ignore
@@ -158,23 +190,74 @@ async function benchmarkRaw(
   const stats = calcStats(measurements);
   const { mean } = stats;
   const perSec = SECOND / mean;
-  const perSecStr = formatter.format(perSec);
+  const perSecStr = formatOps(perSec);
   const perItemStr = formatDuration(mean);
   return { stats, perSecStr, perSec, perItemStr, measurements };
 }
 
 export type BenchOpts = {
-  unit?: string;
-  multiplier?: number;
+  /** Bytes processed by one benchmark iteration; printed as kib/mib/gib per second. */
+  bytes?: number;
+  /** Custom units processed by one benchmark iteration. */
+  throughput?: BenchThroughput;
   maxRunTimeSec?: number;
   mode?: 'normal' | 'runOnce';
 };
+export type BenchThroughput = {
+  amount: number;
+  unit: string;
+};
+type BenchRate =
+  | { type: 'bytes'; bytes: number; showPerItem: false }
+  | { type: 'unit'; amount: number; unit: string; showPerItem: boolean };
 
 function parseMaxRunTime(val: number | undefined) {
   if (val === undefined) return;
   if (typeof val !== 'number' || !Number.isFinite(val) || val < 0.1 || val > 60)
     throw new Error('must be between 0.1 and 60 sec');
   return (BigInt(Math.round(val * 1000)) * SECOND) / 1000n;
+}
+
+function parsePositiveNumber(name: string, val: unknown): number {
+  if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0)
+    throw new Error(`bench ${name} must be a positive finite number`);
+  return val;
+}
+
+function parseBenchRate(opts: BenchOpts): BenchRate | undefined {
+  const legacy = opts as BenchOpts & { unit?: unknown; multiplier?: unknown };
+  if (legacy.unit !== undefined || legacy.multiplier !== undefined)
+    throw new Error('bench unit/multiplier options were removed; use bytes or throughput');
+  const { bytes, throughput } = opts;
+  if (bytes !== undefined) {
+    if (throughput !== undefined) throw new Error('bench bytes cannot be used with throughput');
+    if (!Number.isSafeInteger(bytes) || bytes <= 0)
+      throw new Error('bench bytes must be a positive safe integer');
+    return { type: 'bytes', bytes, showPerItem: false };
+  }
+  if (throughput !== undefined) {
+    if (!throughput || typeof throughput !== 'object')
+      throw new Error('bench throughput must be an object');
+    const amount = parsePositiveNumber('throughput amount', throughput.amount);
+    if (typeof throughput.unit !== 'string' || !throughput.unit)
+      throw new Error('bench throughput unit must be a non-empty string');
+    return { type: 'unit', amount, unit: throughput.unit, showPerItem: false };
+  }
+  return undefined;
+}
+
+function perSecond(mean: bigint, amount: number): bigint | number {
+  if (Number.isSafeInteger(amount)) return (SECOND * BigInt(amount)) / mean;
+  return (Number(SECOND) * amount) / Number(mean);
+}
+
+function formatBenchRate(mean: bigint, rate: BenchRate): { perSecStr: string; unit: string } {
+  if (rate.type === 'unit')
+    return { perSecStr: formatOps(perSecond(mean, rate.amount)), unit: rate.unit };
+  const bytesPerSec = (Number(SECOND) * rate.bytes) / Number(mean);
+  const { bytes, unit } =
+    byteRateUnits.find((item) => bytesPerSec >= item.bytes) ?? byteRateUnits.at(-1)!;
+  return { perSecStr: formatOps(bytesPerSec / bytes), unit };
 }
 
 function setMaxRunTime(val: number): void {
@@ -189,28 +272,28 @@ export async function bench(
   if (typeof label !== 'string') throw new Error('benchmark label must be a string');
   if (!opts || typeof opts !== 'object')
     throw new Error('benchmark opts must be an object, got: ' + typeof opts);
-  let { multiplier, unit, maxRunTimeSec, mode } = opts;
+  let { maxRunTimeSec, mode } = opts;
+  const rate = parseBenchRate(opts);
   let { stats, perSecStr, perItemStr, measurements } = await benchmarkRaw(
     fn,
     mode === 'runOnce' ? 0n : parseMaxRunTime(maxRunTimeSec)
   );
   let OUTPUT = `${label} `;
   if (mode === 'runOnce') {
-    OUTPUT += `${blue}${perItemStr}${reset}`;
+    OUTPUT += paint(perItemStr, blue);
   } else {
-    if (multiplier) {
-      let perSec: bigint | number;
-      if (Number.isInteger(multiplier)) {
-        perSec = (SECOND * BigInt(multiplier)) / stats.mean;
-      } else {
-        perSec = Number(SECOND / stats.mean) * multiplier;
+    if (rate) {
+      const formattedRate = formatBenchRate(stats.mean, rate);
+      perSecStr = formattedRate.perSecStr;
+      OUTPUT += `x ${paint(perSecStr, green)} ${formattedRate.unit}/sec`;
+      if (rate.showPerItem) {
+        OUTPUT += ` @ ${paint(perItemStr, blue)}/op`;
+        if (stats.rme >= displayRmeThreshold) OUTPUT += ` ${stats.formatted}`;
       }
-      perSecStr = formatter.format(perSec);
-    }
-    OUTPUT += `x ${green}${perSecStr}${reset} ${unit ?? 'ops'}/sec`;
-    if (!unit) {
-      OUTPUT += ` @ ${blue}${perItemStr}${reset}/op`;
-      if (stats.rme >= 1) OUTPUT += ` ${stats.formatted}`;
+    } else {
+      OUTPUT += `x ${paint(perSecStr, green)} ops/sec`;
+      OUTPUT += ` @ ${paint(perItemStr, blue)}/op`;
+      if (stats.rme >= displayRmeThreshold) OUTPUT += ` ${stats.formatted}`;
     }
   }
   printOutput(OUTPUT);

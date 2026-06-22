@@ -90,7 +90,7 @@ should('check errors selector runs the standalone errors checker', async () => {
   const cwd = fixture('fail');
   const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
   const out = plain(res);
-  deepStrictEqual(res.ok, false);
+  deepStrictEqual(res.ok, true);
   deepStrictEqual(/wrong secretKey=false/.test(out), true);
   deepStrictEqual(/- index\.ts:isValidSecretKey: NO ERROR!/.test(out), true);
   deepStrictEqual(/unknown:0 Errors check found issues/.test(out), false);
@@ -101,7 +101,7 @@ should('check errors selector reports unprobeable examples before audit rows', a
   const cwd = fixture('mixed-no-calls');
   const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
   const out = plain(res);
-  deepStrictEqual(res.ok, false);
+  deepStrictEqual(res.ok, true);
   deepStrictEqual(
     /could not derive valid runtime probes from TSDoc example[\s\S]*wrong bytesLength=true/.test(
       res.seq.join('\n')

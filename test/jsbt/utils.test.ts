@@ -1,4 +1,5 @@
 import { deepStrictEqual, throws } from 'node:assert';
+import { cpus } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as ts from 'typescript';
@@ -21,6 +22,7 @@ import {
   nodeLine,
   nodeStart,
   nodeText,
+  parseFast,
   pkgArgs,
   pkgTarget,
   pickRunDir,
@@ -40,6 +42,7 @@ import {
   table,
   textLines,
   withRunDir,
+  jsbtWorkerLimit,
 } from '../../src/jsbt/utils.ts';
 
 const capture = (fn: () => void) => {
@@ -76,6 +79,40 @@ should('pkgTarget resolves package paths under cwd', () => {
     pkgFile: resolve(cwd, 'package.json'),
   });
   throws(() => pkgTarget('../package.json', cwd), /refusing unsafe package path/);
+});
+
+should('parseFast accepts worker offsets and ratios', () => {
+  deepStrictEqual(parseFast('true'), 1);
+  deepStrictEqual(parseFast('3'), 3);
+  deepStrictEqual(parseFast('-1'), -1);
+  deepStrictEqual(parseFast('-2'), -2);
+  deepStrictEqual(parseFast('0.5'), 0.5);
+  deepStrictEqual(parseFast('0.25'), 0.25);
+  deepStrictEqual(parseFast('half'), 0);
+  deepStrictEqual(parseFast('quarter'), 0);
+  deepStrictEqual(parseFast('0'), 0);
+  deepStrictEqual(parseFast('1.5'), 0);
+  deepStrictEqual(parseFast('-0.5'), 0);
+  deepStrictEqual(parseFast('-257'), 0);
+});
+
+should('jsbtWorkerLimit resolves fast offsets and ratios from max cores', () => {
+  const prevFast = process.env.JSBT_FAST;
+  const expectedRatio = (ratio: number) =>
+    Math.max(1, Math.min(Math.floor(cpus().length * ratio), 256));
+  try {
+    process.env.JSBT_FAST = '-1';
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length - 1, 256)));
+    process.env.JSBT_FAST = '-2';
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length - 2, 256)));
+    process.env.JSBT_FAST = '0.5';
+    deepStrictEqual(jsbtWorkerLimit(2), expectedRatio(0.5));
+    process.env.JSBT_FAST = '0.25';
+    deepStrictEqual(jsbtWorkerLimit(2), expectedRatio(0.25));
+  } finally {
+    if (prevFast === undefined) delete process.env.JSBT_FAST;
+    else process.env.JSBT_FAST = prevFast;
+  }
 });
 
 should('pickRunDir validates test build package wiring', () => {

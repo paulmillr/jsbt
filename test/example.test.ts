@@ -77,8 +77,8 @@ should('catch errors', () => {
 
 should('produce correct promise result', async () => {
   const fs = await import('node:fs/promises');
-  const data = await fs.readFile('../README.md', 'utf-8');
-  assert.ok(data.includes('Micro testing framework'));
+  const data = await fs.readFile(new URL('../README.md', import.meta.url), 'utf-8');
+  assert.ok(data.includes('500-line test framework'));
 });
 
 describe('during any time of day', () => {

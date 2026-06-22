@@ -65,22 +65,31 @@ const captureProcess = async (fn: () => Promise<void>) => {
   }
 };
 let quietImportId = 0;
-const runQuietTestModule = async () => {
-  const prevQuiet = process.env.JSBT_QUIET;
-  const prevFast = process.env.JSBT_FAST;
-  process.env.JSBT_QUIET = '1';
-  process.env.JSBT_FAST = '';
+const withEnv = async <T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> => {
+  const prev = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   try {
+    return await fn();
+  } finally {
+    for (const [key, value] of prev) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+};
+const runQuietTestModule = async (env: Record<string, string | undefined> = {}) => {
+  return withEnv({ JSBT_QUIET: '1', JSBT_FAST: '', ...env }, async () => {
     const mod = await import(`../../src/test.ts?quiet-layout=${quietImportId++}`);
     mod.should('2 + 2', () => {});
     mod.should('2 + 3', () => {});
     return captureProcess(() => mod.should.run());
-  } finally {
-    if (prevQuiet === undefined) delete process.env.JSBT_QUIET;
-    else process.env.JSBT_QUIET = prevQuiet;
-    if (prevFast === undefined) delete process.env.JSBT_FAST;
-    else process.env.JSBT_FAST = prevFast;
-  }
+  });
 };
 const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
@@ -141,6 +150,21 @@ should('test quiet reporter omits boundary blank lines', async () => {
     true,
     out
   );
+});
+
+should('test quiet reporter respects NO_COLOR', async () => {
+  const forced = await runQuietTestModule({
+    CLICOLOR_FORCE: undefined,
+    FORCE_COLOR: '1',
+    NO_COLOR: undefined,
+  });
+  deepStrictEqual(/\x1b\[32m/.test(all(forced)), true, all(forced));
+  const noColor = await runQuietTestModule({
+    CLICOLOR_FORCE: undefined,
+    FORCE_COLOR: undefined,
+    NO_COLOR: '1',
+  });
+  deepStrictEqual(/\x1b\[/.test(all(noColor)), false, all(noColor));
 });
 
 should.runWhen(import.meta.url);

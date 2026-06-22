@@ -4,9 +4,9 @@ import { describe, it, should } from '../src/test.ts';
 const section = (name) => console.log(`${'='.repeat(16)} ${name} ${'='.repeat(16)}`);
 
 function restoreOpts() {
-  should.PRINT_TREE = true;
-  should.PRINT_MULTILINE = true;
-  should.STOP_AT_ERROR = true;
+  should.opts.PRINT_TREE = true;
+  should.opts.PRINT_MULTILINE = true;
+  should.opts.STOP_ON_ERROR = true;
 }
 
 function basicData() {
@@ -97,8 +97,8 @@ function errorData() {
 
   should('produce correct promise result', async () => {
     const fs = await import('node:fs/promises');
-    const data = await fs.readFile('README.md', 'utf-8');
-    assert.ok(data.includes('Micro testing framework'));
+    const data = await fs.readFile(new URL('../README.md', import.meta.url), 'utf-8');
+    assert.ok(data.includes('500-line test framework'));
   });
 
   // Execute this at the end of a file.
@@ -138,11 +138,11 @@ function errorData() {
   await should.run();
 
   section('Nested with should.PRINT_TREE = false;');
-  should.PRINT_TREE = false;
+  should.opts.PRINT_TREE = false;
   basicData();
 
   await should.run();
-  should.PRINT_MULTILINE = false;
+  should.opts.PRINT_MULTILINE = false;
   section('Nested with should.PRINT_TREE = false && should.PRINT_MULTILINE = false');
   basicData();
   await should.run();
@@ -153,7 +153,7 @@ function errorData() {
   await should.run();
 
   section('Only (flat)');
-  should.PRINT_TREE = false;
+  should.opts.PRINT_TREE = false;
   onlyData();
   await should.run();
   restoreOpts();
@@ -163,22 +163,22 @@ function errorData() {
   await should.run();
 
   section('Skip (flat)');
-  should.PRINT_TREE = false;
+  should.opts.PRINT_TREE = false;
   skipData();
   await should.run();
   restoreOpts();
 
   section('Errors (tree)');
-  should.STOP_AT_ERROR = false;
+  should.opts.STOP_ON_ERROR = false;
   errorData();
-  await should.run();
+  await assert.rejects(() => should.run(), /2 of 6 tests failed/);
   restoreOpts();
 
   section('Errors (flat)');
-  should.STOP_AT_ERROR = false;
-  should.PRINT_TREE = false;
+  should.opts.STOP_ON_ERROR = false;
+  should.opts.PRINT_TREE = false;
   errorData();
-  await should.run();
+  await assert.rejects(() => should.run(), /2 of 6 tests failed/);
   restoreOpts();
 
   section('parallel'); // Separator so we can see where parallel test starts

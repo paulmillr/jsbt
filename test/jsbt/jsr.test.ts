@@ -1,4 +1,5 @@
 import { deepStrictEqual, rejects } from 'node:assert';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 
@@ -34,6 +35,21 @@ const all = (res: { stderr: string; stdout: string }) =>
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
 const run = (cwd: string) => capture(() => runJsr(['package.json'], { color: false, cwd }));
+const withGeneratedGraph = async <T>(cwd: string, fn: () => Promise<T>): Promise<T> => {
+  const dir = join(cwd, 'src/generated');
+  const hadDir = existsSync(dir);
+  if (!hadDir) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'index.ts'), "export { thing } from './util.js';\n");
+    writeFileSync(join(dir, 'index.js'), "export { thing } from './util.js';\n");
+    writeFileSync(join(dir, 'util.js'), 'export const thing = 1;\n');
+  }
+  try {
+    return await fn();
+  } finally {
+    if (!hadDir) rmSync(dir, { force: true, recursive: true });
+  }
+};
 
 should('jsr passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
@@ -80,7 +96,7 @@ should('jsr forces import mappings for optional peer runtime deps', async () => 
 
 should('jsr reports gitignored module graph paths with publish.exclude unignore hint', async () => {
   const cwd = fixture('fail-gitignored-graph');
-  const res = await run(cwd);
+  const res = await withGeneratedGraph(cwd, () => run(cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[ERROR\] jsr: 2x unignore gitignored module graph path; add publish\.exclude entry !src\/generated \(jsr-gitignore\)\n  src\/generated\/index\.ts:gitignore\n  src\/generated\/util\.js:gitignore/.test(
@@ -95,7 +111,7 @@ should(
   'jsr accepts gitignored module graph paths when publish.exclude already unignores them',
   async () => {
     const cwd = fixture('pass-gitignored-unignored');
-    const res = await run(cwd);
+    const res = await withGeneratedGraph(cwd, () => run(cwd));
     deepStrictEqual(res.ok, true, all(res));
     deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
   }

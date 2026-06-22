@@ -1,4 +1,5 @@
 import { deepStrictEqual } from 'node:assert';
+import { utils } from '../../src/bench.ts';
 import compare from '../../src/bench-compare.ts';
 import { should } from '../../src/test.ts';
 
@@ -18,8 +19,11 @@ const benchmarkEnv = [
   'JSBT_BENCHMARK_FILTER',
   'JSBT_BENCHMARK_DIMENSIONS',
   'JSBT_BENCHMARK_DRY_RUN',
-  'JSBT_BENCHMARK_TABLE',
-  'JSBT_BENCHMARK_COMPACT',
+  'JSBT_CSV',
+  'FORCE_COLOR',
+  'NO_COLOR',
+  'CLICOLOR',
+  'CLICOLOR_FORCE',
 ];
 
 const withBenchmarkEnv = async (
@@ -41,28 +45,72 @@ const withBenchmarkEnv = async (
 };
 
 should('bench-compare defaults to CSV output', async () => {
+  const data = new Uint8Array(1024 * 1024);
   const lines = await withBenchmarkEnv({}, () =>
     capture(() =>
       compare(
         'CSV Bench',
         {
-          size: { 'a,b': 1 },
+          size: { 'a,b': data },
         },
         { js: () => {} },
         {
           dryRun: true,
-          metrics: {
-            'MiB/s': {
-              diff: true,
-              compute: () => 12.5,
-            },
-          },
+          bytes: ({ args }) => args[0].byteLength,
         }
       )
     )
   );
 
-  deepStrictEqual(lines, ['size,name,MiB/s,Ops/sec,Per op', '"a,b",js,12.5,0,0ns/op']);
+  deepStrictEqual(lines, ['size,name,mib/sec,nanoseconds', '"a,b",js,0,0']);
+});
+
+should('bench-compare supports context metrics and normalizes legacy MiB labels', async () => {
+  const lines = await withBenchmarkEnv({}, () =>
+    capture(() =>
+      compare(
+        'Metric Bench',
+        {
+          size: { one: 1 },
+        },
+        { js: () => {} },
+        {
+          dryRun: true,
+          iterations: ({ args }) => args[0] + 1,
+          metrics: [
+            {
+              name: 'score',
+              unit: 'MiB/s',
+              diff: true,
+              compute: ({ args, iterations }) => args[0] + iterations,
+            },
+          ],
+        }
+      )
+    )
+  );
+
+  deepStrictEqual(lines, ['size,name,score mib/sec,nanoseconds', 'one,js,3,0']);
+});
+
+should('bench-compare supports custom throughput rates', async () => {
+  const lines = await withBenchmarkEnv({}, () =>
+    capture(() =>
+      compare(
+        'Throughput Bench',
+        {
+          size: { one: 1 },
+        },
+        { js: () => {} },
+        {
+          dryRun: true,
+          throughput: { amount: ({ args }) => args[0] * 2, unit: 'blocks' },
+        }
+      )
+    )
+  );
+
+  deepStrictEqual(lines, ['size,name,blocks/sec,nanoseconds', 'one,js,0,0']);
 });
 
 should('bench-compare ignores removed benchmark env options', async () => {
@@ -88,43 +136,14 @@ should('bench-compare ignores removed benchmark env options', async () => {
       )
   );
 
-  deepStrictEqual(lines, ['size,name,Ops/sec,Per op', 'one,js,0,0ns/op']);
+  deepStrictEqual(lines, ['size,name,nanoseconds', 'one,js,0']);
 });
 
-should('bench-compare keeps table output when requested', async () => {
-  const lines = await withBenchmarkEnv({}, () =>
+should('bench-compare treats empty dimensions env as unset', async () => {
+  const lines = await withBenchmarkEnv({ JSBT_BENCHMARK_DIMENSIONS: '' }, () =>
     capture(() =>
       compare(
-        'Table Bench',
-        {
-          size: { one: 1 },
-        },
-        { js: () => {} },
-        { dryRun: true, format: 'table' }
-      )
-    )
-  );
-
-  deepStrictEqual(lines[0], 'Table Bench');
-  deepStrictEqual(
-    lines.some((line) => line.includes('│')),
-    true
-  );
-  deepStrictEqual(
-    lines.some((line) => line.includes('Variability')),
-    false
-  );
-  deepStrictEqual(
-    lines.some((line) => line.includes('Diff %')),
-    true
-  );
-});
-
-should('bench-compare reads JSBT_BENCHMARK_TABLE env', async () => {
-  const lines = await withBenchmarkEnv({ JSBT_BENCHMARK_TABLE: '1' }, () =>
-    capture(() =>
-      compare(
-        'Env Table Bench',
+        'Empty Dimensions Bench',
         {
           size: { one: 1 },
         },
@@ -134,7 +153,101 @@ should('bench-compare reads JSBT_BENCHMARK_TABLE env', async () => {
     )
   );
 
-  deepStrictEqual(lines[0], 'Env Table Bench');
+  deepStrictEqual(lines, ['size,name,nanoseconds', 'one,js,0']);
+});
+
+should('bench-compare CSV reports raw nanoseconds', async () => {
+  utils.setMaxRunTime(0.1);
+  try {
+    const lines = await withBenchmarkEnv({}, () =>
+      capture(() =>
+        compare(
+          'Nano Bench',
+          {
+            size: { one: 1 },
+          },
+          { js: () => {} },
+          {}
+        )
+      )
+    );
+    const row = lines[1].split(',');
+    deepStrictEqual(lines[0], 'size,name,nanoseconds');
+    deepStrictEqual(/^\d+$/.test(row[2]), true);
+    deepStrictEqual(Number(row[2]) > 0, true);
+  } finally {
+    utils.setMaxRunTime(1);
+  }
+});
+
+should('bench-compare iterations repeat one measured operation', async () => {
+  utils.setMaxRunTime(0.1);
+  let calls = 0;
+  try {
+    await withBenchmarkEnv({}, () =>
+      capture(() =>
+        compare(
+          'Iterations Bench',
+          {
+            size: { one: 1 },
+          },
+          {
+            js: () => {
+              calls++;
+            },
+          },
+          { iterations: 3 }
+        )
+      )
+    );
+  } finally {
+    utils.setMaxRunTime(1);
+  }
+
+  deepStrictEqual(calls > 0, true);
+  deepStrictEqual(calls % 3, 0);
+});
+
+should('bench-compare defaults to table output when colors are enabled', async () => {
+  const lines = await withBenchmarkEnv({ FORCE_COLOR: '1' }, () =>
+    capture(() =>
+      compare(
+        'Table Bench',
+        {
+          size: { one: 1 },
+        },
+        { js: () => {} },
+        { dryRun: true }
+      )
+    )
+  );
+
+  deepStrictEqual(lines[0], 'Table Bench');
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '') === 'benchmark plan'),
+    true
+  );
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '').includes('varies   size x name')),
+    true
+  );
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '').includes('compare  against first row')),
+    true
+  );
+  const envLine = lines.find((line) => line.includes('JSBT_BENCHMARK_FILTER'));
+  deepStrictEqual(!!envLine, true);
+  deepStrictEqual(envLine!.includes('JSBT_BENCHMARK_DIMENSIONS'), true);
+  deepStrictEqual(envLine!.includes('JSBT_CSV'), false);
+  deepStrictEqual(envLine!.includes('DRY_RUN'), false);
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '') === 'dimensions'),
+    true
+  );
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '').includes('name  js (from benchmark cases)')),
+    true
+  );
   deepStrictEqual(
     lines.some((line) => line.includes('│')),
     true
@@ -143,6 +256,68 @@ should('bench-compare reads JSBT_BENCHMARK_TABLE env', async () => {
     lines.some((line) => line.includes('Variability')),
     false
   );
+  deepStrictEqual(
+    lines.some((line) => line.includes('diff %')),
+    true
+  );
+  deepStrictEqual(
+    lines.some((line) => line.includes('/op')),
+    false
+  );
+});
+
+should('bench-compare highlights active filter and dimensions in table summary', async () => {
+  const lines = await withBenchmarkEnv(
+    { FORCE_COLOR: '1', JSBT_BENCHMARK_FILTER: 'one', JSBT_BENCHMARK_DIMENSIONS: 'name' },
+    () =>
+      capture(() =>
+        compare(
+          'Filtered Table Bench',
+          {
+            size: { one: 1 },
+          },
+          { js: () => {} },
+          { dryRun: true }
+        )
+      )
+  );
+
+  deepStrictEqual(
+    lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '').trimStart().startsWith('filter')),
+    false
+  );
+  deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}name${'\x1b[0m'} x size`)), true);
+  deepStrictEqual(
+    lines.some((line) => line.includes(`${'\x1b[34m'}name${'\x1b[0m'}  js (from benchmark cases)`)),
+    true
+  );
+  deepStrictEqual(
+    lines.some(
+      (line) =>
+        line.replace(/\x1b\[\d+(;\d+)*m/g, '').includes('size') &&
+        line.includes(`${'\x1b[34m'}one${'\x1b[0m'}`)
+    ),
+    true
+  );
+  deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}JSBT_BENCHMARK_FILTER${'\x1b[0m'}`)), true);
+  deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}JSBT_BENCHMARK_DIMENSIONS${'\x1b[0m'}`)), true);
+});
+
+should('bench-compare uses CSV when JSBT_CSV is set', async () => {
+  const lines = await withBenchmarkEnv({ FORCE_COLOR: '1', JSBT_CSV: '1' }, () =>
+    capture(() =>
+      compare(
+        'Env CSV Bench',
+        {
+          size: { one: 1 },
+        },
+        { js: () => {} },
+        { dryRun: true }
+      )
+    )
+  );
+
+  deepStrictEqual(lines, ['size,name,nanoseconds', 'one,js,0']);
 });
 
 should.runWhen(import.meta.url);

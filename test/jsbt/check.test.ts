@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { should } from '../../src/test.ts';
+import { should as test } from '../../src/test.ts';
 
 const BASE = resolve('.');
 const ROOT = join(BASE, 'test/jsbt/vectors/check');
@@ -24,6 +24,7 @@ const { runCli: runTypeImport } = await import('../../src/jsbt/typeimport.ts');
 const { runCli: runTreeshake } = await import('../../src/jsbt/treeshake.ts');
 const { wantColor } = await import('../../src/jsbt/utils.ts');
 const ts = await import('typescript');
+const should = Object.assign(test.serial, { runWhen: test.runWhen });
 
 const fixture = (name: string) => join(ROOT, name);
 const cleanup = (cwd: string) => {
@@ -186,8 +187,6 @@ const spent = String.raw`\d+ sec`;
 const checkSummary = (items: [string, number][]) =>
   new RegExp(`${items.length} check${items.length === 1 ? '' : 's'} finished in ${spent}`);
 const okJsrPublish = async () => {};
-const checkJsbt = (argv: string[], cwd: string, extra: Record<string, unknown> = {}) =>
-  runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra });
 const withEnv = async <T>(key: string, value: string, fn: () => Promise<T>) => {
   const prev = process.env[key];
   process.env[key] = value;
@@ -198,6 +197,10 @@ const withEnv = async <T>(key: string, value: string, fn: () => Promise<T>) => {
     else process.env[key] = prev;
   }
 };
+const checkJsbt = (argv: string[], cwd: string, extra: Record<string, unknown> = {}) =>
+  withEnv('JSBT_FAST', '', () =>
+    runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
+  );
 const typeImportProof = () => {
   const root = resolve('test/jsbt/build/typeimport-proof');
   const goodOut = join(root, 'good');
@@ -558,6 +561,30 @@ should('check passes on root-entry fixture with default out dir', async () => {
   );
 });
 
+should('check reports timing stats only for selectors over ten seconds', async () => {
+  const cwd = fixture('pass-root');
+  const prevNow = Date.now;
+  let now = 0;
+  Date.now = () => (now += 11_000);
+  try {
+    const res = await run(cwd, () =>
+      runJsbt(['check', 'comments'], { color: true, cwd, runJsrPublish: okJsrPublish })
+    );
+    const out = plain(res);
+    deepStrictEqual(res.ok, true, all(res));
+    deepStrictEqual(/\[INFO\] check: slow checks/.test(out), false);
+    deepStrictEqual(
+      /1\x1b\[0m check finished in \d+ sec\. \x1b\[33mSlow checks: comments \(11s\)\.\x1b\[0m/.test(
+        all(res)
+      ),
+      true
+    );
+    deepStrictEqual(/1 check finished in \d+ sec\. Slow checks: comments \(11s\)\./.test(out), true);
+  } finally {
+    Date.now = prevNow;
+  }
+});
+
 should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '1', () =>
@@ -566,7 +593,7 @@ should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /^12 checks \(\+quiet\) started\.\.\.\n\.{12}\n\n12 checks finished in \d+ sec/.test(out),
+    /^12 checks \(\+quiet\) started\.\.\.\n\.{12}\n12 checks finished in \d+ sec/.test(out),
     true
   );
   deepStrictEqual(/☆/.test(out), false);
@@ -737,8 +764,7 @@ should('check keeps importtime on the serial lane', () => {
 should('worker-backed checks exit after imported modules leave handles open', async () => {
   const cwd = fixture('pass-worker-handle');
   for (const argv of [
-    ['importtime', 'package.json'],
-    ['mutate', 'package.json'],
+    ['check', 'importtime'],
     ['check', 'mutate'],
   ]) {
     const res = await workerJsbt(cwd, argv);
@@ -928,7 +954,7 @@ should('check keeps detailed issues when color is enabled', async () => {
     true
   );
   deepStrictEqual(/src\/dupe\.ts:\d+\/inline-comment/.test(plain(res)), false);
-  deepStrictEqual(/\x1b\[33m(?:\d+h \d+min \d+s|\d+min \d+s|\d+s)\x1b\[0m/.test(all(res)), true);
+  deepStrictEqual(/\x1b\[32m12\x1b\[0m checks finished in \d+ sec/.test(all(res)), true);
 });
 
 should('FORCE_COLOR overrides NO_COLOR', () => {
@@ -950,23 +976,38 @@ should('bundled importtime does not run imported subcommands', async () => {
     platform: 'node',
     target: 'node22',
   });
+  const cwd = fixture('skip-import');
+  const env = {
+    CLICOLOR_FORCE: '0',
+    FORCE_COLOR: '0',
+    JSBT_FAST: '',
+    JSBT_LOG_LEVEL: '0',
+    NO_COLOR: '1',
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    npm_config_loglevel: 'silent',
+    npm_config_progress: 'false',
+    npm_config_update_notifier: 'false',
+  };
   const prevArgv = process.argv.slice();
-  const prevCwd = process.cwd();
+  const prevEnv = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
   try {
-    const cwd = fixture('skip-import');
+    for (const [key, value] of Object.entries(env)) process.env[key] = value;
     const res = await capture(async () => {
-      process.chdir(cwd);
-      process.argv = [process.execPath, out, 'importtime', 'package.json'];
+      process.argv = [process.execPath, out, 'check', `--project=${cwd}`, 'importtime'];
       await import(`${pathToFileURL(out).href}?t=${Date.now()}`);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
     });
     const text = all(res);
+    const plainText = text.replace(/\x1b\[\d+(;\d+)*m/g, '');
     deepStrictEqual(res.ok, true, text);
-    deepStrictEqual(/expected <package\.json>/.test(text), false);
-    deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 1 skipped/.test(text), true);
+    deepStrictEqual(/expected <package\.json>/.test(plainText), false, text);
+    deepStrictEqual(/1 check finished in \d+ sec/.test(plainText), true, text);
   } finally {
+    for (const [key, value] of prevEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     process.argv = prevArgv;
-    process.chdir(prevCwd);
     rmSync(out, { force: true });
   }
 });

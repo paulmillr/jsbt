@@ -2,10 +2,11 @@ import { deepStrictEqual } from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { should } from '../../src/test.ts';
+import { should as test } from '../../src/test.ts';
 
 // These constraints SHOULD NOT BE VIOLATED OR CHANGED AT ANY POINT.
 
+const should = Object.assign(test.serial, { runWhen: test.runWhen });
 const ROOT = resolve('.');
 const NPM_FIXTURE = join(ROOT, 'test/jsbt/vectors/npm-check');
 const npmEnv = {

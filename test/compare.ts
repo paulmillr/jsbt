@@ -56,24 +56,10 @@ import compare from '../src/bench-compare.ts';
     }, //
     ALGOS,
     {
-      libDims: ['algorithm', 'platform', 'library'],
+      libraryDimensions: ['algorithm', 'platform', 'library'],
       defaults: {},
-      samples: 10_000,
-      metrics: {
-        Speed: {
-          unit: 'MiB/s', // For header/value suffix
-          rev: true, // Bigger = better (green +%, red -%)
-          width: 14, // Optional; auto-fallback if omitted
-          diff: true,
-          compute: (_obj, stats, perSec, chunkSize, buffer) => {
-            const MiB = 1024 * 1024;
-            const bytesPerOp = chunkSize * buffer.byteLength;
-            if (stats.mean === 0n) return 0; // Edge: infinite speed
-            const speed = (bytesPerOp * 1e9) / (Number(stats.mean) * MiB); // MiB/s
-            return speed > 1024 ? +speed.toFixed(0) : +speed.toFixed(2);
-          },
-        },
-      },
+      iterations: 10_000,
+      bytes: ({ args }) => args[0] * args[1].byteLength,
     }
   );
 })();

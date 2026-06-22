@@ -1,6 +1,7 @@
 import { should } from '../src/test.ts';
 
 import './jsbt/bin.test.ts';
+import './jsbt/bench.test.ts';
 import './jsbt/bench-compare.test.ts';
 import './jsbt/bundle.test.ts';
 import './jsbt/bytes.test.ts';
