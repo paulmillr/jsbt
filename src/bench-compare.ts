@@ -1,4 +1,4 @@
-/*! micro-bmark - MIT License (c) 2020 Paul Miller, 2010-2016 Mathias Bynens, John-David Dalton, Robert Kieffer from JSLitmus.js */
+/*! jsbt - MIT License (c) 2020 Paul Miller, 2010-2016 Mathias Bynens, John-David Dalton, Robert Kieffer from JSLitmus.js */
 /**
  * Benchmark JS projects with nanosecond resolution.
  *

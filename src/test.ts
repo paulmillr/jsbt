@@ -1,4 +1,4 @@
-/*! micro-should - MIT License (c) 2019 Paul Miller (paulmillr.com) */
+/*! jsbt - MIT License (c) 2019 Paul Miller (paulmillr.com) */
 /**
  * Micro testing framework with familiar syntax for browsers, node and others.
  * Supports fast mode (parallel), quiet mode (dot reporter), tree structures, CLI self-run auto-detection.
@@ -64,8 +64,6 @@ export interface TestFunction {
    * it.runWhen(import.meta.url)
    */
   runWhen: (importMetaUrl: string) => Promise<number | undefined>;
-  /** Parallel version, using node:cluster. Auto-selected when env var JSBT_FAST=1 is set. */
-  runParallel: () => Promise<number>;
   opts: Options;
 }
 export type EmptyFn = () => Promise<void> | void;
@@ -646,8 +644,7 @@ it.skip = (message, test) => register({ message, test, children: [], skip: true 
 it.serial = (message, test) => register({ message, test, children: [], serial: true });
 it.run = runTests;
 it.runWhen = runTestsWhen;
-it.runParallel = runTestsInParallel;
 it.opts = opts;
 
-export { afterAll, afterEach, beforeAll, beforeEach, describe, it };
+export { afterAll, afterEach, beforeAll, beforeEach, describe, it, it as should };
 export default it;
