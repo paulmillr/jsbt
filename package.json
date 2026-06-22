@@ -1,6 +1,6 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
     "jsbt.bin.js",
@@ -23,7 +23,7 @@
     "@types/node": "24.2.1",
     "esbuild": "0.25.10",
     "prettier": "3.6.2",
-    "typescript": "5.9.2"
+    "typescript": "6.0.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.example.json && npm run bundle:bin && chmod +x jsbt.bin.js",

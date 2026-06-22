@@ -3,6 +3,12 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": ".",
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "node"
+    ],
     "sourceMap": false,
     "declarationMap": false
   }
