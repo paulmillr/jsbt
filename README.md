@@ -19,8 +19,7 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 ## 1. test
 
 Small test runner with familiar `describe` / `it`  mocha-like syntax, explicit execution, and
-optional parallelism. It is intended for tests that should run unchanged from standalone files,
-aggregate test entrypoints, and browser bundles.
+optional parallelism.
 
 API:
 
