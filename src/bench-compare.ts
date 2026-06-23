@@ -214,7 +214,7 @@ function matrixOpts(opts: CompareOpts): CompareOpts {
   const env = isCli ? process.env : {};
   const csv = envFlag(env.JSBT_CSV) || !colorEnabled(env);
   return {
-    filter: env.JSBT_BENCHMARK_FILTER,
+    filter: env.JSBT_FILTER,
     dimensions: env.JSBT_BENCHMARK_DIMENSIONS
       ? env.JSBT_BENCHMARK_DIMENSIONS.split(',')
       : undefined,
@@ -282,7 +282,7 @@ function printMetadata(
   const allDims = [...new Set([...selected, ...Object.keys(dimensions), ...Object.keys(dynamic)])];
   const explicit = new Set(explicitDims ?? []);
   const optionRows = [
-    ['JSBT_BENCHMARK_FILTER', !!(Array.isArray(filter) ? filter.length : filter)],
+    ['JSBT_FILTER', !!(Array.isArray(filter) ? filter.length : filter)],
     ['JSBT_BENCHMARK_DIMENSIONS', explicit.size > 0],
   ] as const;
   const fixed = Object.entries(defaults)

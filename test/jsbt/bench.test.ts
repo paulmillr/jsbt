@@ -37,7 +37,9 @@ const withEnv = async <T>(
   }
 };
 const loadBench = (env: Record<string, string | undefined>): Promise<BenchModule> =>
-  withEnv(env, () => import(`../../src/bench.ts?color=${benchImportId++}`));
+  withEnv({ JSBT_FILTER: undefined, ...env }, () =>
+    import(`../../src/bench.ts?color=${benchImportId++}`)
+  );
 const loadBenchWithDurations = (
   env: Record<string, string | undefined>,
   durations: bigint[]
@@ -123,6 +125,36 @@ should('bench formats byte throughput and custom throughput rates', async () => 
     () => custom.default('legacy', () => {}, { unit: 'mb', multiplier: 1 } as any),
     /unit\/multiplier options were removed/
   );
+});
+
+should('bench filters labels with JSBT_FILTER', async () => {
+  const bench = await loadBench({
+    CLICOLOR_FORCE: undefined,
+    FORCE_COLOR: undefined,
+    JSBT_FILTER: 'hash',
+    NO_COLOR: '1',
+  });
+  let calls = 0;
+  bench.utils.setMaxRunTime(0.1);
+  try {
+    const skipped = await capture(() =>
+      bench.default('cipher', () => {
+        calls++;
+      })
+    );
+    deepStrictEqual(skipped, '');
+    deepStrictEqual(calls, 0);
+
+    const matched = await capture(() =>
+      bench.default('hash', () => {
+        calls++;
+      })
+    );
+    deepStrictEqual(/hash x \d+ ops\/sec/.test(matched), true, matched);
+    deepStrictEqual(calls > 0, true);
+  } finally {
+    bench.utils.setMaxRunTime(1);
+  }
 });
 
 should.runWhen(import.meta.url);

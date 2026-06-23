@@ -42,6 +42,9 @@ const colorOn =
   // @ts-ignore
   typeof process !== 'undefined' &&
   wantColor(process.env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
+const benchFilter =
+  // @ts-ignore
+  typeof process !== 'undefined' ? process.env?.JSBT_FILTER || '' : '';
 function paint(text: string, code: string): string {
   return colorOn ? `${code}${text}${reset}` : text;
 }
@@ -270,6 +273,7 @@ export async function bench(
   opts: BenchOpts = {}
 ): Promise<BenchStats | undefined> {
   if (typeof label !== 'string') throw new Error('benchmark label must be a string');
+  if (benchFilter && !label.includes(benchFilter)) return;
   if (!opts || typeof opts !== 'object')
     throw new Error('benchmark opts must be an object, got: ' + typeof opts);
   let { maxRunTimeSec, mode } = opts;

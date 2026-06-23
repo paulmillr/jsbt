@@ -1,6 +1,6 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
     "jsbt.bin.js",

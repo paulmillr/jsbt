@@ -2,11 +2,11 @@ import * as assert from 'node:assert';
 import { describe, it, should } from '../src/test.ts';
 
 const section = (name) => console.log(`${'='.repeat(16)} ${name} ${'='.repeat(16)}`);
+should.opts.FAST = 0;
 
 function restoreOpts() {
-  should.opts.PRINT_TREE = true;
-  should.opts.PRINT_MULTILINE = true;
   should.opts.STOP_ON_ERROR = true;
+  should.opts.FAST = 0;
 }
 
 function basicData() {
@@ -98,7 +98,7 @@ function errorData() {
   should('produce correct promise result', async () => {
     const fs = await import('node:fs/promises');
     const data = await fs.readFile(new URL('../README.md', import.meta.url), 'utf-8');
-    assert.ok(data.includes('500-line test framework'));
+    assert.ok(data.includes('500-line simplicity'));
   });
 
   // Execute this at the end of a file.
@@ -137,46 +137,16 @@ function errorData() {
 
   await should.run();
 
-  section('Nested with should.PRINT_TREE = false;');
-  should.opts.PRINT_TREE = false;
-  basicData();
-
-  await should.run();
-  should.opts.PRINT_MULTILINE = false;
-  section('Nested with should.PRINT_TREE = false && should.PRINT_MULTILINE = false');
-  basicData();
-  await should.run();
-  restoreOpts();
-
   section('Only (tree)');
   onlyData();
   await should.run();
-
-  section('Only (flat)');
-  should.opts.PRINT_TREE = false;
-  onlyData();
-  await should.run();
-  restoreOpts();
 
   section('Skip (tree)');
   skipData();
   await should.run();
 
-  section('Skip (flat)');
-  should.opts.PRINT_TREE = false;
-  skipData();
-  await should.run();
-  restoreOpts();
-
   section('Errors (tree)');
   should.opts.STOP_ON_ERROR = false;
-  errorData();
-  await assert.rejects(() => should.run(), /2 of 6 tests failed/);
-  restoreOpts();
-
-  section('Errors (flat)');
-  should.opts.STOP_ON_ERROR = false;
-  should.opts.PRINT_TREE = false;
   errorData();
   await assert.rejects(() => should.run(), /2 of 6 tests failed/);
   restoreOpts();

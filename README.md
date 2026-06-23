@@ -34,11 +34,13 @@ API:
 
 ENV variables:
 
+- `JSBT_BAIL=0` disables stopping after the first failed test (`1` by default).
 - `JSBT_FAST=1` enables parallel execution with all available cores.
 - `JSBT_FAST=3` uses three workers.
 - `JSBT_FAST=-1` uses all cores minus one.
 - `JSBT_FAST=0.5` uses half of available cores.
 - `JSBT_QUIET=1` enables the dot reporter.
+- `JSBT_FILTER=math/adds` runs tests whose full path contains the value.
 
 ```js
 import { deepStrictEqual } from 'node:assert';
@@ -73,6 +75,7 @@ Run a project test entrypoint with node:
 node test/index.ts
 JSBT_FAST=1 node test/index.ts
 JSBT_QUIET=1 node test/index.ts
+JSBT_FILTER=math/adds node test/index.ts
 ```
 
 ## 2. benchmark
@@ -150,7 +153,7 @@ Common options:
 
 ENV variables:
 
-- `JSBT_BENCHMARK_FILTER=sha256,1MiB` filters cases by dimension values.
+- `JSBT_FILTER=sha256,1MiB` filters cases by dimension values.
 - `JSBT_BENCHMARK_DIMENSIONS=algorithm,size,name` changes dimension order or visible dimensions.
 - `JSBT_BENCHMARK_DRY_RUN=1` prints the selected matrix without measuring.
 - `JSBT_CSV=1` forces CSV output.

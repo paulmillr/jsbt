@@ -16,7 +16,7 @@ const capture = async (fn: () => Promise<void> | void) => {
 };
 
 const benchmarkEnv = [
-  'JSBT_BENCHMARK_FILTER',
+  'JSBT_FILTER',
   'JSBT_BENCHMARK_DIMENSIONS',
   'JSBT_BENCHMARK_DRY_RUN',
   'JSBT_CSV',
@@ -235,7 +235,7 @@ should('bench-compare defaults to table output when colors are enabled', async (
     lines.some((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, '').includes('compare  against first row')),
     true
   );
-  const envLine = lines.find((line) => line.includes('JSBT_BENCHMARK_FILTER'));
+  const envLine = lines.find((line) => line.includes('JSBT_FILTER'));
   deepStrictEqual(!!envLine, true);
   deepStrictEqual(envLine!.includes('JSBT_BENCHMARK_DIMENSIONS'), true);
   deepStrictEqual(envLine!.includes('JSBT_CSV'), false);
@@ -268,7 +268,7 @@ should('bench-compare defaults to table output when colors are enabled', async (
 
 should('bench-compare highlights active filter and dimensions in table summary', async () => {
   const lines = await withBenchmarkEnv(
-    { FORCE_COLOR: '1', JSBT_BENCHMARK_FILTER: 'one', JSBT_BENCHMARK_DIMENSIONS: 'name' },
+    { FORCE_COLOR: '1', JSBT_FILTER: 'one', JSBT_BENCHMARK_DIMENSIONS: 'name' },
     () =>
       capture(() =>
         compare(
@@ -299,7 +299,7 @@ should('bench-compare highlights active filter and dimensions in table summary',
     ),
     true
   );
-  deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}JSBT_BENCHMARK_FILTER${'\x1b[0m'}`)), true);
+  deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}JSBT_FILTER${'\x1b[0m'}`)), true);
   deepStrictEqual(lines.some((line) => line.includes(`${'\x1b[34m'}JSBT_BENCHMARK_DIMENSIONS${'\x1b[0m'}`)), true);
 });
 
