@@ -9,6 +9,7 @@ const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
 const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
 const BUNDLE_PREFIX = 'jsbt-bundle-';
 const CHECK_PREFIX = 'jsbt-check-';
+const NPM_INSTALL_ARGS = ['install', '--prefer-offline'] as const;
 const err = (msg: string): never => {
   throw new Error(msg);
 };
@@ -71,7 +72,7 @@ export const npmInstall = (dir: string): void => {
   if (!inWorkDir(dir)) err(workDirError(dir));
   const log = shouldLog(dir);
   if (log) console.log(`install\t${dir}`);
-  execFileSync('npm', ['install'], {
+  execFileSync('npm', [...NPM_INSTALL_ARGS], {
     cwd: dir,
     stdio: log ? 'inherit' : ['ignore', 'pipe', 'pipe'],
   });
@@ -128,8 +129,10 @@ export const rmCheckTempDir = (dir: string): boolean => {
 };
 export const __TEST: {
   inOsTmpDir: (path: string) => boolean;
+  npmInstallArgs: () => string[];
   shouldLogPath: (path: string) => boolean;
 } = {
   inOsTmpDir: inOsTmpDir,
+  npmInstallArgs: () => [...NPM_INSTALL_ARGS],
   shouldLogPath: shouldLog,
 };

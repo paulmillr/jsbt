@@ -7,9 +7,11 @@ import { should } from '../../src/test.ts';
 import {
   compact,
   collectIssues,
+  defaultFast,
   docCommentLines,
   emptyResult,
   execText,
+  fastWorkerCount,
   fileUrl,
   firstText,
   importTypeText,
@@ -101,6 +103,15 @@ should('jsbtWorkerLimit resolves fast offsets and ratios from max cores', () => 
   const expectedRatio = (ratio: number) =>
     Math.max(1, Math.min(Math.floor(cpus().length * ratio), 256));
   try {
+    deepStrictEqual(defaultFast({}), 1);
+    deepStrictEqual(defaultFast({ JSBT_FAST: '' }), 0);
+    deepStrictEqual(fastWorkerCount(1, 12), 12);
+    deepStrictEqual(fastWorkerCount(-1, 12), 11);
+    deepStrictEqual(fastWorkerCount(0.5, 12), 6);
+    delete process.env.JSBT_FAST;
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length, 256)));
+    process.env.JSBT_FAST = '';
+    deepStrictEqual(jsbtWorkerLimit(2), 1);
     process.env.JSBT_FAST = '-1';
     deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length - 1, 256)));
     process.env.JSBT_FAST = '-2';

@@ -180,6 +180,8 @@ const loadRunDeps = (pkgFile: string, esbuildPkgFile: string, fallbackPkgFile?: 
     return loadDepsFrom(pkgFile, fallbackPkgFile);
   }
 };
+const hasEsbuildInstall = (pkgFile: string): boolean =>
+  existsSync(join(dirname(pkgFile), 'node_modules', 'esbuild'));
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
 const itemId = (pkg: Pkg, item: Pick<Item, 'dir' | 'export' | 'module' | 'out'>): string =>
   isPkgAll(item) ? pkg.name : `${item.module}/${item.export || ALL}`;
@@ -385,7 +387,7 @@ const treeIssue = (pkg: Pkg, item: Built, entry: AuditItem): TreeIssue => ({
 export const treeIssueLog = (cwd: string | undefined, item: TreeIssue): LogIssue =>
   makeIssue(
     'error',
-    relFile(cwd, item.file),
+    relFile(cwd, item.file, true),
     `${item.line}/${item.text}`,
     `unused (${item.id})`,
     'treeshake'
@@ -411,7 +413,8 @@ export const runCli = async (
   const runDir = opts.runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, opts.runDir) : undefined;
   const esbuildPkgFile = runDir ? join(runDir, 'package.json') : esbuildPkg(ctx.pkgFile);
   const fallbackEsbuildPkgFile = runDir ? esbuildPkg(ctx.pkgFile) : undefined;
-  npmInstall(dirname(esbuildPkgFile));
+  if (!fallbackEsbuildPkgFile || !hasEsbuildInstall(fallbackEsbuildPkgFile))
+    npmInstall(dirname(esbuildPkgFile));
   sweepTemps(ctx.outDir);
   sweepTemps(dirname(ctx.outDir));
   const { build, ts } = opts.load

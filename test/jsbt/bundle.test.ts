@@ -195,6 +195,10 @@ should('fs-modify logs outside os tmpdir and suppresses inside it', () => {
   }
 });
 
+should('fs-modify npm install prefers offline packages', () => {
+  deepStrictEqual(FS_TEST.npmInstallArgs(), ['install', '--prefer-offline']);
+});
+
 should('bundle stats deletes generated os temp directory after run', async () => {
   const cwd = seed('stats-cleanup', '@jsbt-test/bundle-stats-cleanup');
   let root = '';
