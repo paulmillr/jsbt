@@ -1,5 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpus, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -27,6 +28,53 @@ const ts = await import('typescript');
 const should = Object.assign(test.serial, { runWhen: test.runWhen });
 
 const fixture = (name: string) => join(ROOT, name);
+const seedTreeshakeInstallFail = () => {
+  const cwd = join(BASE, 'test/jsbt/build/check/treeshake-install-fail');
+  const name = '@jsbt-test/treeshake-install-fail';
+  rmSync(cwd, { force: true, recursive: true });
+  mkdirSync(join(cwd, 'test/build'), { recursive: true });
+  writeFileSync(
+    join(cwd, 'package.json'),
+    `${JSON.stringify(
+      {
+        exports: {
+          '.': {
+            default: './index.js',
+            types: './index.d.mts',
+          },
+        },
+        main: './index.js',
+        module: './index.js',
+        name,
+        private: true,
+        sideEffects: false,
+        type: 'module',
+        types: './index.d.mts',
+        version: '1.0.0',
+      },
+      undefined,
+      2
+    )}\n`
+  );
+  writeFileSync(join(cwd, 'index.js'), 'export const ok = 1;\n');
+  writeFileSync(join(cwd, 'index.d.mts'), 'export declare const ok: number;\n');
+  writeFileSync(
+    join(cwd, 'test/build/package.json'),
+    `${JSON.stringify(
+      {
+        dependencies: {
+          [name]: 'file:../..',
+          bad: 'not a valid spec',
+        },
+        private: true,
+        type: 'module',
+      },
+      undefined,
+      2
+    )}\n`
+  );
+  return cwd;
+};
 const cleanup = (cwd: string) => {
   const build = join(cwd, 'test/build');
   rmSync(join(build, 'node_modules'), { force: true, recursive: true });
@@ -108,6 +156,8 @@ const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
+const rxEscape = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+const checkTmpRx = rxEscape(tmpdir().split('\\').join('/'));
 const workerJsbt = (
   cwd: string,
   argv: string[],
@@ -187,9 +237,10 @@ const spent = String.raw`\d+ sec`;
 const checkSummary = (items: [string, number][]) =>
   new RegExp(`${items.length} check${items.length === 1 ? '' : 's'} finished in ${spent}`);
 const okJsrPublish = async () => {};
-const withEnv = async <T>(key: string, value: string, fn: () => Promise<T>) => {
+const withEnv = async <T>(key: string, value: string | undefined, fn: () => Promise<T>) => {
   const prev = process.env[key];
-  process.env[key] = value;
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
   try {
     return await fn();
   } finally {
@@ -537,10 +588,13 @@ should('typeimport proof prefers local import type plus local export type', () =
 
 should('check passes on root-entry fixture with default out dir', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt(['check'], cwd)));
   deepStrictEqual(res.ok, true, all(res));
-  deepStrictEqual(/^12 checks started\.\.\./.test(plain(res)), true);
-  deepStrictEqual(/^12 checks started\.\.\.\n\n☆ readme/.test(plain(res)), true);
+  deepStrictEqual(/^12 checks started \(JSBT_QUIET=0, JSBT_FAST=0\)/.test(plain(res)), true);
+  deepStrictEqual(
+    /^12 checks started \(JSBT_QUIET=0, JSBT_FAST=0\)\n\n☆ readme/.test(plain(res)),
+    true
+  );
   deepStrictEqual(/preparing summary/.test(plain(res)), false);
   deepStrictEqual(
     checkSummary([
@@ -561,17 +615,42 @@ should('check passes on root-entry fixture with default out dir', async () => {
   );
 });
 
+should('check defaults JSBT_FAST like the test runner', async () => {
+  const cwd = fixture('pass-root');
+  const workers = Math.max(1, Math.min(cpus().length, 256));
+  const res = await withEnv('JSBT_QUIET', '', () =>
+    withEnv('JSBT_FAST', undefined, () =>
+      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
+    )
+  );
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${workers}\\)`).test(plain(res)),
+    true
+  );
+});
+
 should('check reports timing stats only for selectors over ten seconds', async () => {
   const cwd = fixture('pass-root');
   const prevNow = Date.now;
   let now = 0;
   Date.now = () => (now += 11_000);
   try {
-    const res = await run(cwd, () =>
-      runJsbt(['check', 'comments'], { color: true, cwd, runJsrPublish: okJsrPublish })
+    const res = await withEnv('JSBT_QUIET', '', () =>
+      withEnv('JSBT_FAST', '', () =>
+        run(cwd, () =>
+          runJsbt(['check', 'comments'], { color: true, cwd, runJsrPublish: okJsrPublish })
+        )
+      )
     );
     const out = plain(res);
     deepStrictEqual(res.ok, true, all(res));
+    deepStrictEqual(
+      /^\x1b\[32m1\x1b\[0m check started \x1b\[90m\(JSBT_QUIET=0, JSBT_FAST=0\)\x1b\[0m\n/.test(
+        all(res)
+      ),
+      true
+    );
     deepStrictEqual(/\[INFO\] check: slow checks/.test(out), false);
     deepStrictEqual(
       /1\x1b\[0m check finished in \d+ sec\. \x1b\[33mSlow checks: comments \(11s\)\.\x1b\[0m/.test(
@@ -579,7 +658,10 @@ should('check reports timing stats only for selectors over ten seconds', async (
       ),
       true
     );
-    deepStrictEqual(/1 check finished in \d+ sec\. Slow checks: comments \(11s\)\./.test(out), true);
+    deepStrictEqual(
+      /1 check finished in \d+ sec\. Slow checks: comments \(11s\)\./.test(out),
+      true
+    );
   } finally {
     Date.now = prevNow;
   }
@@ -593,7 +675,9 @@ should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /^12 checks \(\+quiet\) started\.\.\.\n\.{12}\n12 checks finished in \d+ sec/.test(out),
+    /^12 checks started \(JSBT_QUIET=1, JSBT_FAST=0\)\n\.{12}\n12 checks finished in \d+ sec/.test(
+      out
+    ),
     true
   );
   deepStrictEqual(/☆/.test(out), false);
@@ -649,6 +733,22 @@ should('check treeshake selector prints standalone treeshake table', async () =>
   deepStrictEqual(/_tree_shaking_jsbt-test-check-root\.min\.js/.test(out), true);
   deepStrictEqual(/index\s+\u2502all\s+\u2502\s+index\/_tree_shaking_all\.min\.js/.test(out), true);
   deepStrictEqual(checkSummary([['treeshake', 0]]).test(out), true);
+});
+
+should('check treeshake reports npm install failures as errors', async () => {
+  const cwd = seedTreeshakeInstallFail();
+  try {
+    const res = await run(cwd, () => checkJsbt(['check', 'treeshake'], cwd));
+    const out = plain(res);
+    deepStrictEqual(res.ok, false, all(res));
+    deepStrictEqual(
+      /\[ERROR\] treeshake: unknown:0 Command failed: npm install --prefer-offline/.test(out),
+      true
+    );
+    deepStrictEqual(/\[WARN\] treeshake: unknown:0 Command failed: npm install/.test(out), false);
+  } finally {
+    rmSync(cwd, { force: true, recursive: true });
+  }
 });
 
 should('check accepts a patterns selector without defaulting to all checks', async () => {
@@ -864,7 +964,7 @@ should('check reports typeimport issues as warnings and keeps other checks green
 
 should('check runs all checks before failing', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt(['check'], cwd)));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[WARN\] readme: README\.md:12\/usage Argument of type 'string' is not assignable to parameter of type 'number'\. \(type\)/.test(
@@ -873,9 +973,9 @@ should('check runs all checks before failing', async () => {
     true
   );
   deepStrictEqual(
-    /\[WARN\] treeshake: 3x unused \(treeshake\)\n  (?:\.\.\/)+tmp\/jsbt-check-[^/]+\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  (?:\.\.\/)+tmp\/jsbt-check-[^/]+\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  (?:\.\.\/)+tmp\/jsbt-check-[^/]+\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
-      plain(res)
-    ),
+    new RegExp(
+      `\\[WARN\\] treeshake: 3x unused \\(treeshake\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/_tree_shaking_jsbt-test-check-src\\.js:\\d+/retained \\(@jsbt-test/check-src\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_broken\\.js:\\d+/retained \\(broken/broken\\)`
+    ).test(plain(res)),
     true
   );
   deepStrictEqual(
@@ -931,16 +1031,16 @@ should('check runs all checks before failing', async () => {
 
 should('check keeps detailed issues when color is enabled', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () =>
-    runJsbt(['check'], { color: true, cwd, runJsrPublish: okJsrPublish })
+  const res = await withEnv('JSBT_QUIET', '', () =>
+    run(cwd, () => runJsbt(['check'], { color: true, cwd, runJsrPublish: okJsrPublish }))
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(/\[\x1b\[33mWARN\x1b\[0m\] readme:/.test(all(res)), true);
   deepStrictEqual(/\[WARN\] readme: README\.md:12\/usage/.test(plain(res)), true);
   deepStrictEqual(
-    /\[WARN\] treeshake: 3x unused \(treeshake\)\n(?:  .+\n)*  (?:\.\.\/)+tmp\/jsbt-check-[^/]+\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)/.test(
-      plain(res)
-    ),
+    new RegExp(
+      `\\[WARN\\] treeshake: 3x unused \\(treeshake\\)\\n(?:  .+\\n)*  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)`
+    ).test(plain(res)),
     true
   );
   deepStrictEqual(

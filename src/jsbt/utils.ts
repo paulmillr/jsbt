@@ -130,6 +130,7 @@ type GroupRef = { detail?: string; ref: Ref };
 
 export const color = {
   dim: '\x1b[2m',
+  gray: '\x1b[90m',
   green: '\x1b[32m',
   red: '\x1b[31m',
   reset: '\x1b[0m',
@@ -165,12 +166,16 @@ export const parseFast = (str: string | number | undefined): number => {
   if (!ratio && !Number.isSafeInteger(val)) return 0;
   return val;
 };
-export const jsbtWorkerLimit = (defaultCount: number): number => {
-  const fast = parseFast(process.env.JSBT_FAST);
-  const max = cpus().length;
-  if (!fast) return Math.max(1, Math.min(defaultCount, 256));
+export const defaultFast = (env: NodeJS.ProcessEnv = process.env): number =>
+  env.JSBT_FAST === undefined ? 1 : parseFast(env.JSBT_FAST);
+export const fastWorkerCount = (fast: number, max: number = cpus().length): number => {
   const count = fast === 1 ? max : fast < 0 ? max + fast : fast < 1 ? Math.floor(max * fast) : fast;
   return Math.max(1, Math.min(count, 256));
+};
+export const jsbtWorkerLimit = (_defaultCount: number): number => {
+  const fast = defaultFast();
+  if (!fast) return 1;
+  return fastWorkerCount(fast);
 };
 export const camelParts = (parts: string[]): string =>
   parts.map((part, i) => (i ? part[0].toUpperCase() + part.slice(1) : part)).join('');

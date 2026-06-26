@@ -47,12 +47,12 @@ import { runCli as runTreeShaking, treeIssueLog, type TreeIssue } from './treesh
 import { runCli as runTypeImport } from './typeimport.ts';
 import {
   color,
+  defaultFast,
   err,
+  fastWorkerCount,
   formatIssue,
   groupIssues,
-  jsbtWorkerLimit,
   paint,
-  parseFast,
   runWorker,
   tag as statusTag,
   stripAnsi,
@@ -71,9 +71,16 @@ type Opts = {
   runJsrPublish?: typeof runJsrPublish;
   treeshakeOutDir?: string;
 };
-type Capture = { error?: string; ok: boolean; stderr: string; stdout: string; tree?: TreeIssue[] };
+type Capture = {
+  error?: string;
+  hard?: boolean;
+  ok: boolean;
+  stderr: string;
+  stdout: string;
+  tree?: TreeIssue[];
+};
 type TimedCapture = Capture & { ms: number };
-type Pick = { count: number; fatal: boolean; lines: string[] };
+type Pick = { count: number; fatal: boolean; hard?: boolean; lines: string[] };
 type SharedIssue = { count: number; fatal: boolean; lines: string[] };
 type CmdRun = (argv: string[], opts: Opts) => Promise<void>;
 type CheckHead =
@@ -102,6 +109,7 @@ type CheckWorkerData = {
   opts: { color?: boolean; cwd?: string; runDir?: string; treeshakeOutDir?: string };
   self: string;
 };
+type CheckJob = { i: number; item: CheckRun };
 
 const usage = `usage:
   jsbt bundle [--dir=<build-dir>] [--no-prefix] [--stats]
@@ -141,6 +149,7 @@ const QUIET_ENV = {
   npm_config_update_notifier: 'false',
 } as const;
 const MUTATION_LOG = /^(?:delete\t|install\t|write\t)/;
+const NPM_INSTALL_FAIL = /^Command failed: npm install(?:\s|$)/;
 const CHECK_ALIASES = {
   bigint: 'bigint',
   bytes: 'bytes',
@@ -178,7 +187,7 @@ const recolorShared = (line: string, level: Level, on: boolean): string =>
 const downgradeErrorLine = (line: string, on: boolean): string =>
   line.replace(/^\[(?:\x1b\[\d+(?:;\d+)*m)?ERROR(?:\x1b\[0m)?\]/, statusTag('WARN', on));
 const checkPick = (head: CheckHead, out: Pick, on: boolean): Pick =>
-  HARD_ERROR_CHECKS.has(head)
+  HARD_ERROR_CHECKS.has(head) || out.hard
     ? out
     : { ...out, fatal: false, lines: out.lines.map((line) => downgradeErrorLine(line, on)) };
 const sharedIssues = (head: string, text: string, on: boolean): SharedIssue | undefined => {
@@ -235,18 +244,20 @@ const checkDone = (
   return `${base}${slowCheckStats(stats, on)}`;
 };
 const checkFastWorkers = (): number => {
-  const fast = parseFast(process.env.JSBT_FAST);
-  return fast ? jsbtWorkerLimit(1) : 0;
+  const fast = defaultFast();
+  return fast ? fastWorkerCount(fast) : 0;
 };
 const checkQuiet = (): boolean => {
   const value = process.env.JSBT_QUIET;
   return value === '1' || value === 'true';
 };
 const checkHeader = (total: number, on: boolean, quiet: boolean): string => {
-  const workers = checkFastWorkers();
-  const features = [quiet ? '+quiet' : '', workers ? `+fast-x${workers}` : ''].filter(Boolean);
-  const modes = features.length ? `(${features.join(' ')}) ` : '';
-  return `${paint(String(total), color.green, on)} check${total === 1 ? '' : 's'} ${modes}started...`;
+  const env = paint(
+    `(JSBT_QUIET=${quiet ? 1 : 0}, JSBT_FAST=${checkFastWorkers()})`,
+    color.gray,
+    on
+  );
+  return `${paint(String(total), color.green, on)} check${total === 1 ? '' : 's'} started ${env}`;
 };
 const checkDot = (fail: boolean): void => {
   const out = fail ? process.stderr : process.stdout;
@@ -329,6 +340,7 @@ const pickIssues = (head: string, res: Capture, on: boolean): Pick => {
   return {
     count: 1,
     fatal: true,
+    hard: res.hard,
     lines: [formatIssue('ERROR', head, { file: 'unknown', issue: res.error, sym: '0' }, on)],
   };
 };
@@ -459,6 +471,8 @@ const runCheckTask = async (head: CheckHead, args: CheckArgs, opts: Opts): Promi
   const tree: TreeIssue[] = [];
   const res = await withQuiet(() => capture(() => checkTasks[head](args, opts, tree)));
   if (tree.length) res.tree = tree;
+  else if (res.error && NPM_INSTALL_FAIL.test(res.error)) res.hard = true;
+  else if (head === 'treeshake' && !res.ok) res.hard = true;
   return res;
 };
 const runCheckTaskTimed = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<TimedCapture> =>
@@ -559,6 +573,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
           return {
             count: 1,
             fatal: true,
+            hard: true,
             lines: [
               formatIssue(
                 'ERROR',
@@ -597,14 +612,45 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     const save = async (i: number, head: CheckHead, fn: () => Promise<Capture>): Promise<void> => {
       progressStart(head);
       res[i] = await timed(fn);
-      progressDone(head, HARD_ERROR_CHECKS.has(head) ? res[i].ok : true, res[i].ms);
+      progressDone(head, HARD_ERROR_CHECKS.has(head) || res[i].hard ? res[i].ok : true, res[i].ms);
     };
-    for (const [i, item] of list.entries()) {
-      await save(i, item.head, () =>
-        item.serial
-          ? runCheckTask(item.head, args, taskOpts)
-          : runCheckWorker(item.head, args, taskOpts)
+    const workers = checkFastWorkers();
+    const saveParallel = async (jobs: CheckJob[]): Promise<void> => {
+      if (workers < 2 || jobs.length < 2) {
+        for (const { i, item } of jobs)
+          await save(i, item.head, () => runCheckWorker(item.head, args, taskOpts));
+        return;
+      }
+      if (!quiet) for (const { item } of jobs) progressStart(item.head);
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(workers, jobs.length) }, async () => {
+          for (;;) {
+            const job = jobs[next++];
+            if (!job) return;
+            res[job.i] = await timed(() => runCheckWorker(job.item.head, args, taskOpts));
+          }
+        })
       );
+      for (const { i, item } of jobs)
+        progressDone(
+          item.head,
+          HARD_ERROR_CHECKS.has(item.head) || res[i].hard ? res[i].ok : true,
+          res[i].ms
+        );
+    };
+    for (let i = 0; i < list.length; ) {
+      const item = list[i];
+      if (item.serial) {
+        await save(i++, item.head, () => runCheckTask(item.head, args, taskOpts));
+        continue;
+      }
+      const jobs: CheckJob[] = [];
+      while (i < list.length && !list[i].serial) {
+        jobs.push({ i, item: list[i] });
+        i++;
+      }
+      await saveParallel(jobs);
     }
     if (!quiet) console.log();
     const totalMs = Date.now() - totalStart;
