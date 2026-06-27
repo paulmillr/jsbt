@@ -270,7 +270,7 @@ should('tests passes runnable test and benchmark entries', async () => {
   deepStrictEqual(/benchmark helper should not run/.test(all(res)), false);
 });
 
-should('tests reports crashed entries but treats timeout as smoke pass', async () => {
+should.serial('tests reports crashed entries but treats timeout as smoke pass', async () => {
   const cwd = fixture('fail');
   const res = await capture(() =>
     runTests(['package.json'], { color: false, cwd, limit: 2, timeoutMs: 100 })

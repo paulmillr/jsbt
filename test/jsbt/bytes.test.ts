@@ -42,6 +42,16 @@ const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
 const okJsrPublish = async () => {};
 const spent = String.raw`\d+ sec`;
+const withEnv = async <T>(key: string, value: string, fn: () => Promise<T>) => {
+  const prev = process.env[key];
+  process.env[key] = value;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+};
 const load = (ver: Ver) => {
   const dir = join(ROOT, `ts-${ver}`);
   // Load each TS version in-process: spawning nested node/tsc commands gets EPERM in this harness.
@@ -520,8 +530,8 @@ should('check includes bytes results', async () => {
 
 should('check groups repeated bytes actions without changing counts', async () => {
   const cwd = resolve('test/jsbt/vectors/bytes-wrap');
-  const res = await capture(() =>
-    runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish })
+  const res = await withEnv('JSBT_QUIET', '', () =>
+    capture(() => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(

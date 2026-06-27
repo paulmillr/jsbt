@@ -250,7 +250,9 @@ const withEnv = async <T>(key: string, value: string | undefined, fn: () => Prom
 };
 const checkJsbt = (argv: string[], cwd: string, extra: Record<string, unknown> = {}) =>
   withEnv('JSBT_FAST', '', () =>
-    runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
+    withEnv('JSBT_QUIET', '', () =>
+      runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
+    )
   );
 const typeImportProof = () => {
   const root = resolve('test/jsbt/build/typeimport-proof');
@@ -670,7 +672,9 @@ should('check reports timing stats only for selectors over ten seconds', async (
 should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '1', () =>
-    runProcess(cwd, () => checkJsbt(['check'], cwd))
+    withEnv('JSBT_FAST', '', () =>
+      runProcess(cwd, () => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
+    )
   );
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));

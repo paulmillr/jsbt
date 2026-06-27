@@ -11,6 +11,8 @@ const ROOT = resolve('.');
 const NPM_FIXTURE = join(ROOT, 'test/jsbt/vectors/npm-check');
 const npmEnv = {
   ...process.env,
+  JSBT_FAST: '',
+  JSBT_QUIET: '',
   JSBT_LOG_LEVEL: '0',
   NO_COLOR: '1',
   npm_config_audit: 'false',

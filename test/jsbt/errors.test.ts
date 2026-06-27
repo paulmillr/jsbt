@@ -41,6 +41,16 @@ const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
+const withEnv = async <T>(key: string, value: string, fn: () => Promise<T>) => {
+  const prev = process.env[key];
+  process.env[key] = value;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+};
 
 should('errors passes when examples reject wrong runtime types and return copies', async () => {
   const cwd = fixture('pass');
@@ -88,7 +98,9 @@ should(
 
 should('check errors selector runs the standalone errors checker', async () => {
   const cwd = fixture('fail');
-  const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
+  const res = await withEnv('JSBT_QUIET', '', () =>
+    capture(() => runJsbt(['check', 'errors'], { color: false, cwd }))
+  );
   const out = plain(res);
   deepStrictEqual(res.ok, true);
   deepStrictEqual(/wrong secretKey=false/.test(out), true);
@@ -99,7 +111,9 @@ should('check errors selector runs the standalone errors checker', async () => {
 
 should('check errors selector reports unprobeable examples before audit rows', async () => {
   const cwd = fixture('mixed-no-calls');
-  const res = await capture(() => runJsbt(['check', 'errors'], { color: false, cwd }));
+  const res = await withEnv('JSBT_QUIET', '', () =>
+    capture(() => runJsbt(['check', 'errors'], { color: false, cwd }))
+  );
   const out = plain(res);
   deepStrictEqual(res.ok, true);
   deepStrictEqual(
