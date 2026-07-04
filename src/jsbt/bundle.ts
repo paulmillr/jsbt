@@ -24,7 +24,7 @@ import {
   writeBundleInput,
   writePkg,
 } from '../fs-modify.ts';
-import { camelParts, kb, readJson, runSelf } from './utils.ts';
+import { camelParts, defaultFast, fastWorkerCount, kb, readJson, runSelf } from './utils.ts';
 
 type Args = { cwd: string; directory: string; help: boolean; noPrefix: boolean; stats: boolean };
 type BundleTarget = { root: string; temp: boolean };
@@ -36,6 +36,7 @@ type Names = {
 };
 type RunOpts = { stats?: boolean };
 type ReportOpts = { stats?: boolean };
+type ExecCommand = (cmd: string) => Promise<unknown>;
 type BundleReport = {
   gzipBytes: number;
   loc: number;
@@ -51,15 +52,17 @@ type TestApi = {
   autoInput: typeof autoInput;
   autoPackage: typeof autoPackage;
   bundleReportLines: typeof bundleReportLines;
+  bundleFastWorkers: typeof bundleFastWorkers;
   displayPath: typeof displayPath;
   ensureAutoFiles: typeof ensureAutoFiles;
   getNames: typeof getNames;
   parseArgs: typeof parseArgs;
   prepareAutoDir: typeof prepareAutoDir;
+  runBundleCommands: typeof runBundleCommands;
 };
 
 const exec_ = promisify(exec);
-const ex = (cmd: string) => exec_(cmd);
+const ex: ExecCommand = (cmd) => exec_(cmd);
 
 const usage = `usage:
   jsbt bundle [--dir=<build-dir>] [--no-prefix] [--stats]
@@ -134,6 +137,27 @@ const prepareAutoDir = (cwd: string): BundleTarget => {
   ensureAutoFiles(root, cwd, names.name);
   return { root, temp };
 };
+const bundleFastWorkers = (): number => {
+  const fast = defaultFast();
+  return fast ? fastWorkerCount(fast) : 0;
+};
+const runBundleCommands = async (commands: string[], execCmd: ExecCommand = ex): Promise<void> => {
+  const workers = bundleFastWorkers();
+  if (workers < 2 || commands.length < 2) {
+    for (const cmd of commands) await execCmd(cmd);
+    return;
+  }
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(workers, commands.length) }, async () => {
+      for (;;) {
+        const cmd = commands[next++];
+        if (!cmd) return;
+        await execCmd(cmd);
+      }
+    })
+  );
+};
 
 const requireReportValue = (value: string | undefined, label: string): string => {
   if (!value) throw new Error(`bundle report missing ${label}`);
@@ -169,13 +193,16 @@ const runEsbuild = async (
   const outp = pjoin(outDir, outb);
   const minp = pjoin(outDir, minb);
   const glbName = noPrefix ? names.noprefix.camel : names.camel;
+  const commands = [
+    `npx esbuild --bundle ${inp} --outfile=${outp} --global-name=${glbName}`,
+    `npx esbuild --bundle ${inp} --outfile=${minp} --global-name=${glbName} --minify`,
+  ];
 
   const prev = process.cwd();
   process.chdir(root);
   try {
     npmInstall(root);
-    await ex(`npx esbuild --bundle ${inp} --outfile=${outp} --global-name=${glbName}`);
-    await ex(`npx esbuild --bundle ${inp} --outfile=${minp} --global-name=${glbName} --minify`);
+    await runBundleCommands(commands);
     const outf = readFileSync(outp);
     const minf = readFileSync(minp);
     const cmpfgzip = gzipSync(minf, { level: 9 });
@@ -247,8 +274,10 @@ export const __TEST: TestApi = {
   displayPath: displayPath,
   ensureAutoFiles: ensureAutoFiles,
   getNames: getNames,
+  bundleFastWorkers: bundleFastWorkers,
   parseArgs: parseArgs,
   prepareAutoDir: prepareAutoDir,
+  runBundleCommands: runBundleCommands,
 };
 
 runSelf(import.meta.url, runCli);

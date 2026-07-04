@@ -1,6 +1,6 @@
 import { deepStrictEqual, throws } from 'node:assert';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpus, tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { should } from '../../src/test.ts';
 import { __TEST as FS_TEST } from '../../src/fs-modify.ts';
@@ -34,6 +34,42 @@ const seed = (name: string, pkgName: string) => {
 const inOsTmp = (file: string) => {
   const rel = relative(tmpdir(), file);
   return !!rel && !rel.startsWith('..') && rel.split(/[\\/]/)[0]?.startsWith('jsbt-bundle-');
+};
+const withEnv = async <T>(key: string, value: string | undefined, fn: () => Promise<T>) => {
+  const prev = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  }
+};
+const expectedFastWorkers = (fast: string): number => {
+  const max = cpus().length;
+  const raw = Number.parseFloat(fast);
+  const count = raw === 1 ? max : raw < 0 ? max + raw : raw < 1 ? Math.floor(max * raw) : raw;
+  return Math.max(1, Math.min(count, 256));
+};
+const captureBundleCommands = async (fast: string | undefined) => {
+  const commands = ['npx esbuild out', 'npx esbuild min'];
+  const order: string[] = [];
+  let active = 0;
+  let maxActive = 0;
+  let workers = 0;
+  await withEnv('JSBT_FAST', fast, async () => {
+    workers = __TEST.bundleFastWorkers();
+    await __TEST.runBundleCommands(commands, async (cmd) => {
+      order.push(`start ${cmd}`);
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active--;
+      order.push(`end ${cmd}`);
+    });
+  });
+  return { maxActive, order, workers };
 };
 
 should('bundle defaults to auto and parses explicit directory flags', () => {
@@ -111,6 +147,30 @@ should('bundle report starts with actual checksum lines', () => {
     false
   );
   deepStrictEqual(stats[0].replace(/\x1b\[[0-9;]*m/g, ''), '9 LOC package.js');
+});
+
+should('bundle uses JSBT_FAST worker semantics for esbuild commands', async () => {
+  const disabled = await captureBundleCommands('');
+  deepStrictEqual(disabled.workers, 0);
+  deepStrictEqual(disabled.maxActive, 1);
+  deepStrictEqual(disabled.order, [
+    'start npx esbuild out',
+    'end npx esbuild out',
+    'start npx esbuild min',
+    'end npx esbuild min',
+  ]);
+
+  const explicit = await captureBundleCommands('2');
+  deepStrictEqual(explicit.workers, 2);
+  deepStrictEqual(explicit.maxActive, 2);
+
+  const negative = await captureBundleCommands('-1');
+  deepStrictEqual(negative.workers, expectedFastWorkers('-1'));
+  deepStrictEqual(negative.maxActive, negative.workers < 2 ? 1 : 2);
+
+  const ratio = await captureBundleCommands('0.5');
+  deepStrictEqual(ratio.workers, expectedFastWorkers('0.5'));
+  deepStrictEqual(ratio.maxActive, ratio.workers < 2 ? 1 : 2);
 });
 
 should('bundle auto mode creates an os temp build fixture', () => {

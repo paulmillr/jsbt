@@ -655,7 +655,13 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     if (!quiet) console.log();
     const totalMs = Date.now() - totalStart;
     let diagnosticGap = false;
+    let quietDiagnostics = false;
+    const quietShows = (out: Pick): boolean => !!out.lines.length;
     const printDiagnostic = (line: string, log: (line?: string) => void): void => {
+      if (quiet && !quietDiagnostics) {
+        console.log();
+        quietDiagnostics = true;
+      }
       if (!diagnosticGap && warnInfoLine(line)) {
         log();
         diagnosticGap = true;
@@ -667,7 +673,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
       const cur = res[i];
       const out = checkPick(item.head, item.pick(cur), colorOn);
       if (out.fatal) hasFail = true;
-      if (quiet && !out.fatal) continue;
+      if (quiet && !out.fatal && !quietShows(out)) continue;
       if (item.head === 'errors') {
         for (const line of out.lines) printDiagnostic(line, console.error);
         if (args.head)

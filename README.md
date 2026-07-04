@@ -77,6 +77,11 @@ JSBT_QUIET=1 node test/index.ts
 JSBT_FILTER=math/adds node test/index.ts
 ```
 
+When launched by `node --test`, `jsbt/test` registers suites, hooks, and test cases with
+Node's native runner instead of printing its own report. Existing `it.run()` and
+`it.runWhen(import.meta.url)` calls become harmless in that mode, so the same files can be run
+directly or through Node's test runner.
+
 ## 2. benchmark
 
 Lightweight benchmark helpers with nanosecond timing, terminal-friendly output, throughput units,
@@ -105,6 +110,11 @@ Options:
 - `throughput`: custom units processed by one iteration, for example `{ amount: 16, unit: 'blocks' }`.
 - `maxRunTimeSec`: per-benchmark runtime, from `0.1` to `60` seconds.
 - `mode: 'runOnce'`: run one measurement and print only elapsed time.
+- `section('math')` named export: print `# math` in text output and prefix CSV names as
+  `math; <name>`. `section()` or `section('')` disables the prefix.
+- `JSBT_CSV=1` forces CSV output. CSV prints `name,nanoseconds` by default, or
+  `name,<unit>/sec` for `bytes` and `throughput`, and is also the default when color
+  output is disabled.
 
 Example output:
 

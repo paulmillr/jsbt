@@ -89,6 +89,34 @@ const pr = globalThis['process'];
 const proc: Record<string, any> | undefined = isCli ? pr : undefined;
 type Env = Record<string, string | undefined>;
 const isNode = isCli && typeof proc?.versions?.node === 'string';
+type NativeNodeTest = Record<string, any>;
+
+function hasImportSearch(importMetaUrl: string): boolean {
+  try {
+    return new URL(importMetaUrl).search !== '';
+  } catch (_) {
+    return importMetaUrl.includes('?');
+  }
+}
+
+function isNodeTestArg(arg: unknown): boolean {
+  const str = String(arg);
+  return str === '--test' || str.startsWith('--test-') || str.startsWith('--test=');
+}
+
+function resolveNativeNodeTest(): NativeNodeTest | undefined {
+  if (!isNode || hasImportSearch(import.meta.url)) return;
+  const env = proc?.env || {};
+  const isTestContext =
+    env.NODE_TEST_CONTEXT !== undefined || env.NODE_TEST_WORKER_ID !== undefined;
+  const hasTestArg = Array.isArray(proc?.execArgv) && proc!.execArgv.some(isNodeTestArg);
+  if (!isTestContext || !hasTestArg || typeof proc?.getBuiltinModule !== 'function') return;
+  return proc.getBuiltinModule('node:test');
+}
+
+const nativeNodeTest = resolveNativeNodeTest();
+let nativeTestCount = 0;
+
 function wantColor(env: Env = {}, tty = false): boolean {
   if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
   if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
@@ -360,12 +388,20 @@ function stackFlatten(elm: StackItem): StackItem[] {
 }
 
 const describe: DescribeFunction = (message: any, fn: EmptyFn): void => {
+  if (nativeNodeTest) {
+    nativeNodeTest.describe(message, fn);
+    return;
+  }
   stackAdd({ message });
   fn(); // Run function in the context of current stack path
   stack.pop();
 };
 
-function describeSkip(message: any, _fn: EmptyFn): void {
+function describeSkip(message: any, fn: EmptyFn): void {
+  if (nativeNodeTest) {
+    nativeNodeTest.describe.skip(message, fn);
+    return;
+  }
   stackAdd({ message, skip: true });
   // fn();
   stack.pop();
@@ -373,22 +409,48 @@ function describeSkip(message: any, _fn: EmptyFn): void {
 describe.skip = describeSkip;
 
 function beforeAll(fn: EmptyFn): void {
+  if (nativeNodeTest) {
+    nativeNodeTest.before(fn);
+    return;
+  }
   stackTop().beforeAll = fn;
 }
 
 function afterAll(fn: EmptyFn): void {
+  if (nativeNodeTest) {
+    nativeNodeTest.after(fn);
+    return;
+  }
   stackTop().afterAll = fn;
 }
 
 function beforeEach(fn: EmptyFn): void {
+  if (nativeNodeTest) {
+    nativeNodeTest.beforeEach(fn);
+    return;
+  }
   stackTop().beforeEach = fn;
 }
 
 function afterEach(fn: EmptyFn): void {
+  if (nativeNodeTest) {
+    nativeNodeTest.afterEach(fn);
+    return;
+  }
   stackTop().afterEach = fn;
 }
 
 function register(info: StackItem) {
+  if (nativeNodeTest) {
+    const options: Record<string, boolean> = {};
+    if (info.only) options.only = true;
+    if (info.skip) options.skip = true;
+    if (info.serial) options.concurrency = false;
+    nativeTestCount++;
+    if (Object.keys(options).length) nativeNodeTest.test(info.message, options, info.test);
+    else nativeNodeTest.test(info.message, info.test);
+    return;
+  }
   stackAdd(info);
   stack.pop(); // remove from stack since there are no children
 }
@@ -679,6 +741,7 @@ function finalize(total: number, startTime: number) {
 }
 
 async function runTests(forceSequential = false) {
+  if (nativeNodeTest) return nativeTestCount;
   if (isRunning) throw new Error('it.run() has already been called, wait for end');
   errorLog.splice(0, errorLog.length);
   if (!forceSequential && opts.FAST) return runTestsInParallel();
@@ -692,6 +755,7 @@ async function runTests(forceSequential = false) {
 }
 
 async function runTestsWhen(importMetaUrl: string) {
+  if (nativeNodeTest) return;
   if (!isCli) return; // Ignore in browser
   // @ts-ignore
   const { pathToFileURL } = await imp('node:url');

@@ -30,6 +30,9 @@ const green = _c + '[32m';
 const blue = _c + '[34m';
 const reset = _c + '[0m';
 type Env = Record<string, string | undefined>;
+const isCli =
+  // @ts-ignore
+  typeof process !== 'undefined';
 function wantColor(env: Env = {}, tty = false): boolean {
   if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
   if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
@@ -38,16 +41,25 @@ function wantColor(env: Env = {}, tty = false): boolean {
   if (env.CLICOLOR === '0') return false;
   return tty;
 }
+const envFlag = (value: string | undefined): boolean => !!Number(value);
 const colorOn =
   // @ts-ignore
-  typeof process !== 'undefined' &&
-  wantColor(process.env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
+  isCli && wantColor(process.env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
+const csvOn =
+  // @ts-ignore
+  isCli && (envFlag(process.env?.JSBT_CSV) || !colorOn);
 const benchFilter =
   // @ts-ignore
-  typeof process !== 'undefined' ? process.env?.JSBT_FILTER || '' : '';
+  isCli ? process.env?.JSBT_FILTER || '' : '';
 function paint(text: string, code: string): string {
   return colorOn ? `${code}${text}${reset}` : text;
 }
+const stripAnsi = (str: string): string => str.replace(/\x1b\[\d+(;\d+)*m/g, '');
+const csvCell = (val: unknown): string => {
+  const cell = stripAnsi(String(val ?? ''));
+  return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+};
+const printCsvRow = (values: unknown[]): void => printOutput(values.map(csvCell).join(','));
 const units = [
   { symbol: 'min', val: 60n * 10n ** 9n, threshold: 5n },
   { symbol: 's', val: 10n ** 9n, threshold: 10n },
@@ -254,6 +266,14 @@ function perSecond(mean: bigint, amount: number): bigint | number {
   return (Number(SECOND) * amount) / Number(mean);
 }
 
+function roundRate(value: number): number {
+  return value >= 100 ? Math.round(value) : value >= 10 ? +value.toFixed(1) : +value.toFixed(2);
+}
+
+function formatCsvNumber(value: bigint | number): string {
+  return typeof value === 'bigint' ? value.toString() : String(roundRate(value));
+}
+
 function formatBenchRate(mean: bigint, rate: BenchRate): { perSecStr: string; unit: string } {
   if (rate.type === 'unit')
     return { perSecStr: formatOps(perSecond(mean, rate.amount)), unit: rate.unit };
@@ -261,6 +281,38 @@ function formatBenchRate(mean: bigint, rate: BenchRate): { perSecStr: string; un
   const { bytes, unit } =
     byteRateUnits.find((item) => bytesPerSec >= item.bytes) ?? byteRateUnits.at(-1)!;
   return { perSecStr: formatOps(bytesPerSec / bytes), unit };
+}
+
+function csvBenchRate(mean: bigint, rate: BenchRate): { value: string; unit: string } {
+  if (rate.type === 'unit')
+    return { value: formatCsvNumber(perSecond(mean, rate.amount)), unit: rate.unit };
+  const bytesPerSec = (Number(SECOND) * rate.bytes) / Number(mean);
+  const { bytes, unit } =
+    byteRateUnits.find((item) => bytesPerSec >= item.bytes) ?? byteRateUnits.at(-1)!;
+  return { value: formatCsvNumber(bytesPerSec / bytes), unit };
+}
+
+let lastCsvHeader = '';
+let benchSection = '';
+
+function sectionLabel(label: string): string {
+  return benchSection ? `${benchSection}; ${label}` : label;
+}
+
+function printBenchCsv(label: string, stats: BenchStats['stats'], rate?: BenchRate) {
+  const metric = rate ? csvBenchRate(stats.mean, rate) : undefined;
+  const header = ['name', metric ? `${metric.unit}/sec` : 'nanoseconds'];
+  const headerKey = header.join('\0');
+  if (headerKey !== lastCsvHeader) {
+    printCsvRow(header);
+    lastCsvHeader = headerKey;
+  }
+  printCsvRow([sectionLabel(label), metric ? metric.value : stats.mean.toString()]);
+}
+
+export function section(title = ''): void {
+  benchSection = title;
+  if (title && !csvOn) printOutput(`# ${title}`);
 }
 
 function setMaxRunTime(val: number): void {
@@ -282,6 +334,11 @@ export async function bench(
     fn,
     mode === 'runOnce' ? 0n : parseMaxRunTime(maxRunTimeSec)
   );
+  if (csvOn) {
+    printBenchCsv(label, stats, mode === 'runOnce' ? undefined : rate);
+    measurements.length = 0; // Destroy the list, simplify the life for garbage collector
+    return;
+  }
   let OUTPUT = `${label} `;
   if (mode === 'runOnce') {
     OUTPUT += paint(perItemStr, blue);

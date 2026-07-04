@@ -255,6 +255,41 @@ const runRepeatedFastRunModule = () => {
   const text = `${res.stdout || ''}${res.stderr || ''}${error ? `\n${error.message}` : ''}`;
   return { errorCode: error?.code, status: res.status, text };
 };
+const runNativeNodeTestModule = () => {
+  const res = spawnSync(
+    process.execPath,
+    [
+      '--test',
+      '--test-isolation=none',
+      '--test-reporter=spec',
+      fixture('native-node-test.test.ts'),
+    ],
+    {
+      cwd: BASE,
+      encoding: 'utf8',
+      env: { ...process.env, JSBT_FAST: '' },
+    }
+  );
+  const error = res.error as NodeJS.ErrnoException | undefined;
+  const text = `${res.stdout || ''}${res.stderr || ''}${error ? `\n${error.message}` : ''}`;
+  return { errorCode: error?.code, status: res.status, text };
+};
+const runInheritedNodeTestEnvModule = () => {
+  const env = {
+    ...process.env,
+    JSBT_FAST: '',
+    NODE_TEST_CONTEXT: 'child-v8',
+    NODE_TEST_WORKER_ID: '1',
+  };
+  const res = spawnSync(process.execPath, [fixture('inherited-node-test-env.ts')], {
+    cwd: BASE,
+    encoding: 'utf8',
+    env,
+  });
+  const error = res.error as NodeJS.ErrnoException | undefined;
+  const text = `${res.stdout || ''}${res.stderr || ''}${error ? `\n${error.message}` : ''}`;
+  return { errorCode: error?.code, status: res.status, text };
+};
 const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
 const plain = (res: { stderr: string; stdout: string }) =>
@@ -270,7 +305,7 @@ should('tests passes runnable test and benchmark entries', async () => {
   deepStrictEqual(/benchmark helper should not run/.test(all(res)), false);
 });
 
-should('tests reports crashed entries but treats timeout as smoke pass', async () => {
+should.serial('tests reports crashed entries but treats timeout as smoke pass', async () => {
   const cwd = fixture('fail');
   const res = await capture(() =>
     runTests(['package.json'], { color: false, cwd, limit: 2, timeoutMs: 100 })
@@ -328,6 +363,29 @@ should('test runner defaults to fast in cli when JSBT_FAST is unset', async () =
   deepStrictEqual(noBailFalse.should.opts.STOP_ON_ERROR, false);
   const bail = await importTestRunner({ JSBT_BAIL: '1' });
   deepStrictEqual(bail.should.opts.STOP_ON_ERROR, true);
+});
+
+should('test runner registers with node:test under node --test', () => {
+  const res = runNativeNodeTestModule();
+  if (res.errorCode === 'EPERM') return;
+  deepStrictEqual(res.status, 0, res.text);
+  deepStrictEqual(/native node test bridge/.test(res.text), true, res.text);
+  deepStrictEqual(/runs first test through node:test/.test(res.text), true, res.text);
+  deepStrictEqual(/keeps skipped tests skipped/.test(res.text), true, res.text);
+  deepStrictEqual(/# SKIP/.test(res.text), true, res.text);
+  deepStrictEqual(/JSBT_FAST/.test(res.text), false, res.text);
+});
+
+should('test runner ignores inherited node:test env without node --test exec args', () => {
+  const res = runInheritedNodeTestEnvModule();
+  if (res.errorCode === 'EPERM') return;
+  deepStrictEqual(res.status, 0, res.text);
+  deepStrictEqual(
+    /1 test started \(JSBT_QUIET=0, JSBT_FAST=0, JSBT_FILTER=''\)/.test(res.text),
+    true,
+    res.text
+  );
+  deepStrictEqual(/1 tests passed/.test(res.text), true, res.text);
 });
 
 should('test multiline reporter rewrites started line on pass', async () => {

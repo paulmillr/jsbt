@@ -37,8 +37,16 @@ const withEnv = async <T>(
   }
 };
 const loadBench = (env: Record<string, string | undefined>): Promise<BenchModule> =>
-  withEnv({ JSBT_FILTER: undefined, ...env }, () =>
-    import(`../../src/bench.ts?color=${benchImportId++}`)
+  withEnv(
+    {
+      CLICOLOR_FORCE: undefined,
+      FORCE_COLOR: undefined,
+      JSBT_CSV: undefined,
+      JSBT_FILTER: undefined,
+      NO_COLOR: undefined,
+      ...env,
+    },
+    () => import(`../../src/bench.ts?color=${benchImportId++}`)
   );
 const loadBenchWithDurations = (
   env: Record<string, string | undefined>,
@@ -58,11 +66,9 @@ const loadBenchWithDurations = (
   });
 };
 
-should('bench respects NO_COLOR', async () => {
+should('bench uses text output when colors are enabled', async () => {
   const forced = await loadBench({
-    CLICOLOR_FORCE: undefined,
     FORCE_COLOR: '1',
-    NO_COLOR: undefined,
   });
   const forcedOutput = await capture(() => forced.default('noop', () => {}, { mode: 'runOnce' }));
   deepStrictEqual(/\x1b\[34m/.test(forcedOutput), true, forcedOutput);
@@ -70,26 +76,93 @@ should('bench respects NO_COLOR', async () => {
   forced.utils.setMaxRunTime(0.1);
   const forcedRate = await capture(() => forced.default('noop', () => {}));
   deepStrictEqual(/x \x1b\[32m[\d,]*,[\d,]*\x1b\[0m ops\/sec/.test(forcedRate), true, forcedRate);
+});
 
-  const noColor = await loadBench({
-    CLICOLOR_FORCE: undefined,
-    FORCE_COLOR: undefined,
-    NO_COLOR: '1',
+should('bench section prints text heading and can be disabled', async () => {
+  const bench = await loadBenchWithDurations({ FORCE_COLOR: '1' }, [10_000_000n]);
+  deepStrictEqual('section' in bench.default, false);
+  const output = await capture(async () => {
+    bench.section('math');
+    await bench.default('sqrt', () => {}, { mode: 'runOnce' });
+    bench.section();
+    await bench.default('plain', () => {}, { mode: 'runOnce' });
   });
-  const noColorOutput = await capture(() => noColor.default('noop', () => {}, { mode: 'runOnce' }));
+  deepStrictEqual(/^# math\nsqrt /.test(output), true, output);
+  deepStrictEqual(/math; sqrt/.test(output), false, output);
+  deepStrictEqual(/\nplain /.test(output), true, output);
+});
+
+should('bench defaults to CSV output when color is disabled', async () => {
+  const noColor = await loadBenchWithDurations(
+    {
+      NO_COLOR: '1',
+    },
+    [10_000_000n]
+  );
+  const noColorOutput = await capture(() =>
+    noColor.default('a,b', () => {}, { maxRunTimeSec: 0.1 })
+  );
+  deepStrictEqual(noColorOutput, 'name,nanoseconds\n"a,b",10000000\n');
   deepStrictEqual(/\x1b\[/.test(noColorOutput), false, noColorOutput);
   deepStrictEqual(/\x1b\[/.test(noColor.utils.calcStats([1n, 2n]).formatted), false);
-  noColor.utils.setMaxRunTime(0.1);
-  const noColorRate = await capture(() => noColor.default('noop', () => {}));
-  deepStrictEqual(/x \d+ ops\/sec/.test(noColorRate), true, noColorRate);
-  deepStrictEqual(/x [\d,]*,[\d,]* ops\/sec/.test(noColorRate), false, noColorRate);
+
+  const runOnce = await loadBenchWithDurations(
+    {
+      FORCE_COLOR: undefined,
+      NO_COLOR: '1',
+    },
+    [1234n]
+  );
+  const runOnceOutput = await capture(() => runOnce.default('once', () => {}, { mode: 'runOnce' }));
+  deepStrictEqual(runOnceOutput, 'name,nanoseconds\nonce,1234\n');
+});
+
+should('bench section prefixes CSV name cells and can be disabled', async () => {
+  const bench = await loadBenchWithDurations({ NO_COLOR: '1' }, [10_000_000n]);
+  const output = await capture(async () => {
+    bench.section('math');
+    await bench.default('sqrt', () => {}, { maxRunTimeSec: 0.1 });
+    await bench.default('hash', () => {}, { bytes: 1024 * 1024, maxRunTimeSec: 0.1 });
+    bench.section('');
+    await bench.default('plain', () => {}, { maxRunTimeSec: 0.1 });
+  });
+  deepStrictEqual(
+    output,
+    [
+      'name,nanoseconds',
+      'math; sqrt,10000000',
+      'name,mib/sec',
+      'math; hash,100',
+      'name,nanoseconds',
+      'plain,10000000',
+      '',
+    ].join('\n')
+  );
+});
+
+should('bench uses CSV when JSBT_CSV is set', async () => {
+  const csv = await loadBenchWithDurations(
+    {
+      FORCE_COLOR: '1',
+      JSBT_CSV: '1',
+    },
+    [10_000_000n]
+  );
+  const output = await capture(() => csv.default('quote "x"', () => {}, { maxRunTimeSec: 0.1 }));
+  deepStrictEqual(output, 'name,nanoseconds\n"quote ""x""",10000000\n');
+  deepStrictEqual(/\x1b\[/.test(output), false, output);
+});
+
+should('bench respects NO_COLOR in stats helpers', async () => {
+  const noColor = await loadBench({
+    NO_COLOR: '1',
+  });
+  deepStrictEqual(/\x1b\[/.test(noColor.utils.calcStats([1n, 2n]).formatted), false);
 });
 
 should('bench only displays variability at 5 percent or higher', async () => {
   const env = {
-    CLICOLOR_FORCE: undefined,
-    FORCE_COLOR: undefined,
-    NO_COLOR: '1',
+    FORCE_COLOR: '1',
   };
   const low = await loadBenchWithDurations(env, [9_500_000n, 10_500_000n]);
   const lowOutput = await capture(() => low.default('low', () => {}, { maxRunTimeSec: 0.1 }));
@@ -102,15 +175,13 @@ should('bench only displays variability at 5 percent or higher', async () => {
 
 should('bench formats byte throughput and custom throughput rates', async () => {
   const env = {
-    CLICOLOR_FORCE: undefined,
-    FORCE_COLOR: undefined,
     NO_COLOR: '1',
   };
   const bytes = await loadBenchWithDurations(env, [10_000_000n]);
   const bytesOutput = await capture(() =>
     bytes.default('hash', () => {}, { bytes: 1024 * 1024, maxRunTimeSec: 0.1 })
   );
-  deepStrictEqual(/hash x 100 mib\/sec/.test(bytesOutput), true, bytesOutput);
+  deepStrictEqual(bytesOutput, 'name,mib/sec\nhash,100\n');
 
   const custom = await loadBenchWithDurations(env, [10_000_000n]);
   const customOutput = await capture(() =>
@@ -119,7 +190,7 @@ should('bench formats byte throughput and custom throughput rates', async () => 
       maxRunTimeSec: 0.1,
     })
   );
-  deepStrictEqual(/cipher x 1000 blocks\/sec/.test(customOutput), true, customOutput);
+  deepStrictEqual(customOutput, 'name,blocks/sec\ncipher,1000\n');
 
   await rejects(
     () => custom.default('legacy', () => {}, { unit: 'mb', multiplier: 1 } as any),
@@ -129,8 +200,6 @@ should('bench formats byte throughput and custom throughput rates', async () => 
 
 should('bench filters labels with JSBT_FILTER', async () => {
   const bench = await loadBench({
-    CLICOLOR_FORCE: undefined,
-    FORCE_COLOR: undefined,
     JSBT_FILTER: 'hash',
     NO_COLOR: '1',
   });
@@ -150,7 +219,7 @@ should('bench filters labels with JSBT_FILTER', async () => {
         calls++;
       })
     );
-    deepStrictEqual(/hash x \d+ ops\/sec/.test(matched), true, matched);
+    deepStrictEqual(/^name,nanoseconds\nhash,\d+\n$/.test(matched), true, matched);
     deepStrictEqual(calls > 0, true);
   } finally {
     bench.utils.setMaxRunTime(1);

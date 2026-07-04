@@ -30,11 +30,12 @@ const withBenchmarkEnv = async (
   values: Record<string, string>,
   fn: () => Promise<string[]> | string[]
 ) => {
-  const envNames = [...new Set([...benchmarkEnv, ...Object.keys(values)])];
+  const next = { NO_COLOR: '1', ...values };
+  const envNames = [...new Set([...benchmarkEnv, ...Object.keys(next)])];
   const prev = new Map(envNames.map((name) => [name, process.env[name]]));
   try {
     for (const name of envNames) delete process.env[name];
-    for (const [name, value] of Object.entries(values)) process.env[name] = value;
+    for (const [name, value] of Object.entries(next)) process.env[name] = value;
     return await fn();
   } finally {
     for (const [name, value] of prev) {

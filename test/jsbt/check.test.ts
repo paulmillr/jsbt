@@ -250,7 +250,9 @@ const withEnv = async <T>(key: string, value: string | undefined, fn: () => Prom
 };
 const checkJsbt = (argv: string[], cwd: string, extra: Record<string, unknown> = {}) =>
   withEnv('JSBT_FAST', '', () =>
-    runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
+    withEnv('JSBT_QUIET', '', () =>
+      runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
+    )
   );
 const typeImportProof = () => {
   const root = resolve('test/jsbt/build/typeimport-proof');
@@ -630,6 +632,40 @@ should('check defaults JSBT_FAST like the test runner', async () => {
   );
 });
 
+should('check parses JSBT_FAST offsets and ratios like the test runner', async () => {
+  const cwd = fixture('pass-root');
+  const max = cpus().length;
+  const expected = {
+    negative: Math.max(1, Math.min(max - 1, 256)),
+    ratio: Math.max(1, Math.min(Math.floor(max * 0.5), 256)),
+  };
+  const negative = await withEnv('JSBT_QUIET', '', () =>
+    withEnv('JSBT_FAST', '-1', () =>
+      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
+    )
+  );
+  deepStrictEqual(negative.ok, true, all(negative));
+  deepStrictEqual(
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${expected.negative}\\)`).test(
+      plain(negative)
+    ),
+    true
+  );
+
+  const ratio = await withEnv('JSBT_QUIET', '', () =>
+    withEnv('JSBT_FAST', '0.5', () =>
+      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
+    )
+  );
+  deepStrictEqual(ratio.ok, true, all(ratio));
+  deepStrictEqual(
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${expected.ratio}\\)`).test(
+      plain(ratio)
+    ),
+    true
+  );
+});
+
 should('check reports timing stats only for selectors over ten seconds', async () => {
   const cwd = fixture('pass-root');
   const prevNow = Date.now;
@@ -670,7 +706,9 @@ should('check reports timing stats only for selectors over ten seconds', async (
 should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '1', () =>
-    runProcess(cwd, () => checkJsbt(['check'], cwd))
+    withEnv('JSBT_FAST', '', () =>
+      runProcess(cwd, () => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
+    )
   );
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
@@ -683,6 +721,27 @@ should('check uses dot reporter when JSBT_QUIET is set', async () => {
   deepStrictEqual(/☆/.test(out), false);
   deepStrictEqual(/✓/.test(out), false);
   deepStrictEqual(/preparing summary/.test(out), false);
+});
+
+should('check shows warnings when JSBT_QUIET is set', async () => {
+  const cwd = fixture('fail-src');
+  const res = await withEnv('JSBT_QUIET', '1', () =>
+    withEnv('JSBT_FAST', '', () =>
+      runProcess(cwd, () => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
+    )
+  );
+  const out = plain(res);
+  deepStrictEqual(res.ok, false, all(res));
+  deepStrictEqual(/\[WARN\] treeshake: 3x unused \(treeshake\)/.test(out), true);
+  deepStrictEqual(
+    new RegExp(
+      `${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)`
+    ).test(out),
+    true
+  );
+  deepStrictEqual(/\[WARN\] readme:/.test(out), true);
+  deepStrictEqual(/\[WARN\] comments:/.test(out), true);
+  deepStrictEqual(/\[ERROR\] jsr:/.test(out), true);
 });
 
 should('check accepts --project directory and runs from another cwd', async () => {
