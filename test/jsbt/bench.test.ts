@@ -117,6 +117,18 @@ should('bench defaults to CSV output when color is disabled', async () => {
   deepStrictEqual(runOnceOutput, 'name,nanoseconds\nonce,1234\n');
 });
 
+should('bench defaults max runtime to 0.4 seconds', async () => {
+  const bench = await loadBenchWithDurations({ NO_COLOR: '1' }, [100_000_000n]);
+  let calls = 0;
+  const output = await capture(() =>
+    bench.default('default runtime', () => {
+      calls++;
+    })
+  );
+  deepStrictEqual(calls, 4);
+  deepStrictEqual(output, 'name,nanoseconds\ndefault runtime,100000000\n');
+});
+
 should('bench section prefixes CSV name cells and can be disabled', async () => {
   const bench = await loadBenchWithDurations({ NO_COLOR: '1' }, [10_000_000n]);
   const output = await capture(async () => {

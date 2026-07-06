@@ -181,7 +181,8 @@ function calcStats(list: bigint[]): {
 }
 // @ts-ignore
 const getTime: () => bigint = process.hrtime.bigint;
-let defaultMaxRunTime = SECOND;
+const DEFAULT_MAX_RUN_TIME = (4n * SECOND) / 10n;
+let defaultMaxRunTime = DEFAULT_MAX_RUN_TIME;
 async function benchmarkRaw(
   callback: CbFn,
   maxRunTime: bigint = defaultMaxRunTime
@@ -215,6 +216,7 @@ export type BenchOpts = {
   bytes?: number;
   /** Custom units processed by one benchmark iteration. */
   throughput?: BenchThroughput;
+  /** Per-benchmark runtime in seconds. Defaults to 0.4. */
   maxRunTimeSec?: number;
   mode?: 'normal' | 'runOnce';
 };
@@ -316,7 +318,7 @@ export function section(title = ''): void {
 }
 
 function setMaxRunTime(val: number): void {
-  defaultMaxRunTime = parseMaxRunTime(val) ?? SECOND;
+  defaultMaxRunTime = parseMaxRunTime(val) ?? DEFAULT_MAX_RUN_TIME;
 }
 
 export async function bench(

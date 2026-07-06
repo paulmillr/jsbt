@@ -108,7 +108,7 @@ Options:
 - `bytes`: bytes processed by one benchmark iteration; output is `b/sec`, `kib/sec`, `mib/sec`,
   or `gib/sec`.
 - `throughput`: custom units processed by one iteration, for example `{ amount: 16, unit: 'blocks' }`.
-- `maxRunTimeSec`: per-benchmark runtime, from `0.1` to `60` seconds.
+- `maxRunTimeSec`: per-benchmark runtime, from `0.1` to `60` seconds; defaults to `0.4`.
 - `mode: 'runOnce'`: run one measurement and print only elapsed time.
 - `section('math')` named export: print `# math` in text output and prefix CSV names as
   `math; <name>`. `section()` or `section('')` disables the prefix.
