@@ -1,6 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
 import { should } from '../../src/test.ts';
-import { camelParts } from '../../src/jsbt/utils.ts';
+import { camelParts } from '../../src/jsbt.ts';
 
 should('camelParts joins pre-tokenized name parts', () => {
   deepStrictEqual(camelParts(['noble', 'curves']), 'nobleCurves');

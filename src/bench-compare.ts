@@ -82,25 +82,11 @@ export type CompareOpts = {
   metrics?: CompareMetric[];
 };
 
-const isCli = typeof process !== 'undefined';
+import { cliProcess, colorEnabled, csvRow, envFlag, stripAnsi } from './env.ts';
 const SECOND = 10n ** 9n;
 const MIB = 1024 ** 2;
-const stripAnsi = (str: string): string => str.replace(/\x1b\[\d+(;\d+)*m/g, '');
 const isRecord = (val: unknown): val is Record<string, unknown> =>
   typeof val === 'object' && val !== null;
-const envFlag = (value: string | undefined): boolean => !!Number(value);
-type Env = Record<string, string | undefined>;
-function wantColor(env: Env = {}, tty = false): boolean {
-  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
-  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
-  if (env.NO_COLOR) return false;
-  if (env.FORCE_COLOR === '0') return false;
-  if (env.CLICOLOR === '0') return false;
-  return tty;
-}
-function colorEnabled(env: Env = isCli ? process.env : {}): boolean {
-  return isCli && wantColor(env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
-}
 const paint = (text: string, code: string): string =>
   colorEnabled() ? `${code}${text}${reset}` : text;
 const headerName = (name: string): string => normalizeLabel(name).toLowerCase();
@@ -116,11 +102,7 @@ const pad = (s: string, len: number, end = true): string => {
   const padding = ' '.repeat(diff);
   return end ? s + padding : padding + s;
 };
-const csvCell = (val: unknown): string => {
-  const cell = stripAnsi(String(val ?? ''));
-  return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
-};
-const printCsvRow = (values: unknown[]): void => console.log(values.map(csvCell).join(','));
+const printCsvRow = (values: unknown[]): void => console.log(csvRow(values));
 
 const normalizeLabel = (label: string): string =>
   label.replace(/\bMiB\/(?:sec|s)\b/g, 'mib/sec').replace(/\bmib\/s\b/g, 'mib/sec');
@@ -211,7 +193,7 @@ function filterMatchesValue(value: string, keywords: string | string[] | undefin
 }
 
 function matrixOpts(opts: CompareOpts): CompareOpts {
-  const env = isCli ? process.env : {};
+  const env = cliProcess()?.env || {};
   const csv = envFlag(env.JSBT_CSV) || !colorEnabled(env);
   return {
     filter: env.JSBT_FILTER,
@@ -408,7 +390,7 @@ function columnsFor(
 }
 
 function loadPrevious(file: string | undefined): PreviousData | undefined {
-  if (!file || !isCli) return undefined;
+  if (!file || !cliProcess()) return undefined;
   const revive = (_key: string, value: unknown): unknown =>
     isRecord(value) && typeof value.__BigInt__ === 'string' ? BigInt(value.__BigInt__) : value;
   const data = JSON.parse(readFileSync(file, 'utf8'), revive) as { data?: PreviousData };

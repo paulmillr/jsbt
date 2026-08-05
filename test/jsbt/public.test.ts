@@ -1,6 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
 import { resolve } from 'node:path';
-import { dtsPath, exportPath, jsPath, publicEntries, readPkg } from '../../src/jsbt/public.ts';
+import { dtsPath, exportPath, jsPath, publicEntries, readPkg } from '../../src/jsbt.ts';
 import { should } from '../../src/test.ts';
 
 should('public path helpers walk nested export condition objects', () => {
@@ -36,13 +36,14 @@ should('exportPath walks export maps with caller-owned leaf policy', () => {
 });
 
 should('readPkg normalizes export maps and legacy package entries', () => {
-  deepStrictEqual(readPkg(resolve('test/jsbt/vectors/check/pass-root/package.json')), {
+  deepStrictEqual(readPkg(resolve('test/jsbt-check/vectors/check/pass-root/package.json')), {
     exports: { '.': 'index.js' },
     name: '@jsbt-test/check-root',
     self: false,
     types: 'index.d.mts',
+    version: '1.0.0',
   });
-  deepStrictEqual(readPkg(resolve('test/jsbt/vectors/jsr/pass-src/package.json')).self, true);
+  deepStrictEqual(readPkg(resolve('test/jsbt-check/vectors/jsr/pass-src/package.json')).self, true);
 });
 
 should('publicEntries lists sorted public JS export entries with package specs', () => {
@@ -60,6 +61,7 @@ should('publicEntries lists sorted public JS export entries with package specs',
         name: '@scope/pkg',
         self: true,
         types: '',
+        version: '1.0.0',
       },
       pkgFile: '/tmp/pkg/package.json',
     }),

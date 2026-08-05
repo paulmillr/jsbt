@@ -3,12 +3,17 @@
   "version": "0.6.1",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
-    "jsbt.bin.js",
-    "jsbt.bin.d.ts",
+    "jsbt.js",
+    "jsbt.d.ts",
+    "jsbt-check.bin.js",
+    "fs-modify.js",
+    "fs-modify.d.ts",
     "bench.js",
     "bench.d.ts",
     "bench-compare.js",
     "bench-compare.d.ts",
+    "env.js",
+    "env.d.ts",
     "test.js",
     "test.d.ts",
     "tsconfig.json",
@@ -16,7 +21,8 @@
     "tsconfig.test.json"
   ],
   "bin": {
-    "jsbt": "jsbt.bin.js"
+    "jsbt": "jsbt.js",
+    "jsbt-check": "jsbt-check.bin.js"
   },
   "devDependencies": {
     "@microsoft/tsdoc": "0.16.0",
@@ -26,14 +32,15 @@
     "typescript": "6.0.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.example.json && node --run bundle:bin && chmod +x jsbt.bin.js",
-    "bundle": "esbuild src/jsbt/index.ts --bundle --platform=node --format=esm --target=node22",
-    "bundle:bin": "node --run bundle -- --define:__JSBT_BUNDLE__=true --outfile=jsbt.bin.js --banner:js='#!/usr/bin/env node'",
-    "clean": "node test/jsbt/clean.ts",
+    "build": "tsc -p tsconfig.example.json && node --run bundle:check && chmod +x jsbt.js jsbt-check.bin.js",
+    "bundle": "esbuild --bundle --platform=node --format=esm --target=node22",
+    "clean": "node test/jsbt-check/clean.ts",
     "format": "npx prettier --write src",
     "test": "node test/index.ts",
+    "test:check": "node test/check.ts",
     "test:bun": "echo 'No bun'",
-    "test:deno": "echo 'No deno'"
+    "test:deno": "echo 'No deno'",
+    "bundle:check": "node --run bundle -- src/jsbt-check/check.ts --define:__JSBT_BUNDLE__=true --define:__JSBT_BIN__='\"jsbt-check\"' --outfile=jsbt-check.bin.js --banner:js='#!/usr/bin/env node'"
   },
   "keywords": [
     "js",
@@ -48,9 +55,9 @@
     "url": "git+https://github.com/paulmillr/jsbt.git"
   },
   "type": "module",
-  "main": "jsbt.bin.js",
-  "module": "jsbt.bin.js",
-  "types": "jsbt/index.d.ts",
+  "main": "jsbt.js",
+  "module": "jsbt.js",
+  "types": "jsbt.d.ts",
   "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "license": "MIT"
