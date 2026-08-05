@@ -10,14 +10,26 @@ on:
         default: ubuntu-26.04-arm
         required: false
         type: string
+      os: # JSON array; pass '["ubuntu-26.04-arm", "macos-latest", "windows-latest"]' for a full OS matrix
+        default: '["ubuntu-26.04-arm"]'
+        required: false
+        type: string
+      node-only: # Skip node_tsc, bun and deno jobs; use with a full OS matrix
+        default: false
+        required: false
+        type: boolean
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   node:
-    name: Node v${{ matrix.node }}
-    runs-on: ${{ inputs.runs-on }}
+    name: Node v${{ matrix.node }} @ ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       matrix:
         node: [22, 24, 26] # LTS
+        os: ${{ fromJSON(inputs.os || '["ubuntu-26.04-arm"]') }} # Fallback for workflow_dispatch, where input defaults don't apply
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,16 +38,17 @@ jobs:
       - name: Use Node.js ${{ matrix.node }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: ${{ matrix.node }}
-      - run: npm install
+      - run: npm ci --ignore-scripts # Block install-time scripts of dependencies
       - run: npm run build --if-present
       - run: npm test
       - run: npm run test:check --if-present
   node_tsc:
     name: Node v${{ matrix.node }} (compiled)
+    if: ${{ !inputs.node-only }}
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
     strategy:
       matrix:
         node: [26] # May 2026 LTS
@@ -47,15 +60,16 @@ jobs:
       - name: Use Node.js ${{ matrix.node }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: ${{ matrix.node }}
-      - run: npm install
+      - run: npm ci --ignore-scripts # Block install-time scripts of dependencies
       - run: npm run build --if-present
       - run: npm run test:tsc --if-present
   bun:
     name: Bun
+    if: ${{ !inputs.node-only }}
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,7 +83,9 @@ jobs:
       - run: bun run --if-present test:bun
   deno:
     name: Deno
+    if: ${{ !inputs.node-only }}
     runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,9 +94,17 @@ jobs:
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: lts
-      - run: grep -q 'test:deno' package.json && deno install || exit 0
-        name: Run deno install if test:deno is present
-      - run: grep -q 'build' package.json && deno task build || exit 0
-        name: Run build if present
-      - run: grep -q 'test:deno' package.json && deno task test:deno || exit 0
-        name: Run test:deno if present
+      - name: Detect package.json scripts
+        id: scripts
+        run: |
+          grep -q 'test:deno' package.json && echo "deno=1" >> "$GITHUB_OUTPUT" || true
+          grep -q '"build"' package.json && echo "build=1" >> "$GITHUB_OUTPUT" || true
+      - name: Run deno install
+        if: steps.scripts.outputs.deno
+        run: deno install
+      - name: Run build
+        if: steps.scripts.outputs.deno && steps.scripts.outputs.build
+        run: deno task build
+      - name: Run test:deno
+        if: steps.scripts.outputs.deno
+        run: deno task test:deno

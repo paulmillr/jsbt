@@ -2,8 +2,7 @@ name: Publish release
 on:
   release:
     types: [created]
-  workflow_call:
-  workflow_dispatch:
+  workflow_call: # Consumers call this from their own release workflows
 permissions:
   contents: read
   id-token: write # For OIDC Trusted Publishing
@@ -11,6 +10,7 @@ jobs:
   publish-npm-jsr: # Publish to NPM; also to JSR if jsr.json exists
     name: Publish to NPM and JSR
     runs-on: ubuntu-26.04-arm
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -20,17 +20,22 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           node-version: 24.19.0 # Relevant as per May 2026, must be specific for determinism.
           package-manager-cache: false # Mitigate cache poisoning
-      - run: npm install -g npm@12 # For staged publishing
-      - run: npm ci
+      - run: npm install -g npm@12.0.2 # For staged publishing
+      - run: npm ci --ignore-scripts # Block install-time scripts of dependencies
       - run: npm run build --if-present
       - name: Ensure NPM version has not been published yet
         run: npm publish --dry-run
       - name: Ensure NPM version matches git tag
+        env:
+          GIT_TAG: ${{ github.event.release.tag_name }} # Via env to avoid shell injection
         run: |
           VER1=$(node -e 'console.log(require("./package.json").version)')
-          VER2=${{ github.event.release.tag_name }}
-          echo "npm $VER1, git $VER2"
-          [[ $VER1 == $VER2 ]] || { echo "NPM-Git version mismatch, exiting..."; exit 1; }
+          echo "npm $VER1, git $GIT_TAG"
+          if [ -z "$GIT_TAG" ]; then
+            echo "No git tag (manual or workflow_call run), skipping check"
+          else
+            [[ $VER1 == "$GIT_TAG" ]] || { echo "NPM-Git version mismatch, exiting..."; exit 1; }
+          fi
       - name: Publish to JSR if jsr.json exists
         run: | # Use flag --allow-slow-types if it's present in ./jsr.json
           VER1=$(node -e 'console.log(require("./package.json").version)')
@@ -38,7 +43,7 @@ jobs:
           echo "npm $VER1, jsr $VER2"
           [[ $VER1 == $VER2 ]] || { echo "NPM-JSR version mismatch, exiting..."; exit 1; }
           SLOW_TYPES=$(node -e 'console.log(require("./jsr.json").allowSlowTypes ? "--allow-slow-types" : "")')
-          npm install -g jsr
+          npm install -g jsr@0.14.3
           jsr publish $SLOW_TYPES
         if: ${{ hashFiles('jsr.json') != '' }}
       - run: npm stage publish --access public

@@ -3,15 +3,17 @@ on:
   workflow_call:
     inputs:
       npm-task:
-        default: test:slow
         required: true
         type: string
+permissions:
+  contents: read
 env:
   MSHOULD_FAST: 1
 jobs:
   slow:
     name: Run custom TS tests
     runs-on: ubuntu-26.04
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -19,9 +21,8 @@ jobs:
           submodules: true
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          registry-url: "https://registry.npmjs.org"
           cache: npm
           node-version: 26
-      - run: npm install
+      - run: npm ci --ignore-scripts # Block install-time scripts of dependencies
       - run: npm run build --if-present
       - run: npm run ${{ inputs.npm-task }}
