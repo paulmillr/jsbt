@@ -1,138 +1,146 @@
-// Only shipped place allowed to run `npm install`, write temp files, or delete them.
-// Mutations outside the OS temp directory are always logged.
+// The only shipped place allowed to mutate the filesystem or run `npm install`.
+// Every mutation happens inside a `jsbt-*` OS temp dir, assembled here — mostly via
+// symlinks; npm runs only on a cold esbuild cache. jsbt never writes into user repos.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
-const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
-const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
-const BUNDLE_PREFIX = 'jsbt-bundle-';
-const CHECK_PREFIX = 'jsbt-check-';
-const NPM_INSTALL_ARGS = ['install', '--prefer-offline'] as const;
+const EXTS = ['.cjs', '.js', '.json', '.mjs', '.ts'];
+// Never lifecycle scripts or lockfiles: installs land in throwaway jsbt temp dirs.
+const NPM_INSTALL_ARGS = [
+  'install',
+  '--prefer-offline',
+  '--ignore-scripts',
+  '--no-package-lock',
+] as const;
+// Kept in sync with the esbuild devDependency of @paulmillr/jsbt.
+const RUN_ESBUILD_SPEC = '^0.28.1';
+
 const err = (msg: string): never => {
   throw new Error(msg);
 };
-const inOsTmpDir = (path: string): boolean => {
+const inJsbtTmp = (path: string): boolean => {
   if (!isAbsolute(path)) return false;
   const rel = relative(tmpdir(), path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false;
+  return (rel.split(/[\\/]/)[0] || '').startsWith('jsbt-');
 };
-const shouldLog = (path: string): boolean => !inOsTmpDir(path);
-const inBuild = (path: string): boolean =>
-  path.endsWith('/test/build') || path.includes('/test/build/');
-const inPrefixedTmp = (path: string, prefix: string): boolean => {
-  if (!inOsTmpDir(path)) return false;
-  const rel = relative(tmpdir(), path);
-  return (rel.split(/[\\/]/)[0] || '').startsWith(prefix);
+export const assertTemp = (path: string, checkExt = false): string => {
+  if (!isAbsolute(path)) err(`expected absolute path: ${path}`);
+  if (!inJsbtTmp(path)) err(`expected jsbt temp path: ${path}`);
+  if (checkExt && !EXTS.some((ext) => basename(path).endsWith(ext)))
+    err(`refusing unexpected extension: ${path}`);
+  return path;
 };
-const inBundleTmp = (path: string): boolean => inPrefixedTmp(path, BUNDLE_PREFIX);
-const inCheckTmp = (path: string): boolean => inPrefixedTmp(path, CHECK_PREFIX);
-const inWorkDir = (path: string): boolean => inBuild(path) || inBundleTmp(path) || inCheckTmp(path);
-const workDirError = (path: string): string => `expected test/build or jsbt temp path: ${path}`;
-export const assertAllowed = (file: string): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(workDirError(file));
-  const name = basename(file);
-  if (!EXTS.some((ext) => name.endsWith(ext))) err(`refusing unexpected extension: ${file}`);
-  if (!PREFIXES.some((prefix) => name.startsWith(prefix)))
-    err(`refusing unexpected prefix: ${file}`);
-  return file;
-};
+
+export type TempKind = 'bundle' | 'check' | 'size';
+export const tempDir = (kind: TempKind): string => mkdtempSync(join(tmpdir(), `jsbt-${kind}-`));
+export const rmTempDir = (dir: string): boolean => (
+  rmSync(assertTemp(dir), { force: true, recursive: true }),
+  true
+);
+
 export const write = (file: string, data: string | Uint8Array): string => (
-  mkdirSync(dirname(assertAllowed(file)), { recursive: true }),
+  mkdirSync(dirname(assertTemp(file, true)), { recursive: true }),
   writeFileSync(file, data),
-  shouldLog(file) && console.log(`write\t${file}`),
   file
 );
 export const writePkg = (file: string, data: string | Uint8Array): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
   if (basename(file) !== 'package.json') err(`expected package.json path: ${file}`);
-  mkdirSync(dirname(file), { recursive: true });
+  mkdirSync(dirname(assertTemp(file)), { recursive: true });
   writeFileSync(file, data);
-  if (shouldLog(file)) console.log(`write\t${file}`);
-  return file;
-};
-export const writeBundleInput = (file: string, data: string | Uint8Array): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(workDirError(file));
-  if (basename(file) !== 'input.js') err(`expected input.js path: ${file}`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, data);
-  if (shouldLog(file)) console.log(`write\t${file}`);
   return file;
 };
 export const rm = (file: string): boolean => (
-  rmSync(assertAllowed(file), { force: true }),
-  shouldLog(file) && console.log(`delete\t${file}`),
+  rmSync(assertTemp(file, true), { force: true }),
   true
 );
+
 export const npmInstall = (dir: string): void => {
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(workDirError(dir));
-  const log = shouldLog(dir);
-  if (log) console.log(`install\t${dir}`);
-  execFileSync('npm', [...NPM_INSTALL_ARGS], {
-    cwd: dir,
-    stdio: log ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-  });
+  assertTemp(dir);
+  try {
+    // --loglevel=error beats the quiet npm_config_loglevel env, so failures stay explained.
+    execFileSync('npm', [...NPM_INSTALL_ARGS, '--loglevel=error'], {
+      cwd: dir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr || '').trim();
+    err(`npm install failed${stderr ? `:\n${stderr}` : ''}`);
+  }
 };
-export const sweep = (dir: string): string[] => {
-  if (!existsSync(dir)) return [];
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(workDirError(dir));
-  const out: string[] = [];
-  const walk = (cur: string): void => {
-    for (const ent of readdirSync(cur, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    )) {
-      const file = join(cur, ent.name);
-      if (ent.isDirectory()) walk(file);
-      else if (
-        EXTS.some((ext) => ent.name.endsWith(ext)) &&
-        PREFIXES.some((prefix) => ent.name.startsWith(prefix))
-      ) {
-        out.push(file);
-      }
-    }
-  };
-  walk(dir);
-  for (const file of out) rm(file);
-  return out;
+
+// Creates a directory symlink inside a jsbt temp dir; existing links are left alone.
+const linkDir = (target: string, linkPath: string): void => {
+  assertTemp(linkPath);
+  if (existsSync(linkPath)) return;
+  mkdirSync(dirname(linkPath), { recursive: true });
+  try {
+    symlinkSync(target, linkPath, 'junction');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
 };
-export const sweepTemps = (cwd: string): void => {
-  sweep(cwd);
+// One esbuild install per machine and pinned version, primed by npm on first use.
+export const esbuildCacheModules = (): string => {
+  const dir = join(tmpdir(), `jsbt-esbuild-${RUN_ESBUILD_SPEC.replace(/[^\w.]+/g, '')}`);
+  const modules = join(dir, 'node_modules');
+  if (existsSync(join(modules, 'esbuild'))) return modules;
+  writePkg(
+    join(dir, 'package.json'),
+    `${JSON.stringify({ dependencies: { esbuild: RUN_ESBUILD_SPEC }, private: true }, null, 2)}\n`
+  );
+  try {
+    npmInstall(dir);
+  } catch (error) {
+    // A concurrent prime may have won the race; only fail when esbuild is truly absent.
+    if (!existsSync(join(modules, 'esbuild'))) throw error;
+  }
+  return modules;
 };
-export const bundleTempDir = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), BUNDLE_PREFIX));
-  if (shouldLog(dir)) console.log(`mkdir\t${dir}`);
-  return dir;
+// Assembles the run dir's node_modules via symlinks (matching how npm links `file:`
+// deps), so the hot path never spawns npm. Falls back to a real install on any failure.
+export const installRunDeps = (cwd: string, name: string, dir: string): void => {
+  writePkg(
+    join(assertTemp(dir), 'package.json'),
+    `${JSON.stringify(
+      {
+        dependencies: { [name]: `file:${cwd}`, esbuild: RUN_ESBUILD_SPEC },
+        private: true,
+        type: 'module',
+      },
+      null,
+      2
+    )}\n`
+  );
+  const modules = join(dir, 'node_modules');
+  if (existsSync(join(modules, name)) && existsSync(join(modules, 'esbuild'))) return;
+  try {
+    const cache = esbuildCacheModules();
+    linkDir(cwd, join(modules, name));
+    linkDir(join(cache, 'esbuild'), join(modules, 'esbuild'));
+    const scoped = join(cache, '@esbuild');
+    if (existsSync(scoped))
+      for (const ent of readdirSync(scoped))
+        linkDir(join(scoped, ent), join(modules, '@esbuild', ent));
+  } catch {
+    npmInstall(dir);
+  }
 };
-export const rmBundleTempDir = (dir: string): boolean => {
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inBundleTmp(dir)) err(`expected jsbt bundle temp path: ${dir}`);
-  rmSync(dir, { force: true, recursive: true });
-  if (shouldLog(dir)) console.log(`delete\t${dir}`);
-  return true;
-};
-export const checkTempDir = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), CHECK_PREFIX));
-  if (shouldLog(dir)) console.log(`mkdir\t${dir}`);
-  return dir;
-};
-export const rmCheckTempDir = (dir: string): boolean => {
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inCheckTmp(dir)) err(`expected jsbt check temp path: ${dir}`);
-  rmSync(dir, { force: true, recursive: true });
-  if (shouldLog(dir)) console.log(`delete\t${dir}`);
-  return true;
-};
+
 export const __TEST: {
-  inOsTmpDir: (path: string) => boolean;
+  inJsbtTmp: (path: string) => boolean;
   npmInstallArgs: () => string[];
-  shouldLogPath: (path: string) => boolean;
 } = {
-  inOsTmpDir: inOsTmpDir,
+  inJsbtTmp: inJsbtTmp,
   npmInstallArgs: () => [...NPM_INSTALL_ARGS],
-  shouldLogPath: shouldLog,
 };

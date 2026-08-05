@@ -6,7 +6,7 @@ node_modules
 *.d.ts.map
 /test/build
 /test/compiled
-/jsbt
+/jsbt-check
 /test/jsbt/build/patterns/
 /test/jsbt/vectors/npm-check/test/build
 /test/jsbt/vectors/errors/pass/test/

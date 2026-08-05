@@ -1,0 +1,7 @@
+{
+  "name": "@jsbt-test/cjs-no-exports",
+  "version": "1.0.0",
+  "main": "./index.js",
+  "private": true,
+  "sideEffects": false
+}

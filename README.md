@@ -6,9 +6,10 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 1. [test](#test) 500-line simplicity with mocha-like syntax and parallelism
 2. [benchmark](#benchmark) with nanosecond resolution
-3. [CLI](#cli) to create single-file bundles; and check project for common mistakes
-4. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
-5. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
+3. [CLI](#cli) to create single-file bundles and measure bundle sizes
+4. [jsbt-check](#jsbt-check) to check project for common mistakes
+5. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
+6. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
 
 ## Usage
 
@@ -169,65 +170,94 @@ ENV variables:
 
 ## 3. CLI
 
-jsbt CLI does single-file bundling and executes audit helpers.
+The `jsbt` binary is small and fast: single-file bundles (`jsbt bundle`) and
+size stats (`jsbt size`). The heavy audit machinery lives in the separate
+[`jsbt-check`](#jsbt-check) binary, documented below.
 
 ### bundle
 
-A few helpers on top of [esbuild](https://esbuild.github.io).
-
-1. Gathers all package exports
-2. Gathers all dependencies
-3. Creates one file, bundling everything in it, declaring a global variable with package name
-4. Prints file stats
+Writes a single-file IIFE bundle (built with [esbuild](https://esbuild.github.io),
+declaring a global variable) to stdout — nothing else. Selectors mirror `jsbt size`:
+whole package by default, or one `module/export` path, `npm:` ref, or `--input`
+file; several selectors emit their combined bundle.
 
 ```
-$ jsbt bundle
-11d1900e99f3aa945603bb5e7d82bdd9ec6ddf5d30e2fcab69b836840cff76d2 test/build/out/noble-hashes.js
-0be3876ff0816c44d21a401e6572fdb76d06012c760a23a5cb771c6f612106f5 test/build/out/noble-hashes.min.js
-
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
+$ jsbt bundle > full.js
+$ jsbt bundle sha2.js/sha256 > sha256.js
+$ jsbt bundle --minify sha2.js/sha256 > sha256.min.js
+$ jsbt bundle --checksum sha2.js/sha256
+b7c53c1de1f8cd8b6d2ffa090a1eaf0d017e772bee5ff3e96b1754e3cc7f70e8
+$ jsbt bundle npm:@noble/hashes@1.8.0/sha2.js/sha256
+$ jsbt bundle --input=./input.js
+$ jsbt bundle --list
 ```
 
-bundle command operates either in 1) `test/build` of the project 2) system-wide tmp directory.
+### size
 
-There are following options:
+Measures min+gzip bundle sizes of every public export: a bundle-size benchmark.
+It always prints stats, even with `JSBT_QUIET` (the unused-code audit lives in
+`jsbt-check size`). In non-interactive environments
+(LLM agents, pipes, CI logs) it prints CSV instead; force with `JSBT_CSV=1`.
+Measurement is fully in-memory; use `jsbt bundle <selector> > out.js` to obtain
+the actual bundle bytes.
+Bundling needs `esbuild` resolvable near the project (a dependency in scope of
+the project's `node_modules` lookup chain); otherwise the globally installed one
+(`npm install -g esbuild`) is used. Nothing is installed into the project and
+`test/build` is never touched: `npm:` refs install into a `jsbt-size-*` OS temp
+directory, and exact pinned versions cache machine-wide under `jsbt-refs`.
 
 ```
-$ jsbt bundle --dir=test/build
-# (same as jsbt bundle, but uses specific dir instead of defaults)
+$ jsbt size
 
-$ jsbt bundle --stats
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
+$ jsbt size sha3/sha3_384
+$ jsbt size sha3/sha3_384 utils/bytesToHex
+# (only stats for the listed module/export paths; more than one entry also
+#  produces a combined `selection` row)
+
+$ jsbt size --input=./input.js
+# (measures a single file directly; no package.json required)
+
+$ jsbt size sha2.js/sha256 npm:@noble/hashes@1.8.0/sha2.js/sha256
+$ jsbt size @noble/curves@2.2.0/secp256k1.js/secp256k1 # npm: prefix optional for @scoped packages
+$ jsbt size sha2.js/sha256 npm:hash-wasm/sha256
+# (npm: selectors measure other packages, or other versions of this one;
+#  refs install into the temp dir from the registry, offline-first)
+
+$ jsbt size --list
+$ jsbt size --list sha3
+# (prints selectable module/export paths without bundling anything)
+
+$ jsbt size --sort
+# (unsorted by default; --sort prints module bundles first, then individual
+#  exports, each group ascending by gzip size)
 ```
 
-### check
+With `"bench:size": "npx --no @paulmillr/jsbt size"` in `package.json`, run it via `npm run bench:size`.
+
+## 4. jsbt-check
 
 Runs opinionated code quality checks. Uses typescript parsing underneath.
 Temporary build artifacts are created in a per-run OS temp directory and removed after the summary.
 
 ```
-jsbt check [--project=<directory>]
-jsbt check [--project=<directory>] bigint
-jsbt check [--project=<directory>] bytes
-jsbt check [--project=<directory>] comments
-jsbt check [--project=<directory>] errors
-jsbt check [--project=<directory>] importtime
-jsbt check [--project=<directory>] jsr
-jsbt check [--project=<directory>] jsrpublish
-jsbt check [--project=<directory>] mutate
-jsbt check [--project=<directory>] patterns
-jsbt check [--project=<directory>] readme
-jsbt check [--project=<directory>] treeshake
-jsbt check [--project=<directory>] tsdoc
-jsbt check [--project=<directory>] typeimport
-jsbt check-install <package.json>
+jsbt-check
+jsbt-check bigint
+jsbt-check bytes
+jsbt-check comments
+jsbt-check errors
+jsbt-check importtime
+jsbt-check jsdoc
+jsbt-check jsr
+jsbt-check jsrpublish
+jsbt-check mutate
+jsbt-check patterns
+jsbt-check readme
+jsbt-check size
+jsbt-check tsdoc
+jsbt-check typeimport
 ```
 
-With `"check": "npx --no @paulmillr/jsbt check"` in `package.json`, selectors can be run
+With `"check": "jsbt-check"` in `package.json`, selectors can be run
 through npm:
 
 ```
@@ -241,7 +271,7 @@ npm run check jsrpublish
 npm run check mutate
 npm run check patterns
 npm run check readme
-npm run check treeshake
+npm run check size
 npm run check tsdoc
 npm run check typeimport
 ```
@@ -258,12 +288,11 @@ Subcommand summary for `check <subcommand>`:
 * `mutate`: detect mutation hazards in public runtime behavior.
 * `patterns`: report source patterns that are risky for published packages.
 * `readme`: type-check and run runnable README examples.
-* `treeshake`: bundle public exports and report retained unused code.
+* `size`: bundle public exports, measure bundle sizes, report retained unused code.
 * `tsdoc`: audit public declaration docs and examples.
 * `typeimport`: verify imports that should be type-only.
-* `check-install`: rewrite package check scripts to the current unified form.
 
-## 4. Workflows
+## 5. Workflows
 
 Secure GitHub CI configs for testing & publishing JS packages.
 
@@ -307,7 +336,7 @@ jobs:
       id-token: write
 ```
 
-## 5. tsconfig
+## 6. tsconfig
 
 Strict typescript v6+ configs, friendly to type stripping. Uses `isolatedDeclarations` and `verbatimModuleSyntax`
 to ensure node.js is able to natively run typescript files without compilation.
@@ -330,6 +359,21 @@ Inheritable in the following way:
     "node_modules"
   ]
 }
+```
+
+## Troubleshooting
+
+**Pager keys stop working after `jsbt bundle … | bat`.** Node snapshots the
+terminal state at startup and restores it on exit. When a pager takes a moment
+to start (bat loads syntax assets before spawning `less`), the restore lands
+*after* the pager switched the terminal to raw mode, knocking it back to
+line-buffered input — keystrokes queue up instead of reaching the pager. This
+affects any Node CLI piped into `bat`; plain `less` usually wins the race.
+Fix a stuck pager with `Ctrl-Z` then `fg` (it re-initializes the terminal), or
+avoid the race entirely by detaching jsbt from the terminal:
+
+```sh
+jsbt bundle sha2.js/sha256 </dev/null 2>/dev/null | bat -l js
 ```
 
 ## License

@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "x": "file:/home/user/Developer/personal/jsbt/test/jsbt-check/vectors/check/pass-root",
+    "esbuild": "^0.28.1"
+  },
+  "private": true,
+  "type": "module"
+}

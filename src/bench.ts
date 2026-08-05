@@ -24,42 +24,15 @@ export type BenchStats = {
 };
 export type CbFn = (iter?: number) => {};
 const maxSamples = 2 ** 26;
-const _c = String.fromCharCode(27);
-const red = _c + '[31m';
-const green = _c + '[32m';
-const blue = _c + '[34m';
-const reset = _c + '[0m';
-type Env = Record<string, string | undefined>;
-const isCli =
-  // @ts-ignore
-  typeof process !== 'undefined';
-function wantColor(env: Env = {}, tty = false): boolean {
-  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
-  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
-  if (env.NO_COLOR) return false;
-  if (env.FORCE_COLOR === '0') return false;
-  if (env.CLICOLOR === '0') return false;
-  return tty;
-}
-const envFlag = (value: string | undefined): boolean => !!Number(value);
-const colorOn =
-  // @ts-ignore
-  isCli && wantColor(process.env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
-const csvOn =
-  // @ts-ignore
-  isCli && (envFlag(process.env?.JSBT_CSV) || !colorOn);
-const benchFilter =
-  // @ts-ignore
-  isCli ? process.env?.JSBT_FILTER || '' : '';
+import { cliProcess, color, colorEnabled, csvEnabled, csvRow, paint as paintBase } from './env.ts';
+const { blue, green, red } = color;
+const colorOn = colorEnabled();
+const csvOn = csvEnabled();
+const benchFilter = cliProcess()?.env?.JSBT_FILTER || '';
 function paint(text: string, code: string): string {
-  return colorOn ? `${code}${text}${reset}` : text;
+  return paintBase(text, code, colorOn);
 }
-const stripAnsi = (str: string): string => str.replace(/\x1b\[\d+(;\d+)*m/g, '');
-const csvCell = (val: unknown): string => {
-  const cell = stripAnsi(String(val ?? ''));
-  return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
-};
-const printCsvRow = (values: unknown[]): void => printOutput(values.map(csvCell).join(','));
+const printCsvRow = (values: unknown[]): void => printOutput(csvRow(values));
 const units = [
   { symbol: 'min', val: 60n * 10n ** 9n, threshold: 5n },
   { symbol: 's', val: 10n ** 9n, threshold: 10n },
