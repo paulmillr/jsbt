@@ -38,7 +38,7 @@ ENV variables:
 - `JSBT_FAST=3` uses three workers.
 - `JSBT_FAST=-1` uses all cores minus one.
 - `JSBT_FAST=0.5` uses half of available cores.
-- `JSBT_QUIET=1` enables the dot reporter.
+- `JSBT_QUIET=1` enables the quiet (dot) reporter.
 - `JSBT_FILTER=math/adds` runs tests whose full path contains the value.
 
 ```js
