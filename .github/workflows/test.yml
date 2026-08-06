@@ -64,7 +64,17 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts # Block install-time scripts of dependencies
       - run: npm run build --if-present
-      - run: npm run test:tsc --if-present
+      - name: Detect package.json scripts
+        id: scripts
+        run: |
+          grep -q '"test:tsc"' package.json && echo "tsc=1" >> "$GITHUB_OUTPUT" || true
+          [ -f test/tsconfig.json ] && echo "tsconfig=1" >> "$GITHUB_OUTPUT" || true
+      - name: Run test:tsc
+        if: steps.scripts.outputs.tsc
+        run: npm run test:tsc
+      - name: Run test (tsc, derived from test/tsconfig.json)
+        if: ${{ !steps.scripts.outputs.tsc && steps.scripts.outputs.tsconfig }}
+        run: cd test && npx tsc && node compiled/test/index.js
   bun:
     name: Bun
     if: ${{ !inputs.node-only }}
@@ -78,9 +88,19 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
+      - name: Detect package.json scripts
+        id: scripts
+        run: |
+          grep -q '"test:bun"' package.json && echo "bun=1" >> "$GITHUB_OUTPUT" || true
+          echo "test_file=$(node -e "const s=(require('./package.json').scripts||{}).test||''; const m=s.match(/^node\s+(.+)$/); console.log(m?m[1]:'')")" >> "$GITHUB_OUTPUT"
       - run: bun install
       - run: bun run --if-present build
-      - run: bun run --if-present test:bun
+      - name: Run test:bun
+        if: steps.scripts.outputs.bun
+        run: bun run test:bun
+      - name: Run test (bun, derived from "test" script)
+        if: ${{ !steps.scripts.outputs.bun && steps.scripts.outputs.test_file }}
+        run: bun ${{ steps.scripts.outputs.test_file }}
   deno:
     name: Deno
     if: ${{ !inputs.node-only }}
@@ -97,8 +117,9 @@ jobs:
       - name: Detect package.json scripts
         id: scripts
         run: |
-          grep -q 'test:deno' package.json && echo "deno=1" >> "$GITHUB_OUTPUT" || true
+          grep -q '"test:deno"' package.json && echo "deno=1" >> "$GITHUB_OUTPUT" || true
           grep -q '"build"' package.json && echo "build=1" >> "$GITHUB_OUTPUT" || true
+          echo "test_file=$(node -e "const s=(require('./package.json').scripts||{}).test||''; const m=s.match(/^node\s+(.+)$/); console.log(m?m[1]:'')")" >> "$GITHUB_OUTPUT"
       - name: Run deno install
         if: steps.scripts.outputs.deno
         run: deno install
@@ -108,3 +129,6 @@ jobs:
       - name: Run test:deno
         if: steps.scripts.outputs.deno
         run: deno task test:deno
+      - name: Run test (deno, derived from "test" script)
+        if: ${{ !steps.scripts.outputs.deno && steps.scripts.outputs.test_file }}
+        run: deno --allow-env --allow-read ${{ steps.scripts.outputs.test_file }}
