@@ -1,6 +1,7 @@
-// Only shipped place allowed to write temp files, assemble run-dir node_modules, or delete them.
-// Mutations outside the OS temp directory are always logged.
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+// Only shipped place allowed to write temp files, assemble run-dir node_modules, or delete
+// them. Mutations outside the OS temp directory are always logged.
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
@@ -47,15 +48,46 @@ export const rm = (file: string): boolean => (
   shouldLog(file) && console.log(`delete\t${file}`),
   true
 );
+// Global npm roots are probed once per process; the global install is user-managed
+// (`npm install -g esbuild`), jsbt never installs anything itself. `npm root -g` output
+// alone is not trusted blindly (npm redacts UUID-like path segments), so prefix-derived
+// candidates are checked too; each candidate is verified with existsSync.
+let globalRootCache: string[] | undefined;
+const npmGlobalRoots = (): string[] => {
+  if (globalRootCache) return globalRootCache;
+  const roots: string[] = [];
+  const addPrefix = (prefix?: string) => {
+    if (prefix) roots.push(join(prefix, 'lib', 'node_modules'), join(prefix, 'node_modules'));
+  };
+  addPrefix(process.env.npm_config_prefix);
+  try {
+    const out = execFileSync('npm', ['root', '-g'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out) roots.push(out);
+  } catch {}
+  // npm's default global prefix derives from the running node binary.
+  addPrefix(dirname(dirname(process.execPath)));
+  return (globalRootCache = roots);
+};
+const globalEsbuildDir = (): string | undefined => {
+  for (const root of npmGlobalRoots()) {
+    const dir = join(root, 'esbuild');
+    if (existsSync(dir)) return dir;
+  }
+  return undefined;
+};
 // `esbuild` is provided automatically: examples and treeshake never declare it. Prefer
-// the checked project's own install; fall back to the copy next to jsbt itself.
+// the checked project's own install, then the copy resolvable next to jsbt itself, then
+// a global `npm install -g esbuild`.
 const esbuildDir = (cwd: string): string | undefined => {
   const local = join(cwd, 'node_modules', 'esbuild');
   if (existsSync(local)) return local;
   try {
     return dirname(createRequire(import.meta.url).resolve('esbuild/package.json'));
   } catch {
-    return undefined;
+    return globalEsbuildDir();
   }
 };
 const linkDep = (target: string, link: string): void => {

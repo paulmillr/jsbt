@@ -192,7 +192,9 @@ directory. Its `node_modules` is assembled from symlinks — nothing is fetched 
 }
 ```
 
-`esbuild` (used by `treeshake`) is provided automatically and must not be listed.
+`esbuild` (used by `treeshake`) is provided automatically and must not be listed: it is
+resolved from the project's `node_modules`, from the copy next to jsbt itself, or from a
+global install. If none is found, run `npm install -g esbuild`.
 
 ```
 jsbt-check [--project=<directory>]

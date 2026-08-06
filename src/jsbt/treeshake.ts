@@ -163,11 +163,21 @@ const loadDepsFrom = (pkgFile: string, esbuildPkgFile: string): Deps => {
 };
 const loadDeps = (pkgFile: string): Deps => loadDepsFrom(pkgFile, pkgFile);
 const loadRunDeps = (pkgFile: string, esbuildPkgFile: string, fallbackPkgFile: string): Deps => {
+  const missingEsbuild = (error: unknown): boolean =>
+    /missing esbuild near /.test((error as Error).message);
   try {
     return loadDepsFrom(pkgFile, esbuildPkgFile);
   } catch (error) {
-    if (!/missing esbuild near /.test((error as Error).message)) throw error;
-    return loadDepsFrom(pkgFile, fallbackPkgFile);
+    if (!missingEsbuild(error)) throw error;
+    try {
+      return loadDepsFrom(pkgFile, fallbackPkgFile);
+    } catch (fallbackError) {
+      if (!missingEsbuild(fallbackError)) throw fallbackError;
+      return err(
+        'missing esbuild for treeshake: install it globally with `npm install -g esbuild`, ' +
+          'or add it to devDependencies'
+      );
+    }
   }
 };
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
