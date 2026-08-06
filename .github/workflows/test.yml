@@ -120,11 +120,9 @@ jobs:
           grep -q '"test:deno"' package.json && echo "deno=1" >> "$GITHUB_OUTPUT" || true
           grep -q '"build"' package.json && echo "build=1" >> "$GITHUB_OUTPUT" || true
           echo "test_file=$(node -e "const s=(require('./package.json').scripts||{}).test||''; const m=s.match(/^node\s+(.+)$/); console.log(m?m[1]:'')")" >> "$GITHUB_OUTPUT"
-      - name: Run deno install
-        if: steps.scripts.outputs.deno
-        run: deno install
+      - run: deno install
       - name: Run build
-        if: steps.scripts.outputs.deno && steps.scripts.outputs.build
+        if: steps.scripts.outputs.build
         run: deno task build
       - name: Run test:deno
         if: steps.scripts.outputs.deno
