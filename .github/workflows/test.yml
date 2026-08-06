@@ -23,7 +23,7 @@ permissions:
   contents: read
 jobs:
   node:
-    name: Node v${{ matrix.node }} @ ${{ matrix.os }}
+    name: Node v${{ matrix.node }}${{ matrix.os != 'ubuntu-26.04-arm' && format(' @ {0}', matrix.os) || '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
