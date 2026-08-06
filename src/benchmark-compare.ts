@@ -7,8 +7,8 @@
  * @module
  */
 import { readFileSync } from 'node:fs';
-import type { BenchStats } from './bench.ts';
-import { utils } from './bench.ts';
+import type { BenchStats } from './benchmark.ts';
+import { utils } from './benchmark.ts';
 const { benchmarkRaw, formatDuration } = utils;
 
 const _c = String.fromCharCode(27);

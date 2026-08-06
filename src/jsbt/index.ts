@@ -31,9 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { checkTempDir, rmCheckTempDir } from '../fs-modify.ts';
 import { runCli as runBigInt } from './bigint.ts';
-import { runCli as runBuild } from './bundle.ts';
 import { runCli as runBytes } from './bytes.ts';
-import { runCli as runCheckInstall } from './check-install.ts';
 import { runCli as runComments } from './comments.ts';
 import { runCli as runErrors } from './errors.ts';
 import { runCli as runImportTime } from './importtime.ts';
@@ -82,7 +80,7 @@ type Capture = {
 type TimedCapture = Capture & { ms: number };
 type Pick = { count: number; fatal: boolean; hard?: boolean; lines: string[] };
 type SharedIssue = { count: number; fatal: boolean; lines: string[] };
-type CmdRun = (argv: string[], opts: Opts) => Promise<void>;
+// type CmdRun = (argv: string[], opts: Opts) => Promise<void>;
 type CheckHead =
   | 'bytes'
   | 'comments'
@@ -697,22 +695,9 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   }
 };
 
-const cmdRun = {
-  check: runCheck,
-  'check-install': (argv, opts) => runCheckInstall(argv, { cwd: opts.cwd }),
-  bundle: runBuild,
-} satisfies Record<string, CmdRun>;
-type Cmd = keyof typeof cmdRun;
-const COMMANDS = new Set<Cmd>(Object.keys(cmdRun) as Cmd[]);
-const cmd = (name: string): Cmd | undefined =>
-  COMMANDS.has(name as Cmd) ? (name as Cmd) : undefined;
-
 export const runCli = async (argv: string[], opts: Opts = {}): Promise<void> => {
-  const [head, ...rest] = argv;
-  if (!head || head === '--help' || head === '-h') return console.log(usage);
-  const sub = cmd(head);
-  if (!sub) throw new Error(`unknown jsbt command: ${head}\n\n${usage}`);
-  return cmdRun[sub](rest, opts);
+  const [...rest] = argv;
+  return runCheck(rest, opts);
 };
 
 const main = async (): Promise<void> => {
