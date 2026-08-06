@@ -6,9 +6,10 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 1. [test](#test) 500-line simplicity with mocha-like syntax and parallelism
 2. [benchmark](#benchmark) with nanosecond resolution
-3. [CLI](#cli) to create single-file bundles; and check project for common mistakes
-4. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
-5. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
+3. [CLI](#cli): single-file bundles and size stats, now in the separate [baler](./baler) package
+4. [jsbt-check](#jsbt-check) to check project for common mistakes
+5. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
+6. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
 
 ## Usage
 
@@ -93,7 +94,7 @@ dimensions.
 Use `bench` for simple one-line measurements:
 
 ```js
-import bench from '@paulmillr/jsbt/bench.js';
+import bench from '@paulmillr/jsbt/benchmark.js';
 
 const data = new Uint8Array(1024 * 1024);
 const processBlock = () => data[0];
@@ -130,7 +131,7 @@ Use `bench-compare` for benchmark matrices. Static dimensions provide benchmark 
 library objects provide dynamic dimensions.
 
 ```js
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 
 const sizes = {
   '1KB': new Uint8Array(1024),
@@ -169,65 +170,43 @@ ENV variables:
 
 ## 3. CLI
 
-jsbt CLI does single-file bundling and executes audit helpers.
+Single-file bundles and size stats moved to the separate
+[baler](./baler) package (`npm install baler`), which has exactly one
+dependency: esbuild. One command, two outputs:
 
-### bundle
+- `baler <selector>` packs the selection into a single-file IIFE bundle on stdout — nothing else
+- `baler <selector> --size` prints min+gzip size stats of the same bundles instead
+- `baler -i <selector>` navigates a package's modules and exports interactively, like a filesystem
 
-A few helpers on top of [esbuild](https://esbuild.github.io).
+`npx baler preact --size` works from any directory. See
+[baler's README](./baler/README.md) for full docs. The `sizeLimits` budgets of
+[`jsbt-check`](#jsbt-check) use baler's selector engine and size measurement
+under the hood.
 
-1. Gathers all package exports
-2. Gathers all dependencies
-3. Creates one file, bundling everything in it, declaring a global variable with package name
-4. Prints file stats
-
-```
-$ jsbt bundle
-11d1900e99f3aa945603bb5e7d82bdd9ec6ddf5d30e2fcab69b836840cff76d2 test/build/out/noble-hashes.js
-0be3876ff0816c44d21a401e6572fdb76d06012c760a23a5cb771c6f612106f5 test/build/out/noble-hashes.min.js
-
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
-```
-
-bundle command operates either in 1) `test/build` of the project 2) system-wide tmp directory.
-
-There are following options:
-
-```
-$ jsbt bundle --dir=test/build
-# (same as jsbt bundle, but uses specific dir instead of defaults)
-
-$ jsbt bundle --stats
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
-```
-
-### check
+## 4. jsbt-check
 
 Runs opinionated code quality checks. Uses typescript parsing underneath.
 Temporary build artifacts are created in a per-run OS temp directory and removed after the summary.
 
 ```
-jsbt check [--project=<directory>]
-jsbt check [--project=<directory>] bigint
-jsbt check [--project=<directory>] bytes
-jsbt check [--project=<directory>] comments
-jsbt check [--project=<directory>] errors
-jsbt check [--project=<directory>] importtime
-jsbt check [--project=<directory>] jsr
-jsbt check [--project=<directory>] jsrpublish
-jsbt check [--project=<directory>] mutate
-jsbt check [--project=<directory>] patterns
-jsbt check [--project=<directory>] readme
-jsbt check [--project=<directory>] treeshake
-jsbt check [--project=<directory>] tsdoc
-jsbt check [--project=<directory>] typeimport
-jsbt check-install <package.json>
+jsbt-check
+jsbt-check bigint
+jsbt-check bytes
+jsbt-check comments
+jsbt-check errors
+jsbt-check importtime
+jsbt-check jsdoc
+jsbt-check jsr
+jsbt-check jsrpublish
+jsbt-check mutate
+jsbt-check patterns
+jsbt-check readme
+jsbt-check size
+jsbt-check tsdoc
+jsbt-check typeimport
 ```
 
-With `"check": "npx --no @paulmillr/jsbt check"` in `package.json`, selectors can be run
+With `"check": "jsbt-check"` in `package.json`, selectors can be run
 through npm:
 
 ```
@@ -241,7 +220,7 @@ npm run check jsrpublish
 npm run check mutate
 npm run check patterns
 npm run check readme
-npm run check treeshake
+npm run check size
 npm run check tsdoc
 npm run check typeimport
 ```
@@ -258,20 +237,62 @@ Subcommand summary for `check <subcommand>`:
 * `mutate`: detect mutation hazards in public runtime behavior.
 * `patterns`: report source patterns that are risky for published packages.
 * `readme`: type-check and run runnable README examples.
-* `treeshake`: bundle public exports and report retained unused code.
+* `size`: bundle public exports, measure bundle sizes, report retained unused code,
+  enforce `sizeLimits` budgets from `.jsbtrc.json`.
 * `tsdoc`: audit public declaration docs and examples.
 * `typeimport`: verify imports that should be type-only.
-* `check-install`: rewrite package check scripts to the current unified form.
 
-## 4. Workflows
+### .jsbtrc.json config
+
+Checks read optional configuration from a `.jsbtrc.json` file beside
+`package.json`; unknown keys are rejected:
+
+```json
+{
+  "sizeLimits": {
+    "secp256k1.js/secp256k1": "4kb"
+  },
+  "exampleDependencies": {
+    "@noble/hashes": "2.2.0"
+  }
+}
+```
+
+* `sizeLimits`: gzip size budgets enforced by `jsbt-check size`. Keys are `baler --size`
+  selectors (`module`, `module/export`); values are bytes (`4096`) or a kb string
+  (`"4kb"`, 1kb = 1024 bytes). A key with several space-separated selectors
+  (`"index.js/sign index.js/verify"`) budgets their combined bundle — the cost when
+  imported together, with shared code counted once. A bundle whose gzipped size
+  exceeds its budget fails the check.
+* `exampleDependencies`: third-party packages that examples — runnable README
+  fences and TSDoc `@example` blocks — may import, pinned to exact versions. They
+  are symlinked into the isolated run directory from the project's own installed
+  `node_modules` — nothing is fetched at check time, and the check fails if the
+  installed version differs from the pin. Packages listed in `dependencies` are
+  implicitly trusted and must not be repeated here.
+
+`--generate-jsbtrc` produces or updates the file, one section per selector (the
+other section carries over untouched): `jsbt-check size --generate-jsbtrc` adds a
+budget per public module at its current gzip size (existing entries are hand-set
+budgets and are never overwritten); `jsbt-check readme --generate-jsbtrc` and
+`jsbt-check tsdoc --generate-jsbtrc` both compile `exampleDependencies` from
+third-party imports across all example sources — runnable README fences plus TSDoc
+`@example` fences in public declarations — pinned to the installed versions. Review
+the diff before committing — those two committed sections define what the checks
+trust.
+
+## 5. Workflows
 
 Secure GitHub CI configs for testing & publishing JS packages.
 
 The files reside in `.github/workflows`:
 
 * `test.yml`: reusable/manual test workflow for Node 22, 24, 26, Bun, and Deno. It runs
-  `npm run build --if-present`, `npm test`, optional `test:tsc` on Node 26, optional `test:bun`,
-  and optional `test:deno`. Inputs: `submodules` and `runs-on`.
+  `npm run build --if-present` and `npm test`. `test:tsc`, `test:bun`, and `test:deno` are run
+  when present; otherwise they fall back to defaults derived from the repo: `test:tsc` runs
+  `cd test && npx tsc && node compiled/test/index.js` when `test/tsconfig.json` exists, and
+  `test:bun`/`test:deno` run the `test` script's file (its `node <file>` invocation) directly
+  under `bun`/`deno --allow-env --allow-read`. Inputs: `submodules` and `runs-on`.
 * `test-matrix.yml`: reusable/manual Node matrix across Node 22, 24, 26 on `ubuntu-24.04-arm`,
   `macos-latest`, and `windows-latest`.
 * `test-custom.yml`: reusable Node 26 workflow for one custom npm task, defaulting to `test:slow`.
@@ -307,7 +328,7 @@ jobs:
       id-token: write
 ```
 
-## 5. tsconfig
+## 6. tsconfig
 
 Strict typescript v6+ configs, friendly to type stripping. Uses `isolatedDeclarations` and `verbatimModuleSyntax`
 to ensure node.js is able to natively run typescript files without compilation.
@@ -330,6 +351,21 @@ Inheritable in the following way:
     "node_modules"
   ]
 }
+```
+
+## Troubleshooting
+
+**Pager keys stop working after `baler … | bat`.** Node snapshots the
+terminal state at startup and restores it on exit. When a pager takes a moment
+to start (bat loads syntax assets before spawning `less`), the restore lands
+*after* the pager switched the terminal to raw mode, knocking it back to
+line-buffered input — keystrokes queue up instead of reaching the pager. This
+affects any Node CLI piped into `bat`; plain `less` usually wins the race.
+Fix a stuck pager with `Ctrl-Z` then `fg` (it re-initializes the terminal), or
+avoid the race entirely by detaching baler from the terminal:
+
+```sh
+baler sha2.js/sha256 </dev/null 2>/dev/null | bat -l js
 ```
 
 ## License

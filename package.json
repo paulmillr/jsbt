@@ -1,14 +1,13 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
-    "jsbt.bin.js",
-    "jsbt.bin.d.ts",
-    "bench.js",
-    "bench.d.ts",
-    "bench-compare.js",
-    "bench-compare.d.ts",
+    "jsbt-check.bin.js",
+    "benchmark.js",
+    "benchmark.d.ts",
+    "benchmark-compare.js",
+    "benchmark-compare.d.ts",
     "test.js",
     "test.d.ts",
     "tsconfig.json",
@@ -16,24 +15,28 @@
     "tsconfig.test.json"
   ],
   "bin": {
-    "jsbt": "jsbt.bin.js"
+    "jsbt-check": "jsbt-check.bin.js"
+  },
+  "dependencies": {
+    "baler": "file:baler",
+    "esbuild": "0.28.1"
   },
   "devDependencies": {
     "@microsoft/tsdoc": "0.16.0",
     "@types/node": "24.2.1",
-    "esbuild": "0.28.1",
     "prettier": "3.6.2",
     "typescript": "6.0.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.example.json && node --run bundle:bin && chmod +x jsbt.bin.js",
-    "bundle": "esbuild src/jsbt/index.ts --bundle --platform=node --format=esm --target=node22",
-    "bundle:bin": "node --run bundle -- --define:__JSBT_BUNDLE__=true --outfile=jsbt.bin.js --banner:js='#!/usr/bin/env node'",
-    "clean": "node test/jsbt/clean.ts",
+    "build": "npm run build --prefix baler && tsc -p tsconfig.example.json && node --run bundle:check && chmod +x jsbt-check.bin.js",
+    "bundle": "esbuild --bundle --platform=node --format=esm --target=node22",
+    "clean": "node test/jsbt-check/clean.ts",
     "format": "npx prettier --write src",
     "test": "node test/index.ts",
+    "test:check": "node test/check.ts",
     "test:bun": "echo 'No bun'",
-    "test:deno": "echo 'No deno'"
+    "test:deno": "echo 'No deno'",
+    "bundle:check": "node --run bundle -- src/jsbt-check/check.ts --define:__BALER_BUNDLE__=true --outfile=jsbt-check.bin.js --banner:js='#!/usr/bin/env node'"
   },
   "keywords": [
     "js",
@@ -48,9 +51,9 @@
     "url": "git+https://github.com/paulmillr/jsbt.git"
   },
   "type": "module",
-  "main": "jsbt.bin.js",
-  "module": "jsbt.bin.js",
-  "types": "jsbt/index.d.ts",
+  "main": "test.js",
+  "module": "test.js",
+  "types": "test.d.ts",
   "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "license": "MIT"

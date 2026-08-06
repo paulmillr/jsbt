@@ -1,0 +1,7 @@
+{
+  "sizeLimits": {
+    "index.js": "4kb",
+    "index.js/add": 4096,
+    "index.js/add index.js/mul": "4kb"
+  }
+}

@@ -75,19 +75,18 @@ export type EmptyFn = () => Promise<void> | void;
 
 declare const console: any;
 
+import { cliProcess, color as palette, colorEnabled, type Env } from 'baler/env.js';
+
+const proc: Record<string, any> | undefined = cliProcess();
+const isCli = proc !== undefined;
+const colorOn = colorEnabled();
+
 const stack: StackItem[] = [{ message: '', children: [] }];
 const errorLog: string[] = [];
 let quietPassCount: number | undefined;
 let quietFailCount: number | undefined;
 let onlyStack: StackItem | undefined;
 let isRunning = false;
-const isCli = 'process' in globalThis;
-// Dumb bundlers parse code and assume we have hard dependency on "process". We don't.
-// The trick (also import(mod) below) ensures parsers can't see it.
-// @ts-ignore
-const pr = globalThis['process'];
-const proc: Record<string, any> | undefined = isCli ? pr : undefined;
-type Env = Record<string, string | undefined>;
 const isNode = isCli && typeof proc?.versions?.node === 'string';
 type NativeNodeTest = Record<string, any>;
 
@@ -117,15 +116,6 @@ function resolveNativeNodeTest(): NativeNodeTest | undefined {
 const nativeNodeTest = resolveNativeNodeTest();
 let nativeTestCount = 0;
 
-function wantColor(env: Env = {}, tty = false): boolean {
-  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
-  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
-  if (env.NO_COLOR) return false;
-  if (env.FORCE_COLOR === '0') return false;
-  if (env.CLICOLOR === '0') return false;
-  return tty;
-}
-const colorOn = isCli && wantColor(proc?.env, !!proc?.stderr?.isTTY || !!proc?.stdout?.isTTY);
 const opts: Options = {
   STOP_ON_ERROR: isCli ? parseBoolEnv(proc?.env?.JSBT_BAIL, true) : true,
   QUIET: isCli && parseBoolEnv(proc?.env?.JSBT_QUIET, false),
@@ -169,14 +159,8 @@ function imp(moduleName: string): any {
 }
 
 // String formatting utils
-const _c = String.fromCharCode(27); // x1b, control code for terminal colors
-const c = {
-  // colors
-  gray: _c + '[90m',
-  red: _c + '[31m',
-  green: _c + '[32m',
-  reset: _c + '[0m',
-} as const;
+// Shared ANSI palette from env.ts; test.ts uses a small named subset.
+const c = { gray: palette.gray, green: palette.green, red: palette.red, reset: palette.reset };
 const PATH_SEP = '/';
 const INDENT = '  ';
 

@@ -1,7 +1,0 @@
-{
-  "name": "bytes-wrap",
-  "type": "module",
-  "exports": {
-    ".": "./utils.ts"
-  }
-}

@@ -1,7 +1,0 @@
-{
-  "name": "@jsbt-test/errors-function-output",
-  "type": "module",
-  "exports": {
-    ".": "./index.js"
-  }
-}
