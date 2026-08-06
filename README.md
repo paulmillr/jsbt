@@ -6,7 +6,7 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 1. [test](#test) 500-line simplicity with mocha-like syntax and parallelism
 2. [benchmark](#benchmark) with nanosecond resolution
-3. [CLI](#cli) to create single-file bundles; and check project for common mistakes
+3. [CLI](#cli) to check project for common mistakes
 4. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
 5. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
 
@@ -88,12 +88,12 @@ Lightweight benchmark helpers with nanosecond timing, terminal-friendly output, 
 and a matrix runner for comparing libraries, algorithms, platforms, input sizes, and other
 dimensions.
 
-### bench
+### benchmark
 
 Use `bench` for simple one-line measurements:
 
 ```js
-import bench from '@paulmillr/jsbt/bench.js';
+import bench from '@paulmillr/jsbt/benchmark.js';
 
 const data = new Uint8Array(1024 * 1024);
 const processBlock = () => data[0];
@@ -124,13 +124,13 @@ copy 1MiB x 1,420 mib/sec
 blocks x 92,400 blocks/sec
 ```
 
-### bench-compare
+### benchmark-compare
 
-Use `bench-compare` for benchmark matrices. Static dimensions provide benchmark arguments; nested
+Use `benchmark-compare` for benchmark matrices. Static dimensions provide benchmark arguments; nested
 library objects provide dynamic dimensions.
 
 ```js
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 
 const sizes = {
   '1KB': new Uint8Array(1024),
@@ -169,66 +169,49 @@ ENV variables:
 
 ## 3. CLI
 
-jsbt CLI does single-file bundling and executes audit helpers.
-
-### bundle
-
-A few helpers on top of [esbuild](https://esbuild.github.io).
-
-1. Gathers all package exports
-2. Gathers all dependencies
-3. Creates one file, bundling everything in it, declaring a global variable with package name
-4. Prints file stats
-
-```
-$ jsbt bundle
-11d1900e99f3aa945603bb5e7d82bdd9ec6ddf5d30e2fcab69b836840cff76d2 test/build/out/noble-hashes.js
-0be3876ff0816c44d21a401e6572fdb76d06012c760a23a5cb771c6f612106f5 test/build/out/noble-hashes.min.js
-
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
-```
-
-bundle command operates either in 1) `test/build` of the project 2) system-wide tmp directory.
-
-There are following options:
-
-```
-$ jsbt bundle --dir=test/build
-# (same as jsbt bundle, but uses specific dir instead of defaults)
-
-$ jsbt bundle --stats
-3790 LOC noble-hashes.js
-58.21 KB noble-hashes.min.js
-21.10 KB +gzip
-```
+`jsbt-check` CLI executes audit helpers.
 
 ### check
 
 Runs opinionated code quality checks. Uses typescript parsing underneath.
 Temporary build artifacts are created in a per-run OS temp directory and removed after the summary.
 
-```
-jsbt check [--project=<directory>]
-jsbt check [--project=<directory>] bigint
-jsbt check [--project=<directory>] bytes
-jsbt check [--project=<directory>] comments
-jsbt check [--project=<directory>] errors
-jsbt check [--project=<directory>] importtime
-jsbt check [--project=<directory>] jsr
-jsbt check [--project=<directory>] jsrpublish
-jsbt check [--project=<directory>] mutate
-jsbt check [--project=<directory>] patterns
-jsbt check [--project=<directory>] readme
-jsbt check [--project=<directory>] treeshake
-jsbt check [--project=<directory>] tsdoc
-jsbt check [--project=<directory>] typeimport
-jsbt check-install <package.json>
+Example-running checks (`readme`, `tsdoc`, `errors`) execute examples in an isolated temp run
+directory. Its `node_modules` is assembled from symlinks — nothing is fetched at check time:
+
+- the checked package itself, installed under its own name;
+- the package's runtime `dependencies`, linked from the project's installed `node_modules`;
+- extra example-only imports allowed by `exampleDependencies` in a committed `.jsbtrc.json`
+  beside `package.json`, pinned to exact installed versions:
+
+```json
+{
+  "exampleDependencies": {
+    "micro-packed": "0.7.3"
+  }
+}
 ```
 
-With `"check": "npx --no @paulmillr/jsbt check"` in `package.json`, selectors can be run
-through npm:
+`esbuild` (used by `treeshake`) is provided automatically and must not be listed.
+
+```
+jsbt-check [--project=<directory>]
+jsbt-check [--project=<directory>] bigint
+jsbt-check [--project=<directory>] bytes
+jsbt-check [--project=<directory>] comments
+jsbt-check [--project=<directory>] errors
+jsbt-check [--project=<directory>] importtime
+jsbt-check [--project=<directory>] jsr
+jsbt-check [--project=<directory>] jsrpublish
+jsbt-check [--project=<directory>] mutate
+jsbt-check [--project=<directory>] patterns
+jsbt-check [--project=<directory>] readme
+jsbt-check [--project=<directory>] treeshake
+jsbt-check [--project=<directory>] tsdoc
+jsbt-check [--project=<directory>] typeimport
+```
+
+With `"check": "jsbt-check"` in `package.json` scripts, selectors can be run through npm:
 
 ```
 npm run check bigint
@@ -246,7 +229,7 @@ npm run check tsdoc
 npm run check typeimport
 ```
 
-Subcommand summary for `check <subcommand>`:
+Selector summary for `jsbt-check <selector>`:
 
 * `bigint`: find BigInt compatibility hazards in public runtime files.
 * `bytes`: inspect byte/typed-array API surface and TypeScript-version compatibility.
@@ -261,7 +244,6 @@ Subcommand summary for `check <subcommand>`:
 * `treeshake`: bundle public exports and report retained unused code.
 * `tsdoc`: audit public declaration docs and examples.
 * `typeimport`: verify imports that should be type-only.
-* `check-install`: rewrite package check scripts to the current unified form.
 
 ## 4. Workflows
 

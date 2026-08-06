@@ -1,6 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
-import { utils } from '../../src/bench.ts';
-import compare from '../../src/bench-compare.ts';
+import { utils } from '../../src/benchmark.ts';
+import compare from '../../src/benchmark-compare.ts';
 import { should } from '../../src/test.ts';
 
 const capture = async (fn: () => Promise<void> | void) => {

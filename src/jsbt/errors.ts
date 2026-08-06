@@ -7,7 +7,7 @@ Goal:
   - catch validators that return false instead of throwing on type errors
   - print raw rejection evidence, and warn on mutation, aliasing, or value leakage
 Rules:
-  - this is standalone/manual-audit focused and is not part of default `jsbt check`
+  - this is standalone/manual-audit focused and is not part of default `jsbt-check`
   - examples are the source of valid semantic inputs; no errors.json fixture is used
   - mutation and alias findings are warnings because some APIs intentionally document them
   - accepted wrong runtime types print as NO ERROR! audit rows and still count as failures
@@ -30,6 +30,7 @@ import {
   nodeStart,
   nodeText,
   paint,
+  prepareRunDir,
   printIssues,
   readText,
   recordIssue,
@@ -41,6 +42,7 @@ import {
   tsSourceRel,
   usageText,
   walkAst,
+  withOwnRunDir,
   withTempFile,
   type Level,
   type Issue as LogIssue,
@@ -1615,7 +1617,6 @@ export const runCli = async (
   const ctx = publicCtx(args.pkgArg, opts.cwd);
   const ts = loadTs(ctx.pkgFile);
   const entries = runtimeEntries(ctx);
-  const runDir = opts.runDir || resolve(ctx.cwd, 'test', 'build');
   const specs = specMap(entries);
   const rows = workRows(ctx, ts, entries);
   const items = rows.filter((item) => item.calls.length);
@@ -1652,47 +1653,50 @@ export const runCli = async (
     printIssues('errors', logs, colorOn);
     return finish(out, colorOn);
   }
-  const runs = await runProbeLimit(
-    ctx,
-    specs,
-    items,
-    opts.limit || jsbtWorkerLimit(defaultProbeLimit()),
-    runDir,
-    opts.timeoutMs || TIMEOUT
-  );
-  for (const { item, rel, res } of runs) {
-    if (res.error) {
-      recordIssue(
-        out,
-        logs,
-        'WARN',
-        rel,
-        `${item.line}/example`,
-        'example probe failed: ' + res.error,
-        'example'
-      );
-      continue;
+  return withOwnRunDir(opts.runDir, async (runDirRaw: string) => {
+    const runDir = prepareRunDir(ctx.cwd, ctx.pkg.name, runDirRaw);
+    const runs = await runProbeLimit(
+      ctx,
+      specs,
+      items,
+      opts.limit || jsbtWorkerLimit(defaultProbeLimit()),
+      runDir,
+      opts.timeoutMs || TIMEOUT
+    );
+    for (const { item, rel, res } of runs) {
+      if (res.error) {
+        recordIssue(
+          out,
+          logs,
+          'WARN',
+          rel,
+          `${item.line}/example`,
+          'example probe failed: ' + res.error,
+          'example'
+        );
+        continue;
+      }
+      if (!res.issues.length) out.passed += res.probed || 1;
+      for (const item of res.rejects || []) {
+        audit.push({ ...item, file: rel });
+        if (item.accepted) out.failures += 1;
+      }
+      for (const issue of res.issues) {
+        recordIssue(
+          out,
+          logs,
+          issue.level,
+          rel,
+          `${issue.line}/${issue.call}`,
+          issue.detail,
+          `errors-${issue.kind}`
+        );
+      }
     }
-    if (!res.issues.length) out.passed += res.probed || 1;
-    for (const item of res.rejects || []) {
-      audit.push({ ...item, file: rel });
-      if (item.accepted) out.failures += 1;
-    }
-    for (const issue of res.issues) {
-      recordIssue(
-        out,
-        logs,
-        issue.level,
-        rel,
-        `${issue.line}/${issue.call}`,
-        issue.detail,
-        `errors-${issue.kind}`
-      );
-    }
-  }
-  printIssues('errors', logs, colorOn);
-  printAudit(audit, colorOn);
-  finish(out, colorOn);
+    printIssues('errors', logs, colorOn);
+    printAudit(audit, colorOn);
+    finish(out, colorOn);
+  });
 };
 
 export const __TEST: TestApi = {

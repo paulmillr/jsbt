@@ -8,7 +8,7 @@ Do not call raw fs delete/write helpers or raw `npm install` directly here.
 `--unstable-byonm --dry-run --allow-dirty`.
 It first runs without `--allow-slow-types`. If that fails, it reruns with `--allow-slow-types`
 to separate slow-types-only problems from publish/type failures that still block publish.
-Generic `jsbt check` should call this in compact mode; direct `jsbt jsrpublish` keeps full output.
+Generic `jsbt-check` should call this in compact mode; direct `jsbt-check jsrpublish` keeps full output.
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

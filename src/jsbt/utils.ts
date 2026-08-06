@@ -4,7 +4,7 @@ import { cpus } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { rm, write, writePkg } from '../fs-modify.ts';
+import { checkTempDir, installRunDeps, rm, rmCheckTempDir, write } from '../fs-modify.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 
@@ -31,11 +31,6 @@ export type WorkerExecOpts = { cwd?: string; data: unknown; execArgv?: string[] 
 export type WorkerImportOpts = { cwd?: string; execArgv?: string[] };
 export type TempFileOpts = { code: string; ext: string; prefix: string };
 export type TempImportOpts = TempFileOpts & { execArgv?: string[] };
-export type BuildPkg = {
-  dependencies?: Record<string, unknown>;
-  devDependencies?: Record<string, unknown>;
-  optionalDependencies?: Record<string, unknown>;
-};
 export type ExecRes = {
   error?: Error;
   ok: boolean;
@@ -472,44 +467,96 @@ export const cliArgs = (argv: string[], usage: string, color?: boolean): CliArgs
   }
   return { args, colorOn: color ?? wantColor() };
 };
-export const pickRunDir = (cwd: string, name: string): string => {
-  const dir = join(cwd, 'test', 'build');
-  const file = join(dir, 'package.json');
-  if (!existsSync(file))
-    throw new Error(`expected test/build/package.json next to ${name || 'package.json'}`);
-  const pkg = readJson<BuildPkg>(file);
-  const dep =
-    pkg.dependencies?.[name] || pkg.devDependencies?.[name] || pkg.optionalDependencies?.[name];
-  if (dep !== 'file:../..') {
-    throw new Error(
-      [
-        `expected test/build/package.json to install ${name} as "file:../.."`,
-        `got ${JSON.stringify(dep)}`,
-      ].join('; ')
-    );
+// jsbt's own per-repo config lives in `.jsbtrc.json` beside package.json. Unknown
+// keys are rejected so a typo can never silently disable a check.
+export type JsbtRc = {
+  exampleDependencies?: Record<string, unknown>;
+};
+export const RC_FILE = '.jsbtrc.json';
+const RC_KEYS = new Set(['exampleDependencies']);
+export const readJsbtRc = (cwd: string): JsbtRc => {
+  const file = join(cwd, RC_FILE);
+  if (!existsSync(file)) return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readText(file));
+  } catch (error) {
+    return err(`invalid ${RC_FILE}: ${(error as Error).message}`);
   }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    err(`invalid ${RC_FILE}: expected an object`);
+  for (const key of Object.keys(raw as object))
+    if (!RC_KEYS.has(key)) err(`unknown ${RC_FILE} key: ${key}`);
+  return raw as JsbtRc;
+};
+// Examples (runnable README fences and TSDoc @example blocks) may import third-party
+// packages, but only from a committed allowlist: the package's own runtime
+// `dependencies` are implicitly trusted, and `exampleDependencies` in `.jsbtrc.json`
+// adds exact-pinned dev-only extras. Both link from the project's already-installed
+// node_modules — nothing is fetched at check time, so the import surface is fixed by
+// reviewed committed files, never by example content.
+const BARE_PKG_NAME = /^(@[\w.-]+\/)?[\w.-]+$/;
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
+export const installedVersion = (cwd: string, dep: string): string | undefined => {
+  try {
+    return readJson<{ version?: string }>(join(cwd, 'node_modules', dep, 'package.json')).version;
+  } catch {
+    return undefined;
+  }
+};
+export const runDepNames = (cwd: string, name: string): string[] => {
+  const pkg = readJson<{ dependencies?: Record<string, unknown> }>(join(cwd, 'package.json'));
+  const runtime = Object.keys(pkg.dependencies || {});
+  const trusted = new Set(runtime);
+  const out: string[] = [];
+  for (const [dep, spec] of Object.entries(readJsbtRc(cwd).exampleDependencies || {})) {
+    if (!BARE_PKG_NAME.test(dep)) err(`invalid exampleDependencies name: ${dep}`);
+    if (dep === name || dep === 'esbuild')
+      err(`exampleDependencies must not list ${dep}; it is provided automatically`);
+    if (trusted.has(dep))
+      err(`${dep} is already trusted via dependencies; remove it from exampleDependencies`);
+    if (typeof spec !== 'string' || !EXACT_VERSION.test(spec))
+      err(`exampleDependencies ${dep}: pin an exact version like "2.2.0", got ${spec}`);
+    const found = installedVersion(cwd, dep);
+    if (!found) err(`exampleDependencies ${dep}@${spec} is not installed; run npm install`);
+    if (found !== spec)
+      err(
+        `exampleDependencies pins ${dep}@${spec} but ${found} is installed; update the pin or reinstall`
+      );
+    out.push(dep);
+  }
+  // Runtime deps link best-effort: an uninstalled one only matters if an example
+  // imports it, and that already fails with a clear module-not-found error.
+  for (const dep of runtime)
+    if (dep !== name && dep !== 'esbuild' && BARE_PKG_NAME.test(dep) && installedVersion(cwd, dep))
+      out.push(dep);
+  return out;
+};
+// Prepares the isolated run dir: manifest plus node_modules symlinked from the
+// project's own installed deps. No test/build involvement, no npm install.
+export const prepareRunDir = (cwd: string, name: string, dir: string): string => {
+  installRunDeps(cwd, name, dir, runDepNames(cwd, name));
   return dir;
 };
-export const prepareRunDir = (cwd: string, name: string, dir: string): string => {
-  if (!isAbsolute(dir)) err(`expected absolute run dir: ${dir}`);
-  const template = join(pickRunDir(cwd, name), 'package.json');
-  const pkg = readJson<BuildPkg>(template);
-  let rewrote = false;
-  for (const deps of [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies]) {
-    if (deps?.[name] !== 'file:../..') continue;
-    deps[name] = `file:${cwd}`;
-    rewrote = true;
+// Standalone checker runs own a fresh temp run dir; jsbt-check passes a shared one in.
+export const withOwnRunDir = async <T>(
+  runDir: string | undefined,
+  fn: (dir: string) => Promise<T>
+): Promise<T> => {
+  if (runDir) return fn(runDir);
+  const tmp = checkTempDir();
+  try {
+    return await fn(join(tmp, 'build'));
+  } finally {
+    rmCheckTempDir(tmp);
   }
-  if (!rewrote) err(`expected ${template} to install ${name} as "file:../.."`);
-  writePkg(join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
-  return dir;
 };
 export const withRunDir = <T extends RunDirCtx>(
   ctx: T,
-  runDir?: string
+  runDir: string
 ): T & { runDir: string } => ({
   ...ctx,
-  runDir: runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, runDir) : pickRunDir(ctx.cwd, ctx.pkg.name),
+  runDir: prepareRunDir(ctx.cwd, ctx.pkg.name, runDir),
 });
 export const loadNear = <T>(
   pkgFile: string,

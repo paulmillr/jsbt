@@ -1,19 +1,17 @@
 #!/usr/bin/env -S node
 /**
-Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
-do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
+Destructive ops SHOULD use only `fs-modify.ts`;
+do not call `rmSync`, `rmdirSync`, `unlinkSync`, or `writeFileSync` directly here.
 
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
-Like `jsbt bundle`, it runs `npm install` in the selected run/build directory before checking.
 File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 All writes and any other modifications from this script MUST stay under the selected run/build directory.
-This checker takes only a package.json path, uses `test/build` next to it as the default run
-directory or a dispatcher-provided temp run directory, and MUST fail if the fixture template is
-missing or if `test/build/package.json` does not install the checked package name as `"file:../.."`.
+This checker takes only a package.json path and runs examples in a generated jsbt temp run
+directory (or a dispatcher-provided one) installing the checked package as a `file:` dependency,
+plus the deps allowed by package.json `dependencies` and `.jsbtrc.json` `exampleDependencies`.
  */
 import { basename, resolve } from 'node:path';
-import { npmInstall, sweepTemps } from '../fs-modify.ts';
 import {
   compact,
   emptyResult,
@@ -32,6 +30,7 @@ import {
   runTempImport,
   usageText,
   wantColor,
+  withOwnRunDir,
   withRunDir,
   type ExecRes,
   type Issue as LogIssue,
@@ -69,7 +68,6 @@ type TestApi = {
   readPkg: typeof readPkg;
   resolveCtx: typeof resolveCtx;
   shortHead: typeof shortHead;
-  sweepTemps: typeof sweepTemps;
   wantColor: typeof wantColor;
 };
 
@@ -84,7 +82,7 @@ const readPkg = (pkgFile: string): Pkg => {
   const name = typeof raw.name === 'string' ? raw.name : '';
   return { name };
 };
-const resolveCtx = (args: PkgArgs, cwd: string = process.cwd(), runDir?: string): Ctx => {
+const resolveCtx = (args: PkgArgs, cwd: string = process.cwd(), runDir = ''): Ctx => {
   const base = resolve(cwd);
   const pkgFile = resolve(base, args.pkgArg);
   const readmeFile = resolve(base, 'README.md');
@@ -212,70 +210,71 @@ export const runCli = async (
     console.log(usage);
     return;
   }
-  const colorOn = opts.color ?? wantColor();
-  const ctx = resolveCtx(args, opts.cwd, opts.runDir);
-  npmInstall(ctx.runDir);
-  const text = readText(ctx.readmeFile);
-  const blocks = parseReadme(text);
-  const out = emptyResult();
-  const issues: LogIssue[] = [];
-  let ts: TsCheck | undefined;
-  let typeCheck: TypeCheck | undefined;
-  const checkBlockTypes =
-    opts.checkTypes ||
-    ((code: string, cwd: string, pkgFile: string): string[] => {
-      ts ||= (opts.loadTs || loadTs)(pkgFile);
-      typeCheck ||= makeTypeCheck(ts, cwd, '.__readme-check.ts');
-      return typeCheck(code);
-    });
-  for (const block of blocks) {
-    if (!block.runnable || !block.kind) {
-      out.skipped += 1;
-      continue;
-    }
-    let failed = false;
-    if (block.kind === 'ts') {
-      const errs = checkBlockTypes(block.code, ctx.runDir, ctx.pkgFile);
-      if (errs.length) {
-        failed = true;
-        recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, compact(errs), 'type');
+  return withOwnRunDir(opts.runDir, async (runDir: string) => {
+    const colorOn = opts.color ?? wantColor();
+    const ctx = resolveCtx(args, opts.cwd, runDir);
+    const text = readText(ctx.readmeFile);
+    const blocks = parseReadme(text);
+    const out = emptyResult();
+    const issues: LogIssue[] = [];
+    let ts: TsCheck | undefined;
+    let typeCheck: TypeCheck | undefined;
+    const checkBlockTypes =
+      opts.checkTypes ||
+      ((code: string, cwd: string, pkgFile: string): string[] => {
+        ts ||= (opts.loadTs || loadTs)(pkgFile);
+        typeCheck ||= makeTypeCheck(ts, cwd, '.__readme-check.ts');
+        return typeCheck(code);
+      });
+    for (const block of blocks) {
+      if (!block.runnable || !block.kind) {
+        out.skipped += 1;
+        continue;
       }
-      const exec = await Promise.resolve((opts.runCode || runCode)(block.code, ctx.runDir, 'ts'));
-      if (!exec.ok) {
-        failed = true;
-        recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, execText(exec), 'exec');
+      let failed = false;
+      if (block.kind === 'ts') {
+        const errs = checkBlockTypes(block.code, ctx.runDir, ctx.pkgFile);
+        if (errs.length) {
+          failed = true;
+          recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, compact(errs), 'type');
+        }
+        const exec = await Promise.resolve((opts.runCode || runCode)(block.code, ctx.runDir, 'ts'));
+        if (!exec.ok) {
+          failed = true;
+          recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, execText(exec), 'exec');
+        }
+        if (!failed) out.passed += 1;
+        continue;
+      }
+      const js = await Promise.resolve(
+        (opts.runCode || runCode)(block.code, ctx.runDir, blockMode(block.label, block.kind))
+      );
+      if (!js.ok) {
+        // A js fence is only "actually ts" when plain JS fails, but the same snippet both
+        // typechecks and runs under strip-types. Otherwise keep the original JS exec failure.
+        const errs = checkBlockTypes(block.code, ctx.runDir, ctx.pkgFile);
+        const tsExec = !errs.length
+          ? await Promise.resolve((opts.runCode || runCode)(block.code, ctx.runDir, 'ts'))
+          : undefined;
+        if (!errs.length && tsExec?.ok) {
+          recordBlockIssue(
+            out,
+            issues,
+            'warn',
+            ctx.readmeFile,
+            block,
+            `${block.label || 'js'}->ts`,
+            'fence-mismatch'
+          );
+        } else {
+          failed = true;
+          recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, execText(js), 'exec');
+        }
       }
       if (!failed) out.passed += 1;
-      continue;
     }
-    const js = await Promise.resolve(
-      (opts.runCode || runCode)(block.code, ctx.runDir, blockMode(block.label, block.kind))
-    );
-    if (!js.ok) {
-      // A js fence is only "actually ts" when plain JS fails, but the same snippet both
-      // typechecks and runs under strip-types. Otherwise keep the original JS exec failure.
-      const errs = checkBlockTypes(block.code, ctx.runDir, ctx.pkgFile);
-      const tsExec = !errs.length
-        ? await Promise.resolve((opts.runCode || runCode)(block.code, ctx.runDir, 'ts'))
-        : undefined;
-      if (!errs.length && tsExec?.ok) {
-        recordBlockIssue(
-          out,
-          issues,
-          'warn',
-          ctx.readmeFile,
-          block,
-          `${block.label || 'js'}->ts`,
-          'fence-mismatch'
-        );
-      } else {
-        failed = true;
-        recordBlockIssue(out, issues, 'error', ctx.readmeFile, block, execText(js), 'exec');
-      }
-    }
-    if (!failed) out.passed += 1;
-  }
-  reportIssues('readme', issues, out, colorOn, 'README check found issues', 'error');
+    reportIssues('readme', issues, out, colorOn, 'README check found issues', 'error');
+  });
 };
 
 export const __TEST: TestApi = {
@@ -289,7 +288,6 @@ export const __TEST: TestApi = {
   readPkg: readPkg,
   resolveCtx: resolveCtx,
   shortHead: shortHead,
-  sweepTemps: sweepTemps,
   wantColor: wantColor,
 };
 

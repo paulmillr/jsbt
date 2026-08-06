@@ -196,11 +196,11 @@ should(
   }
 );
 
-should('check-jsr alias is rejected by jsbt dispatcher', async () => {
+should('check-jsr alias is rejected by jsbt-check dispatcher', async () => {
   const cwd = fixture('pass-root');
   await rejects(
-    () => runJsbt(['check-jsr', 'package.json'], { color: false, cwd }),
-    /unknown jsbt command: check-jsr/
+    () => runJsbt(['check-jsr'], { color: false, cwd }),
+    /unknown check selector: check-jsr/
   );
 });
 

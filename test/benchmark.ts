@@ -1,4 +1,4 @@
-import bench, { utils } from '../src/bench.ts';
+import bench, { utils } from '../src/benchmark.ts';
 (async () => {
   utils.setMaxRunTime(1);
   await bench('printing', () => Promise.resolve(0));

@@ -1,6 +1,7 @@
 import { deepStrictEqual, throws } from 'node:assert';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as ts from 'typescript';
 import { should } from '../../src/test.ts';
@@ -27,7 +28,8 @@ import {
   parseFast,
   pkgArgs,
   pkgTarget,
-  pickRunDir,
+  prepareRunDir,
+  readJsbtRc,
   readJson,
   readSource,
   readText,
@@ -37,12 +39,14 @@ import {
   resolveLocalImport,
   runImportFile,
   runTempImport,
+  runDepNames,
   runWorker,
   runWorkerExec,
   skipRootImportTrap,
   sourceCtx,
   table,
   textLines,
+  withOwnRunDir,
   withRunDir,
   jsbtWorkerLimit,
 } from '../../src/jsbt/utils.ts';
@@ -126,18 +130,78 @@ should('jsbtWorkerLimit resolves fast offsets and ratios from max cores', () => 
   }
 });
 
-should('pickRunDir validates test build package wiring', () => {
-  const cwd = resolve('test/jsbt/vectors/check/pass-root');
-  deepStrictEqual(pickRunDir(cwd, '@jsbt-test/check-root'), resolve(cwd, 'test/build'));
-  deepStrictEqual(withRunDir({ cwd, pkg: { name: '@jsbt-test/check-root' } }), {
-    cwd,
-    pkg: { name: '@jsbt-test/check-root' },
-    runDir: resolve(cwd, 'test/build'),
+should('readJsbtRc reads and validates .jsbtrc.json', () => {
+  deepStrictEqual(readJsbtRc(resolve('test/jsbt/vectors/check/pass-root')), {});
+  deepStrictEqual(readJsbtRc(resolve('test/jsbt/vectors/check/pass-readme-deps')), {
+    exampleDependencies: { '@jsbt-test/dep': '1.2.3' },
   });
-  throws(
-    () => pickRunDir(cwd, '@example/missing'),
-    /expected test\/build\/package\.json to install/
+});
+
+should('runDepNames trusts exampleDependencies and runtime dependencies', () => {
+  deepStrictEqual(
+    runDepNames(resolve('test/jsbt/vectors/check/pass-root'), '@jsbt-test/check-root'),
+    []
   );
+  deepStrictEqual(
+    runDepNames(
+      resolve('test/jsbt/vectors/check/pass-readme-deps'),
+      '@jsbt-test/check-readme-deps'
+    ),
+    ['@jsbt-test/dep', '@jsbt-test/rt']
+  );
+});
+
+should('runDepNames validates exampleDependencies pins', () => {
+  const seed = (rc: object) => {
+    const dir = resolve('test/jsbt/build/jsbtrc-validate');
+    rmSync(dir, { force: true, recursive: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), '{ "name": "@jsbt-test/rc" }\n');
+    writeFileSync(join(dir, '.jsbtrc.json'), `${JSON.stringify(rc)}\n`);
+    return dir;
+  };
+  const cleanup = () =>
+    rmSync(resolve('test/jsbt/build/jsbtrc-validate'), { force: true, recursive: true });
+  try {
+    throws(() => readJsbtRc(seed({ sizeLimits: {} })), { message: /unknown \.jsbtrc\.json key/ });
+    throws(
+      () => runDepNames(seed({ exampleDependencies: { esbuild: '1.0.0' } }), '@jsbt-test/rc'),
+      {
+        message: /provided automatically/,
+      }
+    );
+    throws(() => runDepNames(seed({ exampleDependencies: { left: '^1.0.0' } }), '@jsbt-test/rc'), {
+      message: /pin an exact version/,
+    });
+    throws(() => runDepNames(seed({ exampleDependencies: { left: '1.0.0' } }), '@jsbt-test/rc'), {
+      message: /is not installed/,
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+should('withRunDir prepares a symlinked temp run dir', async () => {
+  const cwd = resolve('test/jsbt/vectors/check/pass-root');
+  await withOwnRunDir(undefined, async (runDir) => {
+    deepStrictEqual(withRunDir({ cwd, pkg: { name: '@jsbt-test/check-root' } }, runDir), {
+      cwd,
+      pkg: { name: '@jsbt-test/check-root' },
+      runDir,
+    });
+    const manifest = readJson<{ dependencies: Record<string, string> }>(
+      resolve(runDir, 'package.json')
+    );
+    deepStrictEqual(manifest.dependencies, { '@jsbt-test/check-root': `file:${cwd}` });
+    deepStrictEqual(
+      readJson<{ name: string }>(resolve(runDir, 'node_modules/@jsbt-test/check-root/package.json'))
+        .name,
+      '@jsbt-test/check-root'
+    );
+  });
+  throws(() => prepareRunDir(cwd, '@jsbt-test/check-root', resolve(cwd, 'test/build')), {
+    message: /expected jsbt temp path/,
+  });
 });
 
 should('sourceCtx resolves package and source files', () => {
@@ -422,14 +486,15 @@ should('runImportFile imports a fixture file in a worker', async () => {
 });
 
 should('runTempImport writes, imports, and removes generated files', async () => {
-  const cwd = resolve('test/jsbt/vectors/check/pass-root/test/build');
   const prev = process.env.JSBT_LOG_LEVEL;
   process.env.JSBT_LOG_LEVEL = '0';
-  const res = await runTempImport(cwd, {
-    code: "console.log('temp-ok');",
-    ext: 'js',
-    prefix: '.__readme-check-',
-  }).finally(() => {
+  const res = await withOwnRunDir(undefined, (runDir) =>
+    runTempImport(runDir, {
+      code: "console.log('temp-ok');",
+      ext: 'js',
+      prefix: '.__readme-check-',
+    })
+  ).finally(() => {
     if (prev === undefined) delete process.env.JSBT_LOG_LEVEL;
     else process.env.JSBT_LOG_LEVEL = prev;
   });

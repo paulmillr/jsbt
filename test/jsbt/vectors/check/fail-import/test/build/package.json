@@ -1,8 +1,0 @@
-{
-  "name": "@jsbt-test/check-import-fail-build",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@jsbt-test/check-import-fail": "file:../.."
-  }
-}

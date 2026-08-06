@@ -1,27 +1,25 @@
-// Destructive ops and `npm install` SHOULD use only `fs-modify.ts`; do not call `rmSync`, `rmdirSync`,
-// `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
+// Destructive ops SHOULD use only `fs-modify.ts`; do not call `rmSync`, `rmdirSync`,
+// `unlinkSync`, or `writeFileSync` directly here.
 /**
- * `jsbt` dispatches the shared build and audit helpers shipped by `@paulmillr/jsbt`.
+ * `jsbt-check` dispatches the audit helpers shipped by `@paulmillr/jsbt`.
  *
  * Usage:
- *   `jsbt bundle`
- *   `jsbt check`
- *   `jsbt check --project=directory`
- *   `jsbt check bigint`
- *   `jsbt check bytes`
- *   `jsbt check comments`
- *   `jsbt check errors`
- *   `jsbt check importtime`
- *   `jsbt check jsdoc`
- *   `jsbt check jsr`
- *   `jsbt check jsrpublish`
- *   `jsbt check mutate`
- *   `jsbt check patterns`
- *   `jsbt check readme`
- *   `jsbt check treeshake`
- *   `jsbt check tsdoc`
- *   `jsbt check typeimport`
- *   `jsbt check-install package.json`
+ *   `jsbt-check`
+ *   `jsbt-check --project=directory`
+ *   `jsbt-check bigint`
+ *   `jsbt-check bytes`
+ *   `jsbt-check comments`
+ *   `jsbt-check errors`
+ *   `jsbt-check importtime`
+ *   `jsbt-check jsdoc`
+ *   `jsbt-check jsr`
+ *   `jsbt-check jsrpublish`
+ *   `jsbt-check mutate`
+ *   `jsbt-check patterns`
+ *   `jsbt-check readme`
+ *   `jsbt-check treeshake`
+ *   `jsbt-check tsdoc`
+ *   `jsbt-check typeimport`
  * @module
  */
 import * as TSDoc from '@microsoft/tsdoc';
@@ -110,31 +108,27 @@ type CheckWorkerData = {
 type CheckJob = { i: number; item: CheckRun };
 
 const usage = `usage:
-  jsbt bundle [--dir=<build-dir>] [--no-prefix] [--stats]
-  jsbt check [--project=<directory>]
-  jsbt check [--project=<directory>] bigint
-  jsbt check [--project=<directory>] bytes
-  jsbt check [--project=<directory>] comments
-  jsbt check [--project=<directory>] errors
-  jsbt check [--project=<directory>] importtime
-  jsbt check [--project=<directory>] jsdoc
-  jsbt check [--project=<directory>] jsr
-  jsbt check [--project=<directory>] jsrpublish
-  jsbt check [--project=<directory>] mutate
-  jsbt check [--project=<directory>] patterns
-  jsbt check [--project=<directory>] readme
-  jsbt check [--project=<directory>] treeshake
-  jsbt check [--project=<directory>] tsdoc
-  jsbt check [--project=<directory>] typeimport
-  jsbt check-install <package.json>
+  jsbt-check [--project=<directory>]
+  jsbt-check [--project=<directory>] bigint
+  jsbt-check [--project=<directory>] bytes
+  jsbt-check [--project=<directory>] comments
+  jsbt-check [--project=<directory>] errors
+  jsbt-check [--project=<directory>] importtime
+  jsbt-check [--project=<directory>] jsdoc
+  jsbt-check [--project=<directory>] jsr
+  jsbt-check [--project=<directory>] jsrpublish
+  jsbt-check [--project=<directory>] mutate
+  jsbt-check [--project=<directory>] patterns
+  jsbt-check [--project=<directory>] readme
+  jsbt-check [--project=<directory>] treeshake
+  jsbt-check [--project=<directory>] tsdoc
+  jsbt-check [--project=<directory>] typeimport
 
 examples:
-  npx --no @paulmillr/jsbt bundle
-  npx --no @paulmillr/jsbt check
-  npx --no @paulmillr/jsbt check --project=packages/pkg-a
+  npx --no jsbt-check
+  npx --no jsbt-check --project=packages/pkg-a
   npm run check bigint
-  npx --no @paulmillr/jsbt check treeshake`;
-const CHECK_OUT = 'test/build/out-treeshake';
+  npx --no jsbt-check treeshake`;
 const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
 process.argv[1] = workerData.entry;
@@ -147,7 +141,6 @@ const QUIET_ENV = {
   npm_config_update_notifier: 'false',
 } as const;
 const MUTATION_LOG = /^(?:delete\t|install\t|write\t)/;
-const NPM_INSTALL_FAIL = /^Command failed: npm install(?:\s|$)/;
 const CHECK_ALIASES = {
   bigint: 'bigint',
   bytes: 'bytes',
@@ -387,7 +380,7 @@ const checkHead = (name: string | undefined): CheckHead | undefined =>
     : undefined;
 const checkArgs = (argv: string[]) => {
   if (argv.includes('--help') || argv.includes('-h'))
-    return { head: undefined, help: true, outArg: '', pkgArg: '', projectArg: '.' };
+    return { head: undefined, help: true, pkgArg: '', projectArg: '.' };
   const rest: string[] = [];
   let projectArg = '.';
   for (let i = 0; i < argv.length; i++) {
@@ -408,18 +401,17 @@ const checkArgs = (argv: string[]) => {
   }
   if (rest.some((arg) => arg === 'package.json' || /[/\\]package\.json$/.test(arg)))
     err(
-      'package.json positional argument was removed; use jsbt check or jsbt check --project=<directory>'
+      'package.json positional argument was removed; use jsbt-check or jsbt-check --project=<directory>'
     );
   if (rest.length > 1) err('expected [--project=<directory>] [check-name]');
   const head = checkHead(rest[0]);
-  if (head) return { head, help: false, outArg: CHECK_OUT, pkgArg: 'package.json', projectArg };
+  if (head) return { head, help: false, pkgArg: 'package.json', projectArg };
   if (rest[0] === 'tests') err(`unknown check selector: ${rest[0]}`);
   if (rest[0]?.startsWith('check-')) err(`unknown check selector: ${rest[0]}`);
   if (rest[0]) err(`unknown check selector: ${rest[0]}`);
   return {
     head: undefined,
     help: false,
-    outArg: CHECK_OUT,
     pkgArg: 'package.json',
     projectArg,
   };
@@ -449,7 +441,7 @@ const checkTasks = {
   readme: (args, opts) =>
     runReadme([args.pkgArg], { color: opts.color, cwd: opts.cwd, runDir: opts.runDir }),
   treeshake: (args, opts, tree) =>
-    runTreeShaking([args.pkgArg, args.outArg], {
+    runTreeShaking([args.pkgArg], {
       cwd: opts.cwd,
       onIssue: (issue) => tree.push(issue),
       outDir: opts.treeshakeOutDir,
@@ -469,7 +461,6 @@ const runCheckTask = async (head: CheckHead, args: CheckArgs, opts: Opts): Promi
   const tree: TreeIssue[] = [];
   const res = await withQuiet(() => capture(() => checkTasks[head](args, opts, tree)));
   if (tree.length) res.tree = tree;
-  else if (res.error && NPM_INSTALL_FAIL.test(res.error)) res.hard = true;
   else if (head === 'treeshake' && !res.ok) res.hard = true;
   return res;
 };
@@ -501,8 +492,9 @@ const runWorkerMain = async () => {
   }
 };
 const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<Capture> =>
-  // Workers isolate console/env capture for independent checks. npm-installing example checks
-  // share test/build and use process.chdir(), so runCheck keeps them on one main-thread lane.
+  // Workers isolate console/env capture for independent checks. Example checks share the
+  // symlink-assembled temp run dir and use process.chdir(), so runCheck keeps them on one
+  // main-thread lane.
   runWorker<Capture>(WORKER, {
     data: {
       args,
@@ -696,8 +688,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
 };
 
 export const runCli = async (argv: string[], opts: Opts = {}): Promise<void> => {
-  const [...rest] = argv;
-  return runCheck(rest, opts);
+  return runCheck(argv, opts);
 };
 
 const main = async (): Promise<void> => {

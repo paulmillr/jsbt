@@ -28,62 +28,6 @@ const ts = await import('typescript');
 const should = Object.assign(test.serial, { runWhen: test.runWhen });
 
 const fixture = (name: string) => join(ROOT, name);
-const seedTreeshakeInstallFail = () => {
-  const cwd = join(BASE, 'test/jsbt/build/check/treeshake-install-fail');
-  const name = '@jsbt-test/treeshake-install-fail';
-  rmSync(cwd, { force: true, recursive: true });
-  mkdirSync(join(cwd, 'test/build'), { recursive: true });
-  writeFileSync(
-    join(cwd, 'package.json'),
-    `${JSON.stringify(
-      {
-        exports: {
-          '.': {
-            default: './index.js',
-            types: './index.d.mts',
-          },
-        },
-        main: './index.js',
-        module: './index.js',
-        name,
-        private: true,
-        sideEffects: false,
-        type: 'module',
-        types: './index.d.mts',
-        version: '1.0.0',
-      },
-      undefined,
-      2
-    )}\n`
-  );
-  writeFileSync(join(cwd, 'index.js'), 'export const ok = 1;\n');
-  writeFileSync(join(cwd, 'index.d.mts'), 'export declare const ok: number;\n');
-  writeFileSync(
-    join(cwd, 'test/build/package.json'),
-    `${JSON.stringify(
-      {
-        dependencies: {
-          [name]: 'file:../..',
-          bad: 'not a valid spec',
-        },
-        private: true,
-        type: 'module',
-      },
-      undefined,
-      2
-    )}\n`
-  );
-  return cwd;
-};
-const cleanup = (cwd: string) => {
-  const build = join(cwd, 'test/build');
-  rmSync(join(build, 'node_modules'), { force: true, recursive: true });
-  rmSync(join(build, 'out-treeshake'), { force: true, recursive: true });
-  rmSync(join(build, 'package-lock.json'), { force: true });
-  if (!existsSync(build)) return;
-  for (const ent of readdirSync(build))
-    if (ent.startsWith('.__')) rmSync(join(build, ent), { force: true, recursive: true });
-};
 const capture = async (fn: () => Promise<void>) => {
   const prevLog = console.log;
   const prevErr = console.error;
@@ -140,17 +84,11 @@ const captureProcess = async (fn: () => Promise<void>) => {
     process.stderr.write = prevProcErr;
   }
 };
-const run = async (cwd: string, fn: () => Promise<void>) => {
-  cleanup(cwd);
-  const res = await capture(fn);
-  cleanup(cwd);
-  return res;
+const run = async (_cwd: string, fn: () => Promise<void>) => {
+  return capture(fn);
 };
-const runProcess = async (cwd: string, fn: () => Promise<void>) => {
-  cleanup(cwd);
-  const res = await captureProcess(fn);
-  cleanup(cwd);
-  return res;
+const runProcess = async (_cwd: string, fn: () => Promise<void>) => {
+  return captureProcess(fn);
 };
 const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
@@ -423,18 +361,14 @@ should('tsdoc blames original typed declarations instead of re-exports', async (
 
 should('treeshake passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () =>
-    runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
-  );
+  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
   deepStrictEqual(res.ok, true);
   deepStrictEqual(/found unused locals/.test(all(res)), false);
 });
 
 should('treeshake ignores declaration-only type exports', async () => {
   const cwd = fixture('pass-typeonly-runtime');
-  const res = await run(cwd, () =>
-    runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
-  );
+  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
   deepStrictEqual(res.ok, true);
   deepStrictEqual(/TypeOnly/.test(all(res)), false);
   deepStrictEqual(/found unused locals/.test(all(res)), false);
@@ -442,14 +376,12 @@ should('treeshake ignores declaration-only type exports', async () => {
 
 should('treeshake reports unused locals on multi-module fixture', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () =>
-    runTreeshake(['package.json', 'test/build/out-treeshake'], { cwd })
-  );
+  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    /\[ERROR\] treeshake: 3x unused \(treeshake\)\n  test\/build\/out-treeshake\/_tree_shaking_jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_all\.js:\d+\/retained \(broken\/all\)\n  test\/build\/out-treeshake\/broken\/_tree_shaking_broken\.js:\d+\/retained \(broken\/broken\)/.test(
-      plain(res)
-    ),
+    new RegExp(
+      `\\[ERROR\\] treeshake: 3x unused \\(treeshake\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/_tree_shaking_jsbt-test-check-src\\.js:\\d+/retained \\(@jsbt-test/check-src\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_broken\\.js:\\d+/retained \\(broken/broken\\)`
+    ).test(plain(res)),
     true
   );
   deepStrictEqual(/found unused locals in 3 release bundles/.test(all(res)), true);
@@ -590,7 +522,7 @@ should('typeimport proof prefers local import type plus local export type', () =
 
 should('check passes on root-entry fixture with default out dir', async () => {
   const cwd = fixture('pass-root');
-  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt(['check'], cwd)));
+  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt([], cwd)));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/^12 checks started \(JSBT_QUIET=0, JSBT_FAST=0\)/.test(plain(res)), true);
   deepStrictEqual(
@@ -622,7 +554,7 @@ should('check defaults JSBT_FAST like the test runner', async () => {
   const workers = Math.max(1, Math.min(cpus().length, 256));
   const res = await withEnv('JSBT_QUIET', '', () =>
     withEnv('JSBT_FAST', undefined, () =>
-      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
+      run(cwd, () => runJsbt(['comments'], { color: false, cwd }))
     )
   );
   deepStrictEqual(res.ok, true, all(res));
@@ -640,9 +572,7 @@ should('check parses JSBT_FAST offsets and ratios like the test runner', async (
     ratio: Math.max(1, Math.min(Math.floor(max * 0.5), 256)),
   };
   const negative = await withEnv('JSBT_QUIET', '', () =>
-    withEnv('JSBT_FAST', '-1', () =>
-      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
-    )
+    withEnv('JSBT_FAST', '-1', () => run(cwd, () => runJsbt(['comments'], { color: false, cwd })))
   );
   deepStrictEqual(negative.ok, true, all(negative));
   deepStrictEqual(
@@ -653,9 +583,7 @@ should('check parses JSBT_FAST offsets and ratios like the test runner', async (
   );
 
   const ratio = await withEnv('JSBT_QUIET', '', () =>
-    withEnv('JSBT_FAST', '0.5', () =>
-      run(cwd, () => runJsbt(['check', 'comments'], { color: false, cwd }))
-    )
+    withEnv('JSBT_FAST', '0.5', () => run(cwd, () => runJsbt(['comments'], { color: false, cwd })))
   );
   deepStrictEqual(ratio.ok, true, all(ratio));
   deepStrictEqual(
@@ -674,9 +602,7 @@ should('check reports timing stats only for selectors over ten seconds', async (
   try {
     const res = await withEnv('JSBT_QUIET', '', () =>
       withEnv('JSBT_FAST', '', () =>
-        run(cwd, () =>
-          runJsbt(['check', 'comments'], { color: true, cwd, runJsrPublish: okJsrPublish })
-        )
+        run(cwd, () => runJsbt(['comments'], { color: true, cwd, runJsrPublish: okJsrPublish }))
       )
     );
     const out = plain(res);
@@ -707,7 +633,7 @@ should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '1', () =>
     withEnv('JSBT_FAST', '', () =>
-      runProcess(cwd, () => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
+      runProcess(cwd, () => runJsbt([], { color: false, cwd, runJsrPublish: okJsrPublish }))
     )
   );
   const out = plain(res);
@@ -727,7 +653,7 @@ should('check shows warnings when JSBT_QUIET is set', async () => {
   const cwd = fixture('fail-src');
   const res = await withEnv('JSBT_QUIET', '1', () =>
     withEnv('JSBT_FAST', '', () =>
-      runProcess(cwd, () => runJsbt(['check'], { color: false, cwd, runJsrPublish: okJsrPublish }))
+      runProcess(cwd, () => runJsbt([], { color: false, cwd, runJsrPublish: okJsrPublish }))
     )
   );
   const out = plain(res);
@@ -747,7 +673,7 @@ should('check shows warnings when JSBT_QUIET is set', async () => {
 should('check accepts --project directory and runs from another cwd', async () => {
   const cwd = fixture('pass-root');
   const res = await run(cwd, () =>
-    checkJsbt(['check', '--project=test/jsbt/vectors/check/pass-root', 'comments'], BASE)
+    checkJsbt(['--project=test/jsbt/vectors/check/pass-root', 'comments'], BASE)
   );
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(checkSummary([['comments', 0]]).test(plain(res)), true);
@@ -755,14 +681,14 @@ should('check accepts --project directory and runs from another cwd', async () =
 
 should('check rejects the removed package.json positional argument', async () => {
   const cwd = fixture('pass-root');
-  const res = await capture(() => checkJsbt(['check', 'package.json'], cwd));
+  const res = await capture(() => checkJsbt(['package.json'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(/package\.json positional argument was removed/.test(plain(res)), true);
 });
 
 should('check accepts a second-arg selector and reports tsdoc warnings', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'tsdoc'], cwd));
+  const res = await run(cwd, () => checkJsbt(['tsdoc'], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
     /\[WARN\] tsdoc: broken\.d\.mts:1\/broken missing JSDoc \(docs\)/.test(plain(res)),
@@ -781,7 +707,7 @@ should('check accepts a second-arg selector and reports tsdoc warnings', async (
 
 should('check treeshake selector prints standalone treeshake table', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => checkJsbt(['check', 'treeshake'], cwd));
+  const res = await run(cwd, () => checkJsbt(['treeshake'], cwd));
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
@@ -794,25 +720,16 @@ should('check treeshake selector prints standalone treeshake table', async () =>
   deepStrictEqual(checkSummary([['treeshake', 0]]).test(out), true);
 });
 
-should('check treeshake reports npm install failures as errors', async () => {
-  const cwd = seedTreeshakeInstallFail();
-  try {
-    const res = await run(cwd, () => checkJsbt(['check', 'treeshake'], cwd));
-    const out = plain(res);
-    deepStrictEqual(res.ok, false, all(res));
-    deepStrictEqual(
-      /\[ERROR\] treeshake: unknown:0 Command failed: npm install --prefer-offline/.test(out),
-      true
-    );
-    deepStrictEqual(/\[WARN\] treeshake: unknown:0 Command failed: npm install/.test(out), false);
-  } finally {
-    rmSync(cwd, { force: true, recursive: true });
-  }
+should('check readme links exampleDependencies and runtime deps into the run dir', async () => {
+  const cwd = fixture('pass-readme-deps');
+  const res = await run(cwd, () => runReadme(['package.json'], { color: false, cwd }));
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
 should('check accepts a patterns selector without defaulting to all checks', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'patterns'], cwd));
+  const res = await run(cwd, () => checkJsbt(['patterns'], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/\[ERROR\] readme:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] treeshake:/.test(plain(res)), false);
@@ -825,7 +742,7 @@ should('check accepts a jsrpublish selector and asks for full output', async () 
   const cwd = fixture('pass-root');
   let full = false;
   const res = await run(cwd, () =>
-    runJsbt(['check', 'jsrpublish'], {
+    runJsbt(['jsrpublish'], {
       color: false,
       cwd,
       runJsrPublish: async (_argv, opts) => {
@@ -840,14 +757,14 @@ should('check accepts a jsrpublish selector and asks for full output', async () 
 
 should('check rejects non-selector output directory args', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => checkJsbt(['check', 'test/build/custom-treeshake'], cwd));
+  const res = await run(cwd, () => checkJsbt(['test/build/custom-treeshake'], cwd));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(/unknown check selector: test\/build\/custom-treeshake/.test(plain(res)), true);
 });
 
 should('check keeps fs-modify activity inside os tmpdir', async () => {
   const cwd = fixture('pass-root');
-  const res = await withEnv('JSBT_LOG_LEVEL', '0', () => run(cwd, () => checkJsbt(['check'], cwd)));
+  const res = await withEnv('JSBT_LOG_LEVEL', '0', () => run(cwd, () => checkJsbt([], cwd)));
   deepStrictEqual(res.ok, true);
   deepStrictEqual(/(?:delete|install|write)\t/.test(all(res)), false);
   deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(all(res)), false);
@@ -855,7 +772,7 @@ should('check keeps fs-modify activity inside os tmpdir', async () => {
 
 should('check reports importtime warnings without failing', async () => {
   const cwd = fixture('warn-import');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await run(cwd, () => checkJsbt([], cwd));
   deepStrictEqual(res.ok, true);
   deepStrictEqual(
     /\[WARN\] importtime: slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(plain(res)),
@@ -884,7 +801,7 @@ should('check reports importtime warnings without failing', async () => {
 
 should('check reports importtime errors as warnings without table', async () => {
   const cwd = fixture('fail-import');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await run(cwd, () => checkJsbt([], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
     /\[WARN\] importtime: slow\.js:import \d+\.\d+ms \(x\d+\.\d+ from baseline\)/.test(plain(res)),
@@ -922,10 +839,7 @@ should('check keeps importtime on the serial lane', () => {
 
 should('worker-backed checks exit after imported modules leave handles open', async () => {
   const cwd = fixture('pass-worker-handle');
-  for (const argv of [
-    ['check', 'importtime'],
-    ['check', 'mutate'],
-  ]) {
+  for (const argv of [['importtime'], ['mutate']]) {
     const res = await workerJsbt(cwd, argv);
     const text = [all(res), res.error].filter(Boolean).join('\n');
     deepStrictEqual(res.timedOut, false, text);
@@ -939,7 +853,7 @@ should('worker-backed checks exit after imported modules leave handles open', as
 
 should('check reports bigint issues as warnings and keeps other checks green', async () => {
   const cwd = fixture('fail-bigint');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await run(cwd, () => checkJsbt([], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
     /\[WARN\] bigint: 3x replace raw bigint literal with helper const; use const _1n = \/\* @__PURE__ \*\/ BigInt\(1\) for simple values, or const NAME = \/\* @__PURE__ \*\/ BigInt\(\.\.\.\) for specific ones \(bigint\)/.test(
@@ -978,7 +892,7 @@ should('check reports bigint issues as warnings and keeps other checks green', a
 
 should('check reports typeimport issues as warnings and keeps other checks green', async () => {
   const cwd = fixture('fail-typeimport');
-  const res = await run(cwd, () => checkJsbt(['check'], cwd));
+  const res = await run(cwd, () => checkJsbt([], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
     /\[WARN\] typeimport: index\.d\.mts:\d+\/typeimport add import type \{ Shape \} from '\.\/types\.ts'; export type \{ Shape \}; to avoid import\(\.\.\.\) in public types \(typeimport\)/.test(
@@ -1023,7 +937,7 @@ should('check reports typeimport issues as warnings and keeps other checks green
 
 should('check runs all checks before failing', async () => {
   const cwd = fixture('fail-src');
-  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt(['check'], cwd)));
+  const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt([], cwd)));
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
     /\[WARN\] readme: README\.md:12\/usage Argument of type 'string' is not assignable to parameter of type 'number'\. \(type\)/.test(
@@ -1091,7 +1005,7 @@ should('check runs all checks before failing', async () => {
 should('check keeps detailed issues when color is enabled', async () => {
   const cwd = fixture('fail-src');
   const res = await withEnv('JSBT_QUIET', '', () =>
-    run(cwd, () => runJsbt(['check'], { color: true, cwd, runJsrPublish: okJsrPublish }))
+    run(cwd, () => runJsbt([], { color: true, cwd, runJsrPublish: okJsrPublish }))
   );
   deepStrictEqual(res.ok, false);
   deepStrictEqual(/\[\x1b\[33mWARN\x1b\[0m\] readme:/.test(all(res)), true);
@@ -1153,7 +1067,7 @@ should('bundled importtime does not run imported subcommands', async () => {
   try {
     for (const [key, value] of Object.entries(env)) process.env[key] = value;
     const res = await capture(async () => {
-      process.argv = [process.execPath, out, 'check', `--project=${cwd}`, 'importtime'];
+      process.argv = [process.execPath, out, `--project=${cwd}`, 'importtime'];
       await import(`${pathToFileURL(out).href}?t=${Date.now()}`);
     });
     const text = all(res);

@@ -71,11 +71,11 @@ should('mutate reports mutable object and array exports', async () => {
   deepStrictEqual(/Mutate check found issues/.test(plain(res)), true);
 });
 
-should('check-mutate alias is rejected by jsbt dispatcher', async () => {
+should('check-mutate alias is rejected by jsbt-check dispatcher', async () => {
   const cwd = fixture('fail-mutate');
   await rejects(
-    () => runJsbt(['check-mutate', 'package.json'], { color: false, cwd }),
-    /unknown jsbt command: check-mutate/
+    () => runJsbt(['check-mutate'], { color: false, cwd }),
+    /unknown check selector: check-mutate/
   );
 });
 

@@ -1,7 +1,7 @@
 import { deepStrictEqual, rejects } from 'node:assert';
 import { should } from '../../src/test.ts';
 
-type BenchModule = typeof import('../../src/bench.ts');
+type BenchModule = typeof import('../../src/benchmark.ts');
 
 const capture = async (fn: () => Promise<void>) => {
   const prevLog = console.log;
@@ -46,7 +46,7 @@ const loadBench = (env: Record<string, string | undefined>): Promise<BenchModule
       NO_COLOR: undefined,
       ...env,
     },
-    () => import(`../../src/bench.ts?color=${benchImportId++}`)
+    () => import(`../../src/benchmark.ts?color=${benchImportId++}`)
   );
 const loadBenchWithDurations = (
   env: Record<string, string | undefined>,

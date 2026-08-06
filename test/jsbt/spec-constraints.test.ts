@@ -54,17 +54,8 @@ const testTsFiles = (dir = 'test/jsbt'): string[] => {
   return sorted(out);
 };
 const jsbtImport = /import\s+\{([^;]+?)\}\s+from\s+'(\.\.\/\.\.\/src\/jsbt\/[^']+)'/g;
-const cleanupNpmFixture = () => {
-  const build = join(NPM_FIXTURE, 'test/build');
-  rmSync(join(build, 'node_modules'), { force: true, recursive: true });
-  rmSync(join(build, 'out-treeshake'), { force: true, recursive: true });
-  rmSync(join(build, 'package-lock.json'), { force: true });
-  if (!existsSync(build)) return;
-  for (const ent of readdirSync(build))
-    if (ent.startsWith('.__')) rmSync(join(build, ent), { force: true, recursive: true });
-};
 const installNpmFixture = () => {
-  const bin = join(NPM_FIXTURE, 'node_modules/.bin/jsbt');
+  const bin = join(NPM_FIXTURE, 'node_modules/.bin/jsbt-check');
   if (existsSync(bin)) return;
   rmSync(join(NPM_FIXTURE, 'node_modules'), { force: true, recursive: true });
   rmSync(join(NPM_FIXTURE, 'package-lock.json'), { force: true });
@@ -79,14 +70,12 @@ const installNpmFixture = () => {
 const plain = (text: string): string => text.replace(/\x1b\[\d+(;\d+)*m/g, '');
 const runNpmCheck = (args: string[] = []) => {
   installNpmFixture();
-  cleanupNpmFixture();
   const res = spawnSync('npm', ['run', 'check', ...args], {
     cwd: NPM_FIXTURE,
     encoding: 'utf8',
     env: npmEnv,
     timeout: 120_000,
   });
-  cleanupNpmFixture();
   const error = res.error ? `\n${res.error.message}` : '';
   const text = plain(`${res.stdout || ''}${res.stderr || ''}${error}`);
   return { status: res.status, text };
@@ -192,25 +181,21 @@ should('jsbt files with fs-modify constraints do not import raw destructive fs h
   deepStrictEqual(bad, []);
 });
 
-should('jsbt dispatcher exposes only documented top-level commands', () => {
+should('jsbt-check usage documents only selectors', () => {
   const src = read('src/jsbt/index.ts');
   const documented = sorted(
-    Array.from(new Set(Array.from(src.matchAll(/^\s+jsbt\s+(\S+)/gm)).map((item) => item[1])))
-  );
-  const cmdRun = src.match(/const cmdRun = \{([\s\S]*?)\n\} satisfies/)?.[1] || '';
-  const wired = sorted(
     Array.from(
       new Set(
-        Array.from(cmdRun.matchAll(/^\s+(?:'([^']+)'|([A-Za-z]\w*)):/gm)).map(
-          (item) => item[1] || item[2]
+        Array.from(src.matchAll(/^\s+jsbt-check \[--project=<directory>\] (\S+)$/gm)).map(
+          (item) => item[1]
         )
       )
     )
   );
-  deepStrictEqual(wired, documented);
+  deepStrictEqual(documented, sorted([...checkSelectors]));
 });
 
-should('jsbt check exposes only documented selectors', () => {
+should('jsbt-check exposes only documented selectors', () => {
   const src = read('src/jsbt/index.ts');
   const aliases = src.match(/const CHECK_ALIASES = \{([\s\S]*?)\n\} as const/)?.[1] || '';
   const wired = sorted(
@@ -226,7 +211,7 @@ should('README and CLI usage document every check selector', () => {
   const usage = read('src/jsbt/index.ts');
   const missing: string[] = [];
   for (const selector of checkSelectors) {
-    const jsbt = `jsbt check [--project=<directory>] ${selector}`;
+    const jsbt = `jsbt-check [--project=<directory>] ${selector}`;
     const npm = `npm run check ${selector}`;
     if (!usage.includes(jsbt)) missing.push(`src/jsbt/index.ts: ${jsbt}`);
     if (readmeSelectors.includes(selector)) {

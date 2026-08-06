@@ -1,0 +1,5 @@
+{
+  "exampleDependencies": {
+    "@jsbt-test/dep": "1.2.3"
+  }
+}

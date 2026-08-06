@@ -1,9 +1,8 @@
 import { should } from '../src/test.ts';
 
 import './jsbt/bin.test.ts';
-import './jsbt/bench.test.ts';
-import './jsbt/bench-compare.test.ts';
-import './jsbt/bundle.test.ts';
+import './jsbt/benchmark.test.ts';
+import './jsbt/benchmark-compare.test.ts';
 import './jsbt/bytes.test.ts';
 import './jsbt/camel-parts.test.ts';
 import './jsbt/check.test.ts';
@@ -14,7 +13,6 @@ import './jsbt/errors-label.test.ts';
 import './jsbt/errors-object-methods.test.ts';
 import './jsbt/errors-promise.test.ts';
 import './jsbt/errors.test.ts';
-import './jsbt/install.test.ts';
 import './jsbt/jsr.test.ts';
 import './jsbt/jsrpublish.test.ts';
 import './jsbt/line-index.test.ts';

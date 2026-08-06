@@ -4,9 +4,7 @@ node_modules
 *.js.map
 *.d.ts
 *.d.ts.map
-/test/build
 /test/compiled
 /jsbt
 /test/jsbt/build/patterns/
-/test/jsbt/vectors/npm-check/test/build
-/test/jsbt/vectors/errors/pass/test/
+!/test/jsbt/vectors/check/pass-readme-deps/node_modules

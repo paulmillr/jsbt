@@ -91,8 +91,9 @@ const withEnv = async <T>(
   }
 };
 const importTestRunner = (env: Record<string, string | undefined>) =>
-  withEnv({ JSBT_BAIL: undefined, JSBT_FILTER: undefined, ...env }, () =>
-    import(`../../src/test.ts?runner-defaults=${runnerImportId++}`)
+  withEnv(
+    { JSBT_BAIL: undefined, JSBT_FILTER: undefined, ...env },
+    () => import(`../../src/test.ts?runner-defaults=${runnerImportId++}`)
   );
 const runQuietTestModule = async (env: Record<string, string | undefined> = {}) => {
   return withEnv(
@@ -199,7 +200,10 @@ const runProcessShimTestModule = async (env: Record<string, string | undefined> 
   const res = await capture(() => mod.should.run());
   return { mod, res };
 };
-const runFilterTestModule = async (filter: string, env: Record<string, string | undefined> = {}) => {
+const runFilterTestModule = async (
+  filter: string,
+  env: Record<string, string | undefined> = {}
+) => {
   return withEnv(
     {
       CLICOLOR_FORCE: undefined,
@@ -328,16 +332,13 @@ should.serial('tests reports crashed entries but treats timeout as smoke pass', 
   deepStrictEqual(/Tests check found issues/.test(plain(res)), true);
 });
 
-should('check-tests alias is rejected by jsbt dispatcher', async () => {
+should('check-tests alias is rejected by jsbt-check dispatcher', async () => {
   const cwd = fixture('pass');
   await rejects(
-    () => runJsbt(['check-tests', 'package.json'], { color: false, cwd }),
-    /unknown jsbt command: check-tests/
+    () => runJsbt(['check-tests'], { color: false, cwd }),
+    /unknown check selector: check-tests/
   );
-  await rejects(
-    () => runJsbt(['check', 'tests'], { color: false, cwd }),
-    /unknown check selector: tests/
-  );
+  await rejects(() => runJsbt(['tests'], { color: false, cwd }), /unknown check selector: tests/);
 });
 
 should('test runner defaults to fast in cli when JSBT_FAST is unset', async () => {
@@ -395,9 +396,7 @@ should('test multiline reporter rewrites started line on pass', async () => {
   deepStrictEqual(/ahash:/.test(all(res)), false, all(res));
   deepStrictEqual(/\x1b\[32mahash/.test(all(res)), false, all(res));
   deepStrictEqual(
-    /\x1b\[90mahash\x1b\[0m \r\x1b\[90mahash\x1b\[0m \x1b\[32m✓\x1b\[0m\n/.test(
-      all(res)
-    ),
+    /\x1b\[90mahash\x1b\[0m \r\x1b\[90mahash\x1b\[0m \x1b\[32m✓\x1b\[0m\n/.test(all(res)),
     true,
     all(res)
   );
@@ -408,9 +407,7 @@ should('test multiline reporter uses failure symbol on fail', async () => {
   deepStrictEqual(res.ok, false, all(res));
   deepStrictEqual(/☓/.test(all(res)), false, all(res));
   deepStrictEqual(
-    /\x1b\[90mbroken\x1b\[0m \r\x1b\[90mbroken\x1b\[0m \x1b\[31m✕\x1b\[0m\n/.test(
-      all(res)
-    ),
+    /\x1b\[90mbroken\x1b\[0m \r\x1b\[90mbroken\x1b\[0m \x1b\[31m✕\x1b\[0m\n/.test(all(res)),
     true,
     all(res)
   );
@@ -459,9 +456,7 @@ should('test filter matches full test paths', async () => {
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(res.ran, ['hash/ahash']);
   deepStrictEqual(
-    /^1 test started \(JSBT_QUIET=0, JSBT_FAST=0, JSBT_FILTER='hash\/ahash'\)\n/.test(
-      all(res)
-    ),
+    /^1 test started \(JSBT_QUIET=0, JSBT_FAST=0, JSBT_FILTER='hash\/ahash'\)\n/.test(all(res)),
     true,
     all(res)
   );
@@ -505,7 +500,11 @@ should('test default fast runner supports repeated run calls', () => {
   const res = runRepeatedFastRunModule();
   if (res.errorCode === 'EPERM') return;
   deepStrictEqual(res.status, 0, res.text);
-  deepStrictEqual(/internal error: not all tasks have been completed/.test(res.text), false, res.text);
+  deepStrictEqual(
+    /internal error: not all tasks have been completed/.test(res.text),
+    false,
+    res.text
+  );
   deepStrictEqual((res.text.match(/2 tests passed/g) || []).length, 2, res.text);
 });
 
@@ -548,9 +547,7 @@ should('test quiet reporter respects NO_COLOR', async () => {
   });
   const out = plain({ stdout: bail.stdout, stderr: bail.stderr });
   deepStrictEqual(
-    /^2 tests started \(JSBT_QUIET=1, JSBT_FAST=0, JSBT_FILTER='', JSBT_BAIL=0\)\n/.test(
-      out
-    ),
+    /^2 tests started \(JSBT_QUIET=1, JSBT_FAST=0, JSBT_FILTER='', JSBT_BAIL=0\)\n/.test(out),
     true,
     out
   );

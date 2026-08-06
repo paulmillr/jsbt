@@ -99,7 +99,7 @@ should(
 should('check errors selector runs the standalone errors checker', async () => {
   const cwd = fixture('fail');
   const res = await withEnv('JSBT_QUIET', '', () =>
-    capture(() => runJsbt(['check', 'errors'], { color: false, cwd }))
+    capture(() => runJsbt(['errors'], { color: false, cwd }))
   );
   const out = plain(res);
   deepStrictEqual(res.ok, true);
@@ -112,7 +112,7 @@ should('check errors selector runs the standalone errors checker', async () => {
 should('check errors selector reports unprobeable examples before audit rows', async () => {
   const cwd = fixture('mixed-no-calls');
   const res = await withEnv('JSBT_QUIET', '', () =>
-    capture(() => runJsbt(['check', 'errors'], { color: false, cwd }))
+    capture(() => runJsbt(['errors'], { color: false, cwd }))
   );
   const out = plain(res);
   deepStrictEqual(res.ok, true);

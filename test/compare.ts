@@ -1,4 +1,4 @@
-import compare from '../src/bench-compare.ts';
+import compare from '../src/benchmark-compare.ts';
 
 (async () => {
   const SIZES: Record<string, Uint8Array[]> = {};

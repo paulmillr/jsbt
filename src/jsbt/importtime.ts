@@ -9,7 +9,7 @@ Rules:
   - public entries are measured serially to avoid workers inflating each other's timings
   - warn when median import time exceeds max(fastest median import * 2, fastest median import + 5ms)
   - fail when median import time exceeds 20x the fastest median import
-  - standalone command prints a timing table; generic `jsbt check` should pass `quiet: true`
+  - standalone command prints a timing table; generic `jsbt-check` should pass `quiet: true`
  */
 import { publicCtx, publicRows, type PublicRow } from './public.ts';
 import {

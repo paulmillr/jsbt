@@ -1,15 +1,14 @@
-// Only shipped place allowed to run `npm install`, write temp files, or delete them.
+// Only shipped place allowed to write temp files, assemble run-dir node_modules, or delete them.
 // Mutations outside the OS temp directory are always logged.
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
 const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
-const BUNDLE_PREFIX = 'jsbt-bundle-';
 const CHECK_PREFIX = 'jsbt-check-';
-const NPM_INSTALL_ARGS = ['install', '--prefer-offline'] as const;
+const BARE_PKG_NAME = /^(@[\w.-]+\/)?[\w.-]+$/;
 const err = (msg: string): never => {
   throw new Error(msg);
 };
@@ -19,20 +18,18 @@ const inOsTmpDir = (path: string): boolean => {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 };
 const shouldLog = (path: string): boolean => !inOsTmpDir(path);
-const inBuild = (path: string): boolean =>
-  path.endsWith('/test/build') || path.includes('/test/build/');
-const inPrefixedTmp = (path: string, prefix: string): boolean => {
+const inCheckTmp = (path: string): boolean => {
   if (!inOsTmpDir(path)) return false;
   const rel = relative(tmpdir(), path);
-  return (rel.split(/[\\/]/)[0] || '').startsWith(prefix);
+  return (rel.split(/[\\/]/)[0] || '').startsWith(CHECK_PREFIX);
 };
-const inBundleTmp = (path: string): boolean => inPrefixedTmp(path, BUNDLE_PREFIX);
-const inCheckTmp = (path: string): boolean => inPrefixedTmp(path, CHECK_PREFIX);
-const inWorkDir = (path: string): boolean => inBuild(path) || inBundleTmp(path) || inCheckTmp(path);
-const workDirError = (path: string): string => `expected test/build or jsbt temp path: ${path}`;
+export const assertTemp = (path: string): string => {
+  if (!isAbsolute(path)) err(`expected absolute path: ${path}`);
+  if (!inCheckTmp(path)) err(`expected jsbt temp path: ${path}`);
+  return path;
+};
 export const assertAllowed = (file: string): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(workDirError(file));
+  assertTemp(file);
   const name = basename(file);
   if (!EXTS.some((ext) => name.endsWith(ext))) err(`refusing unexpected extension: ${file}`);
   if (!PREFIXES.some((prefix) => name.startsWith(prefix)))
@@ -45,75 +42,47 @@ export const write = (file: string, data: string | Uint8Array): string => (
   shouldLog(file) && console.log(`write\t${file}`),
   file
 );
-export const writePkg = (file: string, data: string | Uint8Array): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (basename(file) !== 'package.json') err(`expected package.json path: ${file}`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, data);
-  if (shouldLog(file)) console.log(`write\t${file}`);
-  return file;
-};
-export const writeBundleInput = (file: string, data: string | Uint8Array): string => {
-  if (!isAbsolute(file)) err(`expected absolute path: ${file}`);
-  if (!inWorkDir(file)) err(workDirError(file));
-  if (basename(file) !== 'input.js') err(`expected input.js path: ${file}`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, data);
-  if (shouldLog(file)) console.log(`write\t${file}`);
-  return file;
-};
 export const rm = (file: string): boolean => (
   rmSync(assertAllowed(file), { force: true }),
   shouldLog(file) && console.log(`delete\t${file}`),
   true
 );
-export const npmInstall = (dir: string): void => {
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(workDirError(dir));
-  const log = shouldLog(dir);
-  if (log) console.log(`install\t${dir}`);
-  execFileSync('npm', [...NPM_INSTALL_ARGS], {
-    cwd: dir,
-    stdio: log ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-  });
+// `esbuild` is provided automatically: examples and treeshake never declare it. Prefer
+// the checked project's own install; fall back to the copy next to jsbt itself.
+const esbuildDir = (cwd: string): string | undefined => {
+  const local = join(cwd, 'node_modules', 'esbuild');
+  if (existsSync(local)) return local;
+  try {
+    return dirname(createRequire(import.meta.url).resolve('esbuild/package.json'));
+  } catch {
+    return undefined;
+  }
 };
-export const sweep = (dir: string): string[] => {
-  if (!existsSync(dir)) return [];
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inWorkDir(dir)) err(workDirError(dir));
-  const out: string[] = [];
-  const walk = (cur: string): void => {
-    for (const ent of readdirSync(cur, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    )) {
-      const file = join(cur, ent.name);
-      if (ent.isDirectory()) walk(file);
-      else if (
-        EXTS.some((ext) => ent.name.endsWith(ext)) &&
-        PREFIXES.some((prefix) => ent.name.startsWith(prefix))
-      ) {
-        out.push(file);
-      }
-    }
-  };
-  walk(dir);
-  for (const file of out) rm(file);
-  return out;
+const linkDep = (target: string, link: string): void => {
+  // Shared run dirs are re-prepared by every checker; the first symlink wins.
+  if (existsSync(link)) return;
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync(target, link, 'dir');
 };
-export const sweepTemps = (cwd: string): void => {
-  sweep(cwd);
-};
-export const bundleTempDir = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), BUNDLE_PREFIX));
-  if (shouldLog(dir)) console.log(`mkdir\t${dir}`);
-  return dir;
-};
-export const rmBundleTempDir = (dir: string): boolean => {
-  if (!isAbsolute(dir)) err(`expected absolute path: ${dir}`);
-  if (!inBundleTmp(dir)) err(`expected jsbt bundle temp path: ${dir}`);
-  rmSync(dir, { force: true, recursive: true });
-  if (shouldLog(dir)) console.log(`delete\t${dir}`);
-  return true;
+// Assembles the isolated run dir: a manifest plus node_modules symlinked from the
+// project's own installed deps. Nothing is fetched — the import surface is fixed by
+// reviewed committed files (package.json dependencies and .jsbtrc.json), never by
+// example content.
+export const installRunDeps = (cwd: string, name: string, dir: string, deps: string[]): void => {
+  assertTemp(dir);
+  if (!isAbsolute(cwd)) err(`expected absolute path: ${cwd}`);
+  if (!BARE_PKG_NAME.test(name)) err(`invalid package name: ${name}`);
+  mkdirSync(dir, { recursive: true });
+  const manifest = { dependencies: { [name]: `file:${cwd}` }, private: true, type: 'module' };
+  writeFileSync(join(dir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  const nodeModules = join(dir, 'node_modules');
+  linkDep(cwd, join(nodeModules, name));
+  for (const dep of deps) {
+    if (!BARE_PKG_NAME.test(dep)) err(`invalid dependency name: ${dep}`);
+    linkDep(join(cwd, 'node_modules', dep), join(nodeModules, dep));
+  }
+  const esbuild = esbuildDir(cwd);
+  if (esbuild) linkDep(esbuild, join(nodeModules, 'esbuild'));
 };
 export const checkTempDir = (): string => {
   const dir = mkdtempSync(join(tmpdir(), CHECK_PREFIX));
@@ -129,10 +98,8 @@ export const rmCheckTempDir = (dir: string): boolean => {
 };
 export const __TEST: {
   inOsTmpDir: (path: string) => boolean;
-  npmInstallArgs: () => string[];
   shouldLogPath: (path: string) => boolean;
 } = {
   inOsTmpDir: inOsTmpDir,
-  npmInstallArgs: () => [...NPM_INSTALL_ARGS],
   shouldLogPath: shouldLog,
 };

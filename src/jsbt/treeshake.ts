@@ -1,10 +1,11 @@
 #!/usr/bin/env -S node
 /**
-Destructive ops and `npm install` SHOULD use only `fs-modify.ts`;
-do not call `rmSync`, `rmdirSync`, `unlinkSync`, `writeFileSync`, or raw `npm install` directly here.
+Destructive ops SHOULD use only `fs-modify.ts`;
+do not call `rmSync`, `rmdirSync`, `unlinkSync`, or `writeFileSync` directly here.
 
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`, then run it after a fresh build.
-Like `jsbt bundle`, it runs `npm install` in the selected build directory before checking.
+It bundles from a generated jsbt temp run directory whose node_modules symlink the checked
+package and `esbuild` from already-installed copies; nothing is fetched at check time.
 File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 It prints grouped `unused` issues for locals that still survive bundling.
@@ -18,7 +19,7 @@ if a computed arg or top-level value still survives, a tiny pure IIFE is the nex
 import { existsSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { npmInstall, sweepTemps, write } from '../fs-modify.ts';
+import { write } from '../fs-modify.ts';
 import { exportPath, readPkg, type Pkg } from './public.ts';
 import {
   camelParts,
@@ -39,10 +40,11 @@ import {
   runSelf,
   table,
   wantColor,
+  withOwnRunDir,
   type Issue as LogIssue,
 } from './utils.ts';
 
-type Args = { help: boolean; pkgArg: string; outArg: string };
+type Args = { help: boolean; pkgArg: string };
 type TsLike = {
   ModuleKind: { ESNext: unknown };
   ScriptTarget: { ESNext: unknown };
@@ -111,7 +113,6 @@ type Built = Item & { file: string; min: Uint8Array; minFile: string; plain: Uin
 type AuditItem = { code: number; line: number; text: string };
 export type TreeIssue = { file: string; id: string; line: number; text: string };
 type TestApi = {
-  esbuildPkg: typeof esbuildPkg;
   exportPath: typeof exportPath;
   itemId: typeof itemId;
   loadDeps: typeof loadDeps;
@@ -119,14 +120,13 @@ type TestApi = {
   parseArgs: typeof parseArgs;
   resolveCtx: typeof resolveCtx;
   slug: typeof slug;
-  sweepTemps: typeof sweepTemps;
 };
 
 const usage = `usage:
-  jsbt treeshake <package.json> <out-dir>
+  jsbt treeshake <package.json>
 
 examples:
-  jsbt treeshake package.json test/build/out-treeshake`;
+  jsbt treeshake package.json`;
 
 const decoder = new TextDecoder();
 const ALL = 'all';
@@ -143,45 +143,33 @@ const slug = (s: string): string =>
     .replace(/[^a-zA-Z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 const parseArgs = (argv: string[]): Args => {
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true, outArg: '', pkgArg: '' };
-  if (argv.length !== 2) err('expected <package.json> and <out-dir>');
-  return { help: false, outArg: argv[1], pkgArg: argv[0] };
+  if (argv.includes('--help') || argv.includes('-h')) return { help: true, pkgArg: '' };
+  if (argv.length !== 1) err('expected <package.json>');
+  return { help: false, pkgArg: argv[0] };
 };
-const resolveCtx = (args: Args, cwd: string = process.cwd(), outArg?: string): Ctx => {
+const resolveCtx = (args: Args, cwd: string = process.cwd(), outArg = ''): Ctx => {
   const base = resolve(cwd);
   const pkgFile = resolve(base, args.pkgArg);
-  const outDir = outArg ? resolve(outArg) : resolve(base, args.outArg);
-  if (outArg && !isAbsolute(outArg)) err(`expected absolute out dir: ${outArg}`);
-  if (!outArg) {
-    const outRel = relative(base, outDir);
-    if (!outRel || outRel === '.' || outRel.startsWith('..'))
-      err(`refusing unsafe out dir ${args.outArg}; expected a child dir of ${base}`);
-  }
-  return { cwd: base, outDir, pkg: readPkg(pkgFile), pkgDir: dirname(pkgFile), pkgFile };
-};
-const esbuildPkg = (pkgFile: string): string => {
-  const file = resolve(dirname(pkgFile), 'test', 'build', 'package.json');
-  return existsSync(file) ? file : pkgFile;
+  if (!outArg || !isAbsolute(outArg)) err(`expected absolute out dir: ${outArg}`);
+  return { cwd: base, outDir: outArg, pkg: readPkg(pkgFile), pkgDir: dirname(pkgFile), pkgFile };
 };
 const loadDepsFrom = (pkgFile: string, esbuildPkgFile: string): Deps => {
-  // `esbuild` usually lives under `test/build`; TypeScript lives at the repo root.
+  // `esbuild` links into the run dir node_modules; TypeScript lives at the repo root.
   const esbuild = loadModuleApi<{ build?: BuildLike }>(esbuildPkgFile, 'esbuild', 'esbuild.build', [
     'build',
   ]);
   const ts = loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
   return { build: esbuild.build as BuildLike, ts };
 };
-const loadDeps = (pkgFile: string): Deps => loadDepsFrom(pkgFile, esbuildPkg(pkgFile));
-const loadRunDeps = (pkgFile: string, esbuildPkgFile: string, fallbackPkgFile?: string): Deps => {
+const loadDeps = (pkgFile: string): Deps => loadDepsFrom(pkgFile, pkgFile);
+const loadRunDeps = (pkgFile: string, esbuildPkgFile: string, fallbackPkgFile: string): Deps => {
   try {
     return loadDepsFrom(pkgFile, esbuildPkgFile);
   } catch (error) {
-    if (!fallbackPkgFile || !/missing esbuild near /.test((error as Error).message)) throw error;
+    if (!/missing esbuild near /.test((error as Error).message)) throw error;
     return loadDepsFrom(pkgFile, fallbackPkgFile);
   }
 };
-const hasEsbuildInstall = (pkgFile: string): boolean =>
-  existsSync(join(dirname(pkgFile), 'node_modules', 'esbuild'));
 const isPkgAll = (item: Pick<Item, 'dir' | 'out'>) => !item.dir && item.out === ALL;
 const itemId = (pkg: Pkg, item: Pick<Item, 'dir' | 'export' | 'module' | 'out'>): string =>
   isPkgAll(item) ? pkg.name : `${item.module}/${item.export || ALL}`;
@@ -409,65 +397,64 @@ export const runCli = async (
     console.log(usage);
     return;
   }
-  const ctx = resolveCtx(args, opts.cwd, opts.outDir);
-  const runDir = opts.runDir ? prepareRunDir(ctx.cwd, ctx.pkg.name, opts.runDir) : undefined;
-  const esbuildPkgFile = runDir ? join(runDir, 'package.json') : esbuildPkg(ctx.pkgFile);
-  const fallbackEsbuildPkgFile = runDir ? esbuildPkg(ctx.pkgFile) : undefined;
-  if (!fallbackEsbuildPkgFile || !hasEsbuildInstall(fallbackEsbuildPkgFile))
-    npmInstall(dirname(esbuildPkgFile));
-  sweepTemps(ctx.outDir);
-  sweepTemps(dirname(ctx.outDir));
-  const { build, ts } = opts.load
-    ? opts.load(ctx.pkgFile)
-    : loadRunDeps(ctx.pkgFile, esbuildPkgFile, fallbackEsbuildPkgFile);
-  const mods = readModules(ctx, ts);
-  const items = cases(ctx.pkg, mods);
-  const headers = ['module', 'export', 'min bundle', 'LOC', 'min KB', 'gzip KB (%)'];
-  const sizes = [
-    Math.max(headers[0].length, ...items.map((item) => item.module.length)),
-    Math.max(headers[1].length, ...items.map((item) => item.export.length)),
-    Math.max(headers[2].length, ...items.map((item) => outPath(ctx.pkg, item, 'min.js').length)),
-    Math.max(headers[3].length, 5),
-    Math.max(headers[4].length, 6),
-    Math.max(headers[5].length, 18),
-  ];
-  const print = table(console.log);
-  if (!opts.quiet) print.drawHeader(sizes, headers);
-  let prev: string[] | undefined;
-  const built: Built[] = [];
-  for (const item of items) {
-    const out = await writeCase(ctx, build, item);
-    built.push(out);
-    if (!opts.quiet) prev = print.printRow(row(ctx, item, out), prev, sizes, headers.slice(0, 2));
-  }
-  if (!opts.quiet) {
-    print.drawSeparator(
-      sizes,
-      sizes.map(() => true)
-    );
-  }
-  const issues = audit(
-    ts,
-    built.map((item) => item.file)
-  );
-  if (!issues.size) return;
-  const logs: LogIssue[] = [];
-  for (const item of built) {
-    const list = issues.get(item.file);
-    if (!list?.length) continue;
-    for (const entry of list) {
-      const issue = treeIssue(ctx.pkg, item, entry);
-      opts.onIssue?.(issue);
-      logs.push(treeIssueLog(ctx.cwd, issue));
+  return withOwnRunDir(opts.runDir, async (runDirRaw: string) => {
+    const outDir = opts.outDir || join(dirname(runDirRaw), 'out-treeshake');
+    const ctx = resolveCtx(args, opts.cwd, outDir);
+    const { build, ts } = opts.load
+      ? opts.load(ctx.pkgFile)
+      : loadRunDeps(
+          ctx.pkgFile,
+          join(prepareRunDir(ctx.cwd, ctx.pkg.name, runDirRaw), 'package.json'),
+          ctx.pkgFile
+        );
+    const mods = readModules(ctx, ts);
+    const items = cases(ctx.pkg, mods);
+    const headers = ['module', 'export', 'min bundle', 'LOC', 'min KB', 'gzip KB (%)'];
+    const sizes = [
+      Math.max(headers[0].length, ...items.map((item) => item.module.length)),
+      Math.max(headers[1].length, ...items.map((item) => item.export.length)),
+      Math.max(headers[2].length, ...items.map((item) => outPath(ctx.pkg, item, 'min.js').length)),
+      Math.max(headers[3].length, 5),
+      Math.max(headers[4].length, 6),
+      Math.max(headers[5].length, 18),
+    ];
+    const print = table(console.log);
+    if (!opts.quiet) print.drawHeader(sizes, headers);
+    let prev: string[] | undefined;
+    const built: Built[] = [];
+    for (const item of items) {
+      const out = await writeCase(ctx, build, item);
+      built.push(out);
+      if (!opts.quiet) prev = print.printRow(row(ctx, item, out), prev, sizes, headers.slice(0, 2));
     }
-  }
-  if (!opts.quiet)
-    for (const line of groupIssues('treeshake', logs, wantColor())) console.error(line);
-  err(`found unused locals in ${issues.size} release bundles`);
+    if (!opts.quiet) {
+      print.drawSeparator(
+        sizes,
+        sizes.map(() => true)
+      );
+    }
+    const issues = audit(
+      ts,
+      built.map((item) => item.file)
+    );
+    if (!issues.size) return;
+    const logs: LogIssue[] = [];
+    for (const item of built) {
+      const list = issues.get(item.file);
+      if (!list?.length) continue;
+      for (const entry of list) {
+        const issue = treeIssue(ctx.pkg, item, entry);
+        opts.onIssue?.(issue);
+        logs.push(treeIssueLog(ctx.cwd, issue));
+      }
+    }
+    if (!opts.quiet)
+      for (const line of groupIssues('treeshake', logs, wantColor())) console.error(line);
+    err(`found unused locals in ${issues.size} release bundles`);
+  });
 };
 
 export const __TEST: TestApi = {
-  esbuildPkg: esbuildPkg,
   exportPath: exportPath,
   itemId: itemId,
   loadDeps: loadDeps,
@@ -475,7 +462,6 @@ export const __TEST: TestApi = {
   parseArgs: parseArgs,
   resolveCtx: resolveCtx,
   slug: slug,
-  sweepTemps: sweepTemps,
 };
 
 runSelf(import.meta.url, runCli);

@@ -1,11 +1,10 @@
 #!/usr/bin/env -S node
 /**
-Destructive ops and `npm install` SHOULD use only `fs-modify.ts`.
-Do not call raw fs delete/write helpers or raw `npm install` directly here.
+Destructive ops SHOULD use only `fs-modify.ts`.
+Do not call raw fs delete/write helpers directly here.
 
 Canonical shared copy: keep this file in `@paulmillr/jsbt/src/jsbt`,
 then run it after a fresh build.
-Like `jsbt bundle`, it runs `npm install` in the selected run/build directory before checking.
 File writes/deletes log through `fs-modify.ts` outside the OS temp directory.
 
 It audits the built public `.d.ts` export surface, requires JSDoc on every public export,
@@ -26,14 +25,13 @@ public usage: reject placeholders like `void Symbol;`, `{} as any`, or
 alias-only `type Example = Foo;`.
 
 All writes and other modifications MUST stay under the selected run/build directory.
-This checker takes only a package.json path, uses `test/build` next to it as the default run
-directory or a dispatcher-provided temp run directory, and MUST fail if the fixture template is
-missing or if `test/build/package.json` does not install the checked package name as `"file:../.."`.
+This checker takes only a package.json path and runs examples in a generated jsbt temp run
+directory (or a dispatcher-provided one) installing the checked package as a `file:` dependency,
+plus the deps allowed by package.json `dependencies` and `.jsbtrc.json` `exampleDependencies`.
  */
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
-import { npmInstall, sweepTemps } from '../fs-modify.ts';
 import { scanPatternText } from './patterns.ts';
 import {
   dtsPath,
@@ -66,6 +64,7 @@ import {
   sorted,
   usageText,
   wantColor,
+  withOwnRunDir,
   withRunDir,
   withTempFile,
   type ExecRes,
@@ -222,7 +221,6 @@ type TestApi = {
   prototypeThrows: typeof prototypeThrows;
   prototypeThrowsRaw: typeof prototypeThrowsRaw;
   shouldInject: typeof shouldInject;
-  sweepTemps: typeof sweepTemps;
 };
 type ThrowInfo = { direct: Set<string>; thrown: Set<string>; unknown: boolean };
 type ThrowRawReport = {
@@ -262,7 +260,7 @@ const tagText = (value: unknown): string => {
   if (typeof value === 'string') return value;
   return Array.isArray(value) ? partsText(value as Disp[]) : '';
 };
-const resolveCtx = (args: PkgArgs, cwd = process.cwd(), runDir?: string): Ctx => {
+const resolveCtx = (args: PkgArgs, cwd = process.cwd(), runDir = ''): Ctx => {
   return withRunDir(publicCtx(args.pkgArg, cwd), runDir);
 };
 const loadTs = (pkgFile: string): TsLike => {
@@ -2032,143 +2030,145 @@ export const runCli = async (
     console.log(usage);
     return;
   }
-  const colorOn = opts.color ?? wantColor();
-  const ctx = resolveCtx(args, opts.cwd, opts.runDir);
-  npmInstall(ctx.runDir);
-  const log: LogIssue[] = [];
-  const ts = (opts.loadTs || loadTs)(ctx.pkgFile);
-  const tsdoc = (opts.loadTSDoc || loadTSDoc)(ctx.pkgFile);
-  const mods = listPublicModules(ctx);
-  const typedSeen = new Set<string>();
-  const analysis = analyzeDocs(ts, mods);
-  const dtsChecker = analysis.dtsChecker;
-  const srcIndex = sourceIndex(ts, mods);
-  const checkExampleTypes = opts.checkTypes
-    ? (code: string) => opts.checkTypes!(ts, ctx.runDir, code)
-    : makeTypeCheck(ts, ctx.runDir, '.__jsdoc-check.ts');
-  const throwReports = collectPrototypeThrows(
-    ctx,
-    ts,
-    analysis.rows,
-    analysis.dtsChecker,
-    analysis.jsChecker
-  );
-  const throwMap = new Map(throwReports.map((item) => [`${item.key}:${item.name}`, item]));
-  const out = emptyResult();
-  const rowResults: { failed: boolean }[] = [];
-  const runExample = createLimit(opts.runCode ? 1 : jsbtWorkerLimit(EXAMPLE_WORKERS));
-  const exampleRunCode = opts.runCode || runCodeInCurrentCwd;
-  const pendingExamples: Promise<() => void>[] = [];
-  for (const row of analysis.rows) {
-    const { ex, exported, item, mod } = row;
-    if (forwardedAliasDocs(ts, mods, mod, exported, ex)) continue;
-    const sourceDecl = docNode(symDecl(ex.src));
-    const wrappedDecl = unwrapDocDecl(ts, dtsChecker, ex.decl);
-    const typed = typeDecls(ts, ex.resolved);
-    const smeta = declMeta(tsdoc, sourceDecl);
-    const wmeta = wrappedDecl ? declMeta(tsdoc, wrappedDecl) : undefined;
-    // TRet<T>/TArg<T> exports often carry the public callable docs on the inner type alias.
-    const vmeta = smeta.hasDocs || !wmeta?.hasDocs ? smeta : wmeta;
-    const tmeta = typedMeta(tsdoc, typed);
-    const typedItem = itemAt(
-      item,
-      ex.decl,
-      ex.decl?.name?.getText?.() || ex.resolved.getName() || item.name
+  return withOwnRunDir(opts.runDir, async (runDir: string) => {
+    const colorOn = opts.color ?? wantColor();
+    const ctx = resolveCtx(args, opts.cwd, runDir);
+    const log: LogIssue[] = [];
+    const ts = (opts.loadTs || loadTs)(ctx.pkgFile);
+    const tsdoc = (opts.loadTSDoc || loadTSDoc)(ctx.pkgFile);
+    const mods = listPublicModules(ctx);
+    const typedSeen = new Set<string>();
+    const analysis = analyzeDocs(ts, mods);
+    const dtsChecker = analysis.dtsChecker;
+    const srcIndex = sourceIndex(ts, mods);
+    const checkExampleTypes = opts.checkTypes
+      ? (code: string) => opts.checkTypes!(ts, ctx.runDir, code)
+      : makeTypeCheck(ts, ctx.runDir, '.__jsdoc-check.ts');
+    const throwReports = collectPrototypeThrows(
+      ctx,
+      ts,
+      analysis.rows,
+      analysis.dtsChecker,
+      analysis.jsChecker
     );
-    const rowResult = { failed: false };
-    rowResults.push(rowResult);
-    const fail = (at: ItemRef, text: string, kind: string): void => {
-      rowResult.failed = true;
-      recordDocIssue(out, log, 'error', at, text, kind);
-    };
-    const failUnique = (seen: Set<string>, at: ItemRef, text: string, kind: string): void => {
-      if (!recordUniqueDocIssue(out, log, seen, 'error', at, text, kind)) return;
-      rowResult.failed = true;
-    };
-    const failTyped: FailFn = (at, text, kind) => failUnique(typedSeen, at, text, kind);
-    const info = typeOfExport(ts, dtsChecker, ex.resolved);
-    if (typed.length) {
-      reportDocMeta(failTyped, typedItem, tmeta, TYPE_DOC_MSG);
-    } else {
-      reportDocMeta(fail, item, vmeta, DOC_MSG);
-    }
-    const needsValueDocs = item.runtime || !typed.length;
-    const inferredThrows = throwMap.get(`${item.key}:${item.name}`);
-    if (info.params.length)
-      reportParamDocs(fail, item, info.params, needsValueDocs ? vmeta.tags : [], info.bagRefs);
-    const ret = needsValueDocs ? returnTag(vmeta.tags) : undefined;
-    if (needsValueDocs && !!info.kind && inferredThrows) {
-      for (const err of throwsCoverageIssues(vmeta.tags, throwInfo(inferredThrows))) {
-        fail(item, err, 'throws');
+    const throwMap = new Map(throwReports.map((item) => [`${item.key}:${item.name}`, item]));
+    const out = emptyResult();
+    const rowResults: { failed: boolean }[] = [];
+    const runExample = createLimit(opts.runCode ? 1 : jsbtWorkerLimit(EXAMPLE_WORKERS));
+    const exampleRunCode = opts.runCode || runCodeInCurrentCwd;
+    const pendingExamples: Promise<() => void>[] = [];
+    for (const row of analysis.rows) {
+      const { ex, exported, item, mod } = row;
+      if (forwardedAliasDocs(ts, mods, mod, exported, ex)) continue;
+      const sourceDecl = docNode(symDecl(ex.src));
+      const wrappedDecl = unwrapDocDecl(ts, dtsChecker, ex.decl);
+      const typed = typeDecls(ts, ex.resolved);
+      const smeta = declMeta(tsdoc, sourceDecl);
+      const wmeta = wrappedDecl ? declMeta(tsdoc, wrappedDecl) : undefined;
+      // TRet<T>/TArg<T> exports often carry the public callable docs on the inner type alias.
+      const vmeta = smeta.hasDocs || !wmeta?.hasDocs ? smeta : wmeta;
+      const tmeta = typedMeta(tsdoc, typed);
+      const typedItem = itemAt(
+        item,
+        ex.decl,
+        ex.decl?.name?.getText?.() || ex.resolved.getName() || item.name
+      );
+      const rowResult = { failed: false };
+      rowResults.push(rowResult);
+      const fail = (at: ItemRef, text: string, kind: string): void => {
+        rowResult.failed = true;
+        recordDocIssue(out, log, 'error', at, text, kind);
+      };
+      const failUnique = (seen: Set<string>, at: ItemRef, text: string, kind: string): void => {
+        if (!recordUniqueDocIssue(out, log, seen, 'error', at, text, kind)) return;
+        rowResult.failed = true;
+      };
+      const failTyped: FailFn = (at, text, kind) => failUnique(typedSeen, at, text, kind);
+      const info = typeOfExport(ts, dtsChecker, ex.resolved);
+      if (typed.length) {
+        reportDocMeta(failTyped, typedItem, tmeta, TYPE_DOC_MSG);
+      } else {
+        reportDocMeta(fail, item, vmeta, DOC_MSG);
       }
-    }
-    reportReturnDoc(fail, item, info.returns, ret);
-    if (typed.length) {
-      for (const member of docItems(ts, tsdoc, dtsChecker, ex.resolved)) {
-        const memberItem = itemAt(typedItem, member.owner, member.ownerName);
-        const inline =
-          member.inline || sourceInline(srcIndex, memberItem.dtsFile, memberItem.name, member.name);
-        reportDocMeta(failTyped, memberItem, member, memberDocMsg(member.name), () => {
-          if (hasDocText(member) && inline) {
-            failTyped(
+      const needsValueDocs = item.runtime || !typed.length;
+      const inferredThrows = throwMap.get(`${item.key}:${item.name}`);
+      if (info.params.length)
+        reportParamDocs(fail, item, info.params, needsValueDocs ? vmeta.tags : [], info.bagRefs);
+      const ret = needsValueDocs ? returnTag(vmeta.tags) : undefined;
+      if (needsValueDocs && !!info.kind && inferredThrows) {
+        for (const err of throwsCoverageIssues(vmeta.tags, throwInfo(inferredThrows))) {
+          fail(item, err, 'throws');
+        }
+      }
+      reportReturnDoc(fail, item, info.returns, ret);
+      if (typed.length) {
+        for (const member of docItems(ts, tsdoc, dtsChecker, ex.resolved)) {
+          const memberItem = itemAt(typedItem, member.owner, member.ownerName);
+          const inline =
+            member.inline ||
+            sourceInline(srcIndex, memberItem.dtsFile, memberItem.name, member.name);
+          reportDocMeta(failTyped, memberItem, member, memberDocMsg(member.name), () => {
+            if (hasDocText(member) && inline) {
+              failTyped(
+                memberItem,
+                `member ${member.name} must not mix JSDoc with inline comment`,
+                'member'
+              );
+            }
+          });
+          if (!hasDocText(member)) continue;
+          const memberTags = paramTagRows(member.tags);
+          const memberRet = returnTag(member.tags, true);
+          const viaRef = member.ref?.hasDocs && !memberTags.length && !memberRet;
+          if (!viaRef) {
+            reportParamDocs(
+              failTyped,
               memberItem,
-              `member ${member.name} must not mix JSDoc with inline comment`,
-              'member'
+              member.info.params,
+              member.tags,
+              member.bagRefs,
+              member.name
             );
+            reportReturnDoc(failTyped, memberItem, member.info.returns, memberRet, member.name);
           }
-        });
-        if (!hasDocText(member)) continue;
-        const memberTags = paramTagRows(member.tags);
-        const memberRet = returnTag(member.tags, true);
-        const viaRef = member.ref?.hasDocs && !memberTags.length && !memberRet;
-        if (!viaRef) {
-          reportParamDocs(
-            failTyped,
-            memberItem,
-            member.info.params,
-            member.tags,
-            member.bagRefs,
-            member.name
-          );
-          reportReturnDoc(failTyped, memberItem, member.info.returns, memberRet, member.name);
         }
       }
-    }
-    const examples = needsValueDocs ? vmeta.examples : [];
-    const needsExample = needsValueDocs && !!info.kind && !info.fnParams.length;
-    if (needsExample) {
-      if (!examples.length) {
-        fail(item, 'missing @example', 'example');
-      }
-    }
-    if (examples.length) {
-      for (let i = 0; i < examples.length; i++) {
-        for (const err of examples[i].errors) {
-          fail(item, `example ${i + 1}: ${err}`, 'example');
+      const examples = needsValueDocs ? vmeta.examples : [];
+      const needsExample = needsValueDocs && !!info.kind && !info.fnParams.length;
+      if (needsExample) {
+        if (!examples.length) {
+          fail(item, 'missing @example', 'example');
         }
-        if (!examples[i].code) continue;
-        const example = examples[i];
-        const n = i + 1;
-        pendingExamples.push(
-          runExample(() =>
-            tryExample(example.code, item, ctx, ts, {
-              checkTypes: checkExampleTypes,
-              runCode: exampleRunCode,
+      }
+      if (examples.length) {
+        for (let i = 0; i < examples.length; i++) {
+          for (const err of examples[i].errors) {
+            fail(item, `example ${i + 1}: ${err}`, 'example');
+          }
+          if (!examples[i].code) continue;
+          const example = examples[i];
+          const n = i + 1;
+          pendingExamples.push(
+            runExample(() =>
+              tryExample(example.code, item, ctx, ts, {
+                checkTypes: checkExampleTypes,
+                runCode: exampleRunCode,
+              })
+            ).then((msg) => () => {
+              if (!msg) return;
+              fail(item, `example ${n}: ${msg}`, item.runtime ? 'exec' : 'type');
             })
-          ).then((msg) => () => {
-            if (!msg) return;
-            fail(item, `example ${n}: ${msg}`, item.runtime ? 'exec' : 'type');
-          })
-        );
+          );
+        }
       }
     }
-  }
-  const applyExamples = opts.runCode
-    ? await Promise.all(pendingExamples)
-    : await withCwd(ctx.runDir, () => Promise.all(pendingExamples));
-  for (const applyExample of applyExamples) applyExample();
-  for (const row of rowResults) if (!row.failed) out.passed += 1;
-  reportIssues('tsdoc', log, out, colorOn, 'JSDoc check found issues', 'fail');
+    const applyExamples = opts.runCode
+      ? await Promise.all(pendingExamples)
+      : await withCwd(ctx.runDir, () => Promise.all(pendingExamples));
+    for (const applyExample of applyExamples) applyExample();
+    for (const row of rowResults) if (!row.failed) out.passed += 1;
+    reportIssues('tsdoc', log, out, colorOn, 'JSDoc check found issues', 'fail');
+  });
 };
 
 export const __TEST: TestApi = {
@@ -2188,7 +2188,6 @@ export const __TEST: TestApi = {
   prototypeThrows: prototypeThrows,
   prototypeThrowsRaw: prototypeThrowsRaw,
   shouldInject: shouldInject,
-  sweepTemps: sweepTemps,
 };
 
 runSelf(import.meta.url, runCli);
