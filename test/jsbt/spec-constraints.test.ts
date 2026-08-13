@@ -36,7 +36,7 @@ const checkSelectors = [
   'mutate',
   'patterns',
   'readme',
-  'treeshake',
+  'size',
   'tsdoc',
   'typeimport',
 ] as const;
@@ -181,15 +181,15 @@ should('jsbt files with fs-modify constraints do not import raw destructive fs h
   deepStrictEqual(bad, []);
 });
 
+// Scoped to the usage template: prose elsewhere in the file also starts lines with
+// `jsbt-check <word>`, and only the usage block is the selector list under test.
+const checkUsage = (): string =>
+  read('src/jsbt/index.ts').match(/const usage = `([\s\S]*?)`;/)?.[1] || '';
+
 should('jsbt-check usage documents only selectors', () => {
-  const src = read('src/jsbt/index.ts');
   const documented = sorted(
     Array.from(
-      new Set(
-        Array.from(src.matchAll(/^\s+jsbt-check \[--project=<directory>\] (\S+)$/gm)).map(
-          (item) => item[1]
-        )
-      )
+      new Set(Array.from(checkUsage().matchAll(/^ {2}jsbt-check (\S+)$/gm)).map((item) => item[1]))
     )
   );
   deepStrictEqual(documented, sorted([...checkSelectors]));
@@ -208,14 +208,15 @@ should('jsbt-check exposes only documented selectors', () => {
 
 should('README and CLI usage document every check selector', () => {
   const readme = read('README.md');
-  const usage = read('src/jsbt/index.ts');
+  const usage = checkUsage();
   const missing: string[] = [];
   for (const selector of checkSelectors) {
-    const jsbt = `jsbt-check [--project=<directory>] ${selector}`;
+    // Whole-line matches: `jsbt-check size` also occurs mid-sentence in prose.
+    const jsbt = `jsbt-check ${selector}`;
     const npm = `npm run check ${selector}`;
-    if (!usage.includes(jsbt)) missing.push(`src/jsbt/index.ts: ${jsbt}`);
+    if (!usage.includes(`\n  ${jsbt}\n`)) missing.push(`src/jsbt/index.ts: ${jsbt}`);
     if (readmeSelectors.includes(selector)) {
-      if (!readme.includes(jsbt)) missing.push(`README.md: ${jsbt}`);
+      if (!readme.includes(`\n${jsbt}\n`)) missing.push(`README.md: ${jsbt}`);
       if (!readme.includes(npm)) missing.push(`README.md: ${npm}`);
     }
   }
@@ -230,11 +231,11 @@ should('constraint: npm run check errors prints standalone errors audit rows', (
   has(res.text, /1 check finished in \d+ sec/);
 });
 
-should('constraint: npm run check treeshake prints the standalone table', () => {
-  const res = runNpmCheck(['treeshake']);
+should('constraint: npm run check size audits without printing the size table', () => {
+  const res = runNpmCheck(['size']);
   passes(res);
-  has(res.text, /module\s+│export\s+│min bundle\s+│LOC\s+│min KB/);
-  has(res.text, /@jsbt-test\/npm-check\s+│/);
+  // Measuring and printing stats is `bismar --size`'s job; the check only audits.
+  lacks(res.text, /min bundle|min KB|gzip KB/);
   has(res.text, /1 check finished in \d+ sec/);
 });
 

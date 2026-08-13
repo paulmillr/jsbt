@@ -275,8 +275,8 @@ const resolveImportFile = (from: string, spec: string, files: Set<string>): stri
   resolveLocalImport(from, spec, {
     accept: (file) => files.has(file) || (existsSync(file) && wantTSFile(file)),
   });
-const loadTS = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript parser API', [
+const loadTS = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript parser API', [
     'createProgram',
     'createSourceFile',
     'forEachChild',

@@ -57,8 +57,8 @@ type TestApi = {
 const usage = usageText('patterns', 'jsbt/patterns.ts');
 const GLOBAL_VALUES = new Set(['Infinity', 'NaN', 'undefined']);
 
-const loadTS = (pkgFile: string): TsLike =>
-  loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript parser API', ['createSourceFile']);
+const loadTS = (): TsLike =>
+  loadTypeScriptApi<TsLike>('TypeScript parser API', ['createSourceFile']);
 const api = (ts: TsLike) => ts as any;
 const isKind = (ts: TsLike, node: any, name: string): boolean =>
   !!node && node.kind === ts.SyntaxKind[name];

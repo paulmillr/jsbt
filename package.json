@@ -18,17 +18,20 @@
   "bin": {
     "jsbt-check": "jsbt-check.bin.js"
   },
+  "dependencies": {
+    "bismar": "0.1.7",
+    "typescript": "6.0.3"
+  },
   "devDependencies": {
     "@microsoft/tsdoc": "0.16.0",
     "@types/node": "24.2.1",
-    "esbuild": "0.28.1",
-    "prettier": "3.6.2",
-    "typescript": "6.0.2"
+    "esbuild": "0.28.2",
+    "prettier": "3.6.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.example.json && node --run bundle:bin && chmod +x jsbt-check.bin.js",
     "bundle": "esbuild src/jsbt/index.ts --bundle --platform=node --format=esm --target=node22",
-    "bundle:bin": "node --run bundle -- --define:__JSBT_BUNDLE__=true --outfile=jsbt-check.bin.js --banner:js='#!/usr/bin/env node'",
+    "bundle:bin": "node --run bundle -- --define:__JSBT_BUNDLE__=true --define:__BISMAR_BUNDLE__=true --outfile=jsbt-check.bin.js --banner:js='#!/usr/bin/env node'",
     "clean": "node test/jsbt/clean.ts",
     "format": "npx prettier --write src",
     "test": "node test/index.ts",

@@ -42,8 +42,8 @@ const LONG = /\S{40,}/;
 const PURE = /^(?:@|#)__PURE__$/;
 const URL = /\b[a-z]+:\/\/\S+/i;
 
-const loadTS = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript scanner API', ['createScanner']);
+const loadTS = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript scanner API', ['createScanner']);
 };
 const clean = (text: string, multi: boolean, first: boolean, last: boolean): string => {
   let out = text;

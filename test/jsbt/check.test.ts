@@ -1,5 +1,13 @@
 import { deepStrictEqual } from 'node:assert';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -22,7 +30,7 @@ const { runCli: runComments } = await import('../../src/jsbt/comments.ts');
 const { runCli: runImportTime } = await import('../../src/jsbt/importtime.ts');
 const { runCli: runReadme } = await import('../../src/jsbt/readme.ts');
 const { runCli: runTypeImport } = await import('../../src/jsbt/typeimport.ts');
-const { runCli: runTreeshake } = await import('../../src/jsbt/treeshake.ts');
+const { runSizeCheck } = await import('../../src/jsbt/size.ts');
 const { wantColor } = await import('../../src/jsbt/utils.ts');
 const ts = await import('typescript');
 const should = Object.assign(test.serial, { runWhen: test.runWhen });
@@ -94,8 +102,9 @@ const all = (res: { stderr: string; stdout: string }) =>
   [res.stdout, res.stderr].filter(Boolean).join('\n');
 const plain = (res: { stderr: string; stdout: string }) =>
   all(res).replace(/\x1b\[\d+(;\d+)*m/g, '');
-const rxEscape = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-const checkTmpRx = rxEscape(tmpdir().split('\\').join('/'));
+const sizeRun = (cwd: string) => run(cwd, () => runSizeCheck({ cwd }));
+// Through the CLI, not runGenerateJsbtRc directly: the root-command wiring is the contract.
+const genRun = (cwd: string) => run(cwd, () => checkJsbt(['--gen-config'], cwd));
 const workerJsbt = (
   cwd: string,
   argv: string[],
@@ -359,32 +368,143 @@ should('tsdoc blames original typed declarations instead of re-exports', async (
   deepStrictEqual(/summary: 1 passed, 0 warnings, 1 failure, 0 skipped/.test(out), true);
 });
 
-should('treeshake passes on root-entry fixture', async () => {
+should('size passes on root-entry fixture', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
-  deepStrictEqual(res.ok, true);
+  const res = await sizeRun(cwd);
+  deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/found unused locals/.test(all(res)), false);
 });
 
-should('treeshake ignores declaration-only type exports', async () => {
+should('size ignores declaration-only type exports', async () => {
   const cwd = fixture('pass-typeonly-runtime');
-  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
-  deepStrictEqual(res.ok, true);
+  const res = await sizeRun(cwd);
+  deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/TypeOnly/.test(all(res)), false);
   deepStrictEqual(/found unused locals/.test(all(res)), false);
 });
 
-should('treeshake reports unused locals on multi-module fixture', async () => {
+should('size reports unused locals on multi-module fixture', async () => {
   const cwd = fixture('fail-src');
-  const res = await run(cwd, () => runTreeshake(['package.json'], { cwd }));
+  const res = await sizeRun(cwd);
+  deepStrictEqual(res.ok, false);
+  // Bundle names come from the in-memory measurement, not from files on disk.
+  deepStrictEqual(
+    /\[ERROR\] size: 2x unused \(size\)\n  jsbt-test-check-src\.js:\d+\/retained \(@jsbt-test\/check-src\)\n  broken\/broken\.js:\d+\/retained \(broken\/broken\)/.test(
+      plain(res)
+    ),
+    true,
+    plain(res)
+  );
+  deepStrictEqual(/found unused locals in 2 release bundles/.test(all(res)), true);
+});
+
+should('size passes bundles within sizeLimits budgets', async () => {
+  const cwd = fixture('pass-size-limit');
+  const res = await sizeRun(cwd);
+  deepStrictEqual(res.ok, true, all(res));
+  deepStrictEqual(/sizeLimits/.test(all(res)), false);
+});
+
+should('size reports bundles over sizeLimits budgets', async () => {
+  const cwd = fixture('fail-size-limit');
+  const res = await sizeRun(cwd);
   deepStrictEqual(res.ok, false);
   deepStrictEqual(
-    new RegExp(
-      `\\[ERROR\\] treeshake: 3x unused \\(treeshake\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/_tree_shaking_jsbt-test-check-src\\.js:\\d+/retained \\(@jsbt-test/check-src\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_broken\\.js:\\d+/retained \\(broken/broken\\)`
-    ).test(plain(res)),
-    true
+    /\[ERROR\] size: "index\.js\/add": max allowed size is 0\.02kb gzipped, currently 0\.\d+kb/.test(
+      plain(res)
+    ),
+    true,
+    plain(res)
   );
-  deepStrictEqual(/found unused locals in 3 release bundles/.test(all(res)), true);
+  deepStrictEqual(
+    /\[ERROR\] size: "index\.js\/add index\.js\/mul": max allowed size is 0\.02kb gzipped, currently 0\.\d+kb/.test(
+      plain(res)
+    ),
+    true,
+    plain(res)
+  );
+  deepStrictEqual(/found 2 bundles over sizeLimits budget/.test(all(res)), true);
+});
+
+should('size rejects invalid sizeLimits entries before measuring', async () => {
+  const root = resolve('test/jsbt/build/badrc');
+  rmSync(root, { force: true, recursive: true });
+  const cwd = join(root, 'pkg');
+  cpSync(fixture('pass-size-limit'), cwd, { recursive: true });
+  try {
+    writeFileSync(
+      join(cwd, '.jsbtrc.json'),
+      JSON.stringify({ sizeLimits: { 'index.js': 'four' } })
+    );
+    const bad = await sizeRun(cwd);
+    deepStrictEqual(bad.ok, false);
+    deepStrictEqual(
+      /invalid sizeLimits value for index\.js: use bytes \(4096\) or "4kb"/.test(all(bad)),
+      true,
+      all(bad)
+    );
+    // Budgeting a package we do not own pins nothing about ours.
+    writeFileSync(
+      join(cwd, '.jsbtrc.json'),
+      JSON.stringify({ sizeLimits: { 'npm:preact': '4kb' } })
+    );
+    const foreign = await sizeRun(cwd);
+    deepStrictEqual(foreign.ok, false);
+    deepStrictEqual(
+      /sizeLimits must name local modules or exports: npm:preact/.test(all(foreign)),
+      true,
+      all(foreign)
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+should('check --gen-config produces and updates .jsbtrc.json', async () => {
+  const root = resolve('test/jsbt/build/genrc');
+  rmSync(root, { force: true, recursive: true });
+  const cwd = join(root, 'pkg');
+  cpSync(fixture('pass-size-limit'), cwd, { recursive: true });
+  rmSync(join(cwd, '.jsbtrc.json'));
+  const readRc = () => JSON.parse(readFileSync(join(cwd, '.jsbtrc.json'), 'utf8'));
+  try {
+    const first = await genRun(cwd);
+    deepStrictEqual(first.ok, true, all(first));
+    const rc = readRc();
+    deepStrictEqual(/^0\.\d+kb$/.test(rc.sizeLimits['index.js']), true, JSON.stringify(rc));
+    // The generated config immediately passes the check it feeds.
+    const size = await sizeRun(cwd);
+    deepStrictEqual(size.ok, true, all(size));
+    // Regeneration keeps hand-set budgets and every other section untouched.
+    writeFileSync(
+      join(cwd, '.jsbtrc.json'),
+      JSON.stringify({
+        exampleDependencies: { '@jsbt-test/dep': '1.0.0' },
+        sizeLimits: { 'index.js': '9kb' },
+      })
+    );
+    const second = await genRun(cwd);
+    deepStrictEqual(second.ok, true, all(second));
+    deepStrictEqual(readRc(), {
+      exampleDependencies: { '@jsbt-test/dep': '1.0.0' },
+      sizeLimits: { 'index.js': '9kb' },
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+should('check rejects --gen-config combined with a check selector', async () => {
+  const cwd = fixture('pass-size-limit');
+  for (const selector of ['bigint', 'size']) {
+    const res = await run(cwd, () => runJsbt([selector, '--gen-config'], { color: false, cwd }));
+    deepStrictEqual(res.ok, false, all(res));
+    deepStrictEqual(
+      new RegExp(`--gen-config takes no check selector: got ${selector}`).test(all(res)),
+      true,
+      all(res)
+    );
+  }
 });
 
 should('comments passes on root-entry fixture', async () => {
@@ -533,7 +653,7 @@ should('check passes on root-entry fixture with default out dir', async () => {
   deepStrictEqual(
     checkSummary([
       ['readme', 0],
-      ['treeshake', 0],
+      ['size', 0],
       ['tsdoc', 0],
       ['typeimport', 0],
       ['jsr', 0],
@@ -658,25 +778,11 @@ should('check shows warnings when JSBT_QUIET is set', async () => {
   );
   const out = plain(res);
   deepStrictEqual(res.ok, false, all(res));
-  deepStrictEqual(/\[WARN\] treeshake: 3x unused \(treeshake\)/.test(out), true);
-  deepStrictEqual(
-    new RegExp(
-      `${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)`
-    ).test(out),
-    true
-  );
+  deepStrictEqual(/\[WARN\] size: 2x unused \(size\)/.test(out), true);
+  deepStrictEqual(/broken\/broken\.js:\d+\/retained \(broken\/broken\)/.test(out), true);
   deepStrictEqual(/\[WARN\] readme:/.test(out), true);
   deepStrictEqual(/\[WARN\] comments:/.test(out), true);
   deepStrictEqual(/\[ERROR\] jsr:/.test(out), true);
-});
-
-should('check accepts --project directory and runs from another cwd', async () => {
-  const cwd = fixture('pass-root');
-  const res = await run(cwd, () =>
-    checkJsbt(['--project=test/jsbt/vectors/check/pass-root', 'comments'], BASE)
-  );
-  deepStrictEqual(res.ok, true, all(res));
-  deepStrictEqual(checkSummary([['comments', 0]]).test(plain(res)), true);
 });
 
 should('check rejects the removed package.json positional argument', async () => {
@@ -695,7 +801,7 @@ should('check accepts a second-arg selector and reports tsdoc warnings', async (
     true
   );
   deepStrictEqual(/\[ERROR\] readme:/.test(plain(res)), false);
-  deepStrictEqual(/\[ERROR\] treeshake:/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] size:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] jsr:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] comments:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] bytes:/.test(plain(res)), false);
@@ -705,19 +811,21 @@ should('check accepts a second-arg selector and reports tsdoc warnings', async (
   deepStrictEqual(checkSummary([['tsdoc', 4]]).test(plain(res)), true);
 });
 
-should('check treeshake selector prints standalone treeshake table', async () => {
+should('check size selector audits without printing size stats', async () => {
   const cwd = fixture('pass-root');
-  const res = await run(cwd, () => checkJsbt(['treeshake'], cwd));
+  const res = await run(cwd, () => checkJsbt(['size'], cwd));
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
-  deepStrictEqual(
-    /module\s+\u2502export\s+\u2502min bundle\s+\u2502LOC\s+\u2502min KB/.test(out),
-    true
-  );
-  deepStrictEqual(/@jsbt-test\/check-root\s+\u2502/.test(out), true);
-  deepStrictEqual(/_tree_shaking_jsbt-test-check-root\.min\.js/.test(out), true);
-  deepStrictEqual(/index\s+\u2502all\s+\u2502\s+index\/_tree_shaking_all\.min\.js/.test(out), true);
-  deepStrictEqual(checkSummary([['treeshake', 0]]).test(out), true);
+  // Size stats are `bismar --size`'s job; the check runs the audit and reports only that.
+  deepStrictEqual(/min bundle|min KB|gzip KB/.test(out), false, out);
+  deepStrictEqual(checkSummary([['size', 0]]).test(out), true, out);
+});
+
+should('check treeshake selector is rejected after the size rename', async () => {
+  const cwd = fixture('pass-root');
+  const res = await run(cwd, () => checkJsbt(['treeshake'], cwd));
+  deepStrictEqual(res.ok, false);
+  deepStrictEqual(/unknown check selector: treeshake/.test(plain(res)), true, plain(res));
 });
 
 should('check readme links exampleDependencies and runtime deps into the run dir', async () => {
@@ -727,15 +835,80 @@ should('check readme links exampleDependencies and runtime deps into the run dir
   deepStrictEqual(/summary: 1 passed, 0 warnings, 0 failures, 0 skipped/.test(plain(res)), true);
 });
 
+should('check hints at .jsbtrc.json when an example import is unavailable', async () => {
+  const root = resolve('test/jsbt/build/missing-dep');
+  rmSync(root, { force: true, recursive: true });
+  const cwd = join(root, 'pkg');
+  cpSync(fixture('pass-readme-deps'), cwd, { recursive: true });
+  const hint = /hint: examples may only import "dependencies" and "exampleDependencies"/;
+  try {
+    // Dropping the entry leaves the README example importing a package examples cannot see.
+    writeFileSync(join(cwd, '.jsbtrc.json'), '{}\n');
+    const res = await run(cwd, () => checkJsbt(['readme'], cwd));
+    deepStrictEqual(/ERR_MODULE_NOT_FOUND/.test(plain(res)), true, all(res));
+    deepStrictEqual(hint.test(plain(res)), true, all(res));
+    deepStrictEqual(/jsbt-check --gen-config/.test(plain(res)), true, all(res));
+    // Restoring it removes the diagnostic, and the hint with it.
+    writeFileSync(
+      join(cwd, '.jsbtrc.json'),
+      JSON.stringify({ exampleDependencies: { '@jsbt-test/dep': '1.2.3' } })
+    );
+    const ok = await run(cwd, () => checkJsbt(['readme'], cwd));
+    deepStrictEqual(ok.ok, true, all(ok));
+    deepStrictEqual(hint.test(plain(ok)), false, all(ok));
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 should('check accepts a patterns selector without defaulting to all checks', async () => {
   const cwd = fixture('fail-src');
   const res = await run(cwd, () => checkJsbt(['patterns'], cwd));
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(/\[ERROR\] readme:/.test(plain(res)), false);
-  deepStrictEqual(/\[ERROR\] treeshake:/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] size:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] tsdoc:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] jsr:/.test(plain(res)), false);
   deepStrictEqual(checkSummary([['patterns', 0]]).test(plain(res)), true);
+});
+
+should('check --ignore drops the listed selectors from the run', async () => {
+  const cwd = fixture('pass-root');
+  const heads = (res: { stderr: string; stdout: string }) =>
+    Array.from(plain(res).matchAll(/^☆ (\w+)$/gm)).map((item) => item[1]);
+  const full = await run(cwd, () => checkJsbt([], cwd));
+  const some = await run(cwd, () => checkJsbt(['--ignore=readme,tsdoc'], cwd));
+  deepStrictEqual(some.ok, true, all(some));
+  deepStrictEqual(
+    heads(some),
+    heads(full).filter((head) => head !== 'readme' && head !== 'tsdoc')
+  );
+  // The header count follows the filtered list, not the full one.
+  deepStrictEqual(
+    new RegExp(`${heads(full).length - 2} checks started`).test(plain(some)),
+    true,
+    all(some)
+  );
+  // A space-separated value and an alias resolve the same way as the selector argument.
+  const spaced = await run(cwd, () => checkJsbt(['--ignore', 'jsdoc'], cwd));
+  deepStrictEqual(spaced.ok, true, all(spaced));
+  deepStrictEqual(heads(spaced).includes('tsdoc'), false, all(spaced));
+});
+
+should('check rejects --ignore values that name no runnable check', async () => {
+  const cwd = fixture('pass-root');
+  const cases: [string[], RegExp][] = [
+    [['--ignore=nope'], /unknown check selector: nope/],
+    [['--ignore='], /expected selectors after --ignore=/],
+    [['--ignore=size,,readme'], /expected selectors after --ignore=/],
+    [['readme', '--ignore=readme'], /--ignore=readme leaves no checks to run/],
+    [['--gen-config', '--ignore=size'], /--gen-config runs no checks, so --ignore does nothing/],
+  ];
+  for (const [argv, expected] of cases) {
+    const res = await run(cwd, () => runJsbt(argv, { color: false, cwd }));
+    deepStrictEqual(res.ok, false, `${argv.join(' ')}\n${all(res)}`);
+    deepStrictEqual(expected.test(all(res)), true, `${argv.join(' ')}\n${all(res)}`);
+  }
 });
 
 should('check accepts a jsrpublish selector and asks for full output', async () => {
@@ -784,7 +957,7 @@ should('check reports importtime warnings without failing', async () => {
     checkSummary([
       ['importtime', 1],
       ['readme', 0],
-      ['treeshake', 0],
+      ['size', 0],
       ['tsdoc', 0],
       ['typeimport', 0],
       ['jsr', 0],
@@ -812,7 +985,7 @@ should('check reports importtime errors as warnings without table', async () => 
     checkSummary([
       ['importtime', 1],
       ['readme', 0],
-      ['treeshake', 0],
+      ['size', 0],
       ['tsdoc', 0],
       ['typeimport', 0],
       ['jsr', 0],
@@ -862,7 +1035,7 @@ should('check reports bigint issues as warnings and keeps other checks green', a
     true
   );
   deepStrictEqual(/\[ERROR\] readme:/.test(plain(res)), false);
-  deepStrictEqual(/\[ERROR\] treeshake:/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] size:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] tsdoc:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] typeimport:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] jsr:/.test(plain(res)), false);
@@ -875,7 +1048,7 @@ should('check reports bigint issues as warnings and keeps other checks green', a
     checkSummary([
       ['bigint', 3],
       ['readme', 0],
-      ['treeshake', 0],
+      ['size', 0],
       ['tsdoc', 0],
       ['typeimport', 0],
       ['jsr', 0],
@@ -907,7 +1080,7 @@ should('check reports typeimport issues as warnings and keeps other checks green
     true
   );
   deepStrictEqual(/\[ERROR\] readme:/.test(plain(res)), false);
-  deepStrictEqual(/\[ERROR\] treeshake:/.test(plain(res)), false);
+  deepStrictEqual(/\[ERROR\] size:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] tsdoc:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] jsr:/.test(plain(res)), false);
   deepStrictEqual(/\[ERROR\] comments:/.test(plain(res)), false);
@@ -920,7 +1093,7 @@ should('check reports typeimport issues as warnings and keeps other checks green
     checkSummary([
       ['typeimport', 2],
       ['readme', 0],
-      ['treeshake', 0],
+      ['size', 0],
       ['tsdoc', 0],
       ['jsr', 0],
       ['jsrpublish', 0],
@@ -947,7 +1120,7 @@ should('check runs all checks before failing', async () => {
   );
   deepStrictEqual(
     new RegExp(
-      `\\[WARN\\] treeshake: 3x unused \\(treeshake\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/_tree_shaking_jsbt-test-check-src\\.js:\\d+/retained \\(@jsbt-test/check-src\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)\\n  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_broken\\.js:\\d+/retained \\(broken/broken\\)`
+      `\\[WARN\\] size: 2x unused \\(size\\)\\n  jsbt-test-check-src\\.js:\\d+/retained \\(@jsbt-test/check-src\\)\\n  broken/broken\\.js:\\d+/retained \\(broken/broken\\)`
     ).test(plain(res)),
     true
   );
@@ -987,7 +1160,7 @@ should('check runs all checks before failing', async () => {
     checkSummary([
       ['tsdoc', 4],
       ['comments', 4],
-      ['treeshake', 3],
+      ['size', 2],
       ['readme', 1],
       ['jsr', 1],
       ['typeimport', 0],
@@ -1012,7 +1185,7 @@ should('check keeps detailed issues when color is enabled', async () => {
   deepStrictEqual(/\[WARN\] readme: README\.md:12\/usage/.test(plain(res)), true);
   deepStrictEqual(
     new RegExp(
-      `\\[WARN\\] treeshake: 3x unused \\(treeshake\\)\\n(?:  .+\\n)*  ${checkTmpRx}/jsbt-check-[^/]+/out-treeshake/broken/_tree_shaking_all\\.js:\\d+/retained \\(broken/all\\)`
+      `\\[WARN\\] size: 2x unused \\(size\\)\\n(?:  .+\\n)*  broken/broken\\.js:\\d+/retained \\(broken/broken\\)`
     ).test(plain(res)),
     true
   );
@@ -1063,11 +1236,14 @@ should('bundled importtime does not run imported subcommands', async () => {
     npm_config_update_notifier: 'false',
   };
   const prevArgv = process.argv.slice();
+  const prevCwd = process.cwd();
   const prevEnv = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
   try {
     for (const [key, value] of Object.entries(env)) process.env[key] = value;
     const res = await capture(async () => {
-      process.argv = [process.execPath, out, `--project=${cwd}`, 'importtime'];
+      // The bundle reads the CLI path, so the target package comes from cwd, not an option.
+      process.chdir(cwd);
+      process.argv = [process.execPath, out, 'importtime'];
       await import(`${pathToFileURL(out).href}?t=${Date.now()}`);
     });
     const text = all(res);
@@ -1076,6 +1252,7 @@ should('bundled importtime does not run imported subcommands', async () => {
     deepStrictEqual(/expected <package\.json>/.test(plainText), false, text);
     deepStrictEqual(/1 check finished in \d+ sec/.test(plainText), true, text);
   } finally {
+    process.chdir(prevCwd);
     for (const [key, value] of prevEnv) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

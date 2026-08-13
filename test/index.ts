@@ -1,3 +1,4 @@
+import './env.ts';
 import { should } from '../src/test.ts';
 
 import './jsbt/bin.test.ts';

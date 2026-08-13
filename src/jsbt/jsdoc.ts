@@ -263,8 +263,8 @@ const tagText = (value: unknown): string => {
 const resolveCtx = (args: PkgArgs, cwd = process.cwd(), runDir = ''): Ctx => {
   return withRunDir(publicCtx(args.pkgArg, cwd), runDir);
 };
-const loadTs = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createProgram']);
+const loadTs = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript compiler API', ['createProgram']);
 };
 const loadTSDoc = (pkgFile: string): TSDocLike => {
   const req = createRequire(pkgFile);
@@ -1974,7 +1974,7 @@ const throwReportIssues = (item: ThrowRawReport): string[] => {
 };
 const prototypeThrowsRaw = (pkgFile: string): ThrowRawReport[] => {
   const ctx = resolveCtx({ help: false, pkgArg: pkgFile }, dirname(resolve(pkgFile)));
-  const ts = loadTs(ctx.pkgFile);
+  const ts = loadTs();
   const mods = listPublicModules(ctx);
   const analysis = analyzeDocs(ts, mods);
   return collectPrototypeThrows(ctx, ts, analysis.rows, analysis.dtsChecker, analysis.jsChecker);

@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 const EXTS = ['.cjs', '.js', '.mjs', '.ts'];
-const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-', '_tree_shaking_'];
+const PREFIXES = ['.__errors-check-', '.__readme-check-', '.__jsdoc-check-'];
 const CHECK_PREFIX = 'jsbt-check-';
+// Declared beside the only code that writes it; `utils.ts` re-exports it for the read side.
+export const RC_FILE = '.jsbtrc.json';
 const BARE_PKG_NAME = /^(@[\w.-]+\/)?[\w.-]+$/;
 const err = (msg: string): never => {
   throw new Error(msg);
@@ -48,6 +50,19 @@ export const rm = (file: string): boolean => (
   shouldLog(file) && console.log(`delete\t${file}`),
   true
 );
+// The one sanctioned write into a user repo: `jsbt-check --gen-config` produces
+// or updates the committed config. Every other write asserts a jsbt temp path; this one
+// cannot, so it asserts the next-strongest thing — the filename is fixed here rather than
+// caller-supplied, and the target must be a package root. The write is always logged, since
+// it lands outside the OS temp directory by design.
+export const writeJsbtRc = (cwd: string, data: string): string => {
+  if (!isAbsolute(cwd)) err(`expected absolute path: ${cwd}`);
+  if (!existsSync(join(cwd, 'package.json'))) err(`expected a package directory: ${cwd}`);
+  const file = join(cwd, RC_FILE);
+  writeFileSync(file, data);
+  shouldLog(file) && console.log(`write\t${file}`);
+  return file;
+};
 // Global npm roots are probed once per process; the global install is user-managed
 // (`npm install -g esbuild`), jsbt never installs anything itself. `npm root -g` output
 // alone is not trusted blindly (npm redacts UUID-like path segments), so prefix-derived
@@ -78,7 +93,7 @@ const globalEsbuildDir = (): string | undefined => {
   }
   return undefined;
 };
-// `esbuild` is provided automatically: examples and treeshake never declare it. Prefer
+// `esbuild` is provided automatically: example checks never declare it. Prefer
 // the checked project's own install, then the copy resolvable next to jsbt itself, then
 // a global `npm install -g esbuild`.
 const esbuildDir = (cwd: string): string | undefined => {

@@ -4,7 +4,7 @@ import { cpus } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { checkTempDir, installRunDeps, rm, rmCheckTempDir, write } from '../fs-modify.ts';
+import { checkTempDir, installRunDeps, RC_FILE, rm, rmCheckTempDir, write } from '../fs-modify.ts';
 
 declare const __JSBT_BUNDLE__: boolean | undefined;
 
@@ -471,9 +471,10 @@ export const cliArgs = (argv: string[], usage: string, color?: boolean): CliArgs
 // keys are rejected so a typo can never silently disable a check.
 export type JsbtRc = {
   exampleDependencies?: Record<string, unknown>;
+  sizeLimits?: Record<string, unknown>;
 };
-export const RC_FILE = '.jsbtrc.json';
-const RC_KEYS = new Set(['exampleDependencies']);
+export { RC_FILE };
+const RC_KEYS = new Set(['exampleDependencies', 'sizeLimits']);
 export const readJsbtRc = (cwd: string): JsbtRc => {
   const file = join(cwd, RC_FILE);
   if (!existsSync(file)) return {};
@@ -558,18 +559,22 @@ export const withRunDir = <T extends RunDirCtx>(
   ...ctx,
   runDir: prepareRunDir(ctx.cwd, ctx.pkg.name, runDir),
 });
+// `hint` names the fix for the specific module: "run npm install" is wrong advice when the
+// module was never a dependency of the resolving root to begin with.
+const INSTALL_HINT = 'run npm install in the target repo first';
 export const loadNear = <T>(
   pkgFile: string,
   name: string,
   api: string,
-  check: (mod: T) => boolean
+  check: (mod: T) => boolean,
+  hint: string = INSTALL_HINT
 ): T => {
   const req = createRequire(pkgFile);
   const raw = (() => {
     try {
       return req(name) as T | { default?: T };
     } catch {
-      throw new Error(`missing ${name} near ${pkgFile}; run npm install in the target repo first`);
+      throw new Error(`missing ${name} in ${dirname(pkgFile)}; ${hint}`);
     }
   })();
   const mod = raw && typeof raw === 'object' && 'default' in raw && raw.default ? raw.default : raw;
@@ -584,12 +589,22 @@ export const loadModuleApi = <T>(
   pkgFile: string,
   name: string,
   api: string,
-  keys: readonly string[]
-): T => loadNear<T>(pkgFile, name, api, (mod) => hasFns(mod, keys));
-export const loadTypeScript = <T>(pkgFile: string, api: string, check: (ts: T) => boolean): T =>
-  loadNear<T>(pkgFile, 'typescript', api, check);
-export const loadTypeScriptApi = <T>(pkgFile: string, api: string, keys: readonly string[]): T =>
-  loadModuleApi<T>(pkgFile, 'typescript', api, keys);
+  keys: readonly string[],
+  hint?: string
+): T => loadNear<T>(pkgFile, name, api, (mod) => hasFns(mod, keys), hint);
+// The compiler always comes from jsbt's own pinned `typescript`, never from the checked
+// project. Checks drive the JS compiler API directly — `createProgram`, `createSourceFile`,
+// `getPreEmitDiagnostics`, the AST node predicates — and a project is free to depend on a
+// build of TypeScript that does not expose it at all: the v7 native port is a Go rewrite
+// whose surface differs. Resolving the project's copy would also make every audit's verdict
+// depend on whatever compiler that repo happened to install. Pinning one compiler keeps the
+// checks deterministic and makes them work in a project with no node_modules of its own.
+const TS_SELF = fileURLToPath(import.meta.url);
+const TS_HINT = 'reinstall @paulmillr/jsbt';
+export const loadTypeScript = <T>(api: string, check: (ts: T) => boolean): T =>
+  loadNear<T>(TS_SELF, 'typescript', api, check, TS_HINT);
+export const loadTypeScriptApi = <T>(api: string, keys: readonly string[]): T =>
+  loadModuleApi<T>(TS_SELF, 'typescript', api, keys, TS_HINT);
 type WorkerBase = { data: unknown; execArgv?: string[]; stderr?: boolean; stdout?: boolean };
 const workerOpts = (opts: WorkerBase) =>
   // `@types/node` rejects `type: 'module'` on eval workers; runtime supports it.
@@ -813,10 +828,10 @@ const refAction = (head: string, ref: Ref): Action => {
     ]);
     if (hit) return hit;
   }
-  if (head === 'treeshake') {
+  if (head === 'size') {
     const hit = matchedAction(ref.issue, [
       [
-        /^unused \((.+?)\)(?: \((treeshake)\))?$/,
+        /^unused \((.+?)\)(?: \((size)\))?$/,
         ([, detail, kind]) => action(`unused${kind ? ` (${kind})` : ''}`, `(${detail})`),
       ],
     ]);

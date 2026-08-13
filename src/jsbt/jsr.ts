@@ -78,11 +78,8 @@ const parseJsr = (value: string): { name: string; version: string } => {
   const hit = value.match(/^jsr:(@[^/]+\/[^@/]+|[^@/]+)(?:@(.+))?$/);
   return { name: hit?.[1] || '', version: hit?.[2] || '' };
 };
-const loadTS = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript parser API', [
-    'createSourceFile',
-    'forEachChild',
-  ]);
+const loadTS = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript parser API', ['createSourceFile', 'forEachChild']);
 };
 const stringMap = (raw: unknown, map: (value: string) => string = (value) => value) => {
   const out: Record<string, string> = {};

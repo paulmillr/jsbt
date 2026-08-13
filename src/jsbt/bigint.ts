@@ -62,11 +62,8 @@ const ACTION = [
   'or const NAME = /* @__PURE__ */ BigInt(...) for specific ones (bigint)',
 ].join(' ');
 
-const loadTS = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript AST API', [
-    'createSourceFile',
-    'forEachChild',
-  ]);
+const loadTS = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript AST API', ['createSourceFile', 'forEachChild']);
 };
 const clean = (raw: string): string => raw.replace(/_/g, '');
 const safe = (raw: string): boolean => {

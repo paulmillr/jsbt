@@ -5,7 +5,6 @@
  *
  * Usage:
  *   `jsbt-check`
- *   `jsbt-check --project=directory`
  *   `jsbt-check bigint`
  *   `jsbt-check bytes`
  *   `jsbt-check comments`
@@ -17,9 +16,11 @@
  *   `jsbt-check mutate`
  *   `jsbt-check patterns`
  *   `jsbt-check readme`
- *   `jsbt-check treeshake`
+ *   `jsbt-check size`
  *   `jsbt-check tsdoc`
  *   `jsbt-check typeimport`
+ *   `jsbt-check --ignore=readme,tsdoc`
+ *   `jsbt-check --gen-config`
  * @module
  */
 import * as TSDoc from '@microsoft/tsdoc';
@@ -39,7 +40,7 @@ import { runCli as runJsrPublish } from './jsrpublish.ts';
 import { runCli as runMutate } from './mutate.ts';
 import { runCli as runPatterns } from './patterns.ts';
 import { runCli as runReadme } from './readme.ts';
-import { runCli as runTreeShaking, treeIssueLog, type TreeIssue } from './treeshake.ts';
+import { runGenerateJsbtRc, runSizeCheck, sizeIssueLog, type SizeIssue } from './size.ts';
 import { runCli as runTypeImport } from './typeimport.ts';
 import {
   color,
@@ -49,6 +50,7 @@ import {
   formatIssue,
   groupIssues,
   paint,
+  RC_FILE,
   runWorker,
   tag as statusTag,
   stripAnsi,
@@ -65,7 +67,6 @@ type Opts = {
   cwd?: string;
   runDir?: string;
   runJsrPublish?: typeof runJsrPublish;
-  treeshakeOutDir?: string;
 };
 type Capture = {
   error?: string;
@@ -73,7 +74,7 @@ type Capture = {
   ok: boolean;
   stderr: string;
   stdout: string;
-  tree?: TreeIssue[];
+  sizeIssues?: SizeIssue[];
 };
 type TimedCapture = Capture & { ms: number };
 type Pick = { count: number; fatal: boolean; hard?: boolean; lines: string[] };
@@ -90,45 +91,64 @@ type CheckHead =
   | 'mutate'
   | 'patterns'
   | 'readme'
-  | 'treeshake'
+  | 'size'
   | 'typeimport'
   | 'tsdoc';
 type CheckRun = { head: CheckHead; pick: (res: Capture) => Pick; serial?: boolean };
 type CheckArgs = ReturnType<typeof checkArgs>;
-type CheckTask = (args: CheckArgs, opts: Opts, tree: TreeIssue[]) => Promise<void>;
+type CheckTask = (args: CheckArgs, opts: Opts, sizeIssues: SizeIssue[]) => Promise<void>;
 type CheckWorkerData = {
   args: CheckArgs;
   entry: string;
   head?: CheckHead;
   heads?: CheckHead[];
   kind: typeof CHECK_WORKER;
-  opts: { color?: boolean; cwd?: string; runDir?: string; treeshakeOutDir?: string };
+  opts: { color?: boolean; cwd?: string; runDir?: string };
   self: string;
 };
 type CheckJob = { i: number; item: CheckRun };
 
 const usage = `usage:
-  jsbt-check [--project=<directory>]
-  jsbt-check [--project=<directory>] bigint
-  jsbt-check [--project=<directory>] bytes
-  jsbt-check [--project=<directory>] comments
-  jsbt-check [--project=<directory>] errors
-  jsbt-check [--project=<directory>] importtime
-  jsbt-check [--project=<directory>] jsdoc
-  jsbt-check [--project=<directory>] jsr
-  jsbt-check [--project=<directory>] jsrpublish
-  jsbt-check [--project=<directory>] mutate
-  jsbt-check [--project=<directory>] patterns
-  jsbt-check [--project=<directory>] readme
-  jsbt-check [--project=<directory>] treeshake
-  jsbt-check [--project=<directory>] tsdoc
-  jsbt-check [--project=<directory>] typeimport
+  jsbt-check
+  jsbt-check bigint
+  jsbt-check bytes
+  jsbt-check comments
+  jsbt-check errors
+  jsbt-check importtime
+  jsbt-check jsdoc
+  jsbt-check jsr
+  jsbt-check jsrpublish
+  jsbt-check mutate
+  jsbt-check patterns
+  jsbt-check readme
+  jsbt-check size
+  jsbt-check tsdoc
+  jsbt-check typeimport
+
+  checks run against the package in the current directory: cd into it first.
+
+options:
+  --ignore=<a,b>   skip the listed selectors
+  --gen-config     write size budgets to .jsbtrc.json instead of running checks
 
 examples:
   npx --no jsbt-check
-  npx --no jsbt-check --project=packages/pkg-a
+  cd packages/pkg-a && npx --no jsbt-check
   npm run check bigint
-  npx --no jsbt-check treeshake`;
+  npx --no jsbt-check size
+  npx --no jsbt-check --ignore=readme,tsdoc
+  npx --no jsbt-check --gen-config
+
+size limits:
+  jsbt-check size enforces gzip budgets from "sizeLimits" in .jsbtrc.json:
+    { "sizeLimits": { "index.js/add": "4kb", "index.js/sign index.js/verify": "6kb" } }
+  keys are bismar --size selectors; values are bytes (4096) or a kb string ("4kb").
+  a space-separated key budgets the combined bundle of all its selectors
+  (their cost when imported together, shared code counted once).
+  debug over-budget entries with bismar -bs <selector...> (stats) and
+  bismar <selector> > out.js (the measured bundle bytes).
+  jsbt-check --gen-config produces or updates .jsbtrc.json with
+  per-module budgets at current sizes (existing entries are kept)`;
 const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
 process.argv[1] = workerData.entry;
@@ -153,7 +173,7 @@ const CHECK_ALIASES = {
   mutate: 'mutate',
   patterns: 'patterns',
   readme: 'readme',
-  treeshake: 'treeshake',
+  size: 'size',
   typeimport: 'typeimport',
   tsdoc: 'tsdoc',
 } as const satisfies Record<string, CheckHead>;
@@ -369,31 +389,55 @@ const pickErrorExamples = (res: Capture, on: boolean): Pick => {
   }
   return { count: issues.length, fatal: false, lines: groupIssues('errors', issues, on) };
 };
-const pickLogs = (head: CheckHead, res: Capture, full = false): string[] =>
-  textLines(res.stdout, full).filter(
-    (line) => full || head === 'errors' || MUTATION_LOG.test(line)
-  );
+const pickLogs = (head: CheckHead, res: Capture): string[] =>
+  textLines(res.stdout).filter((line) => head === 'errors' || MUTATION_LOG.test(line));
 const warnInfoLine = (line: string): boolean => /^\[(?:WARN|INFO)\]/.test(stripAnsi(line));
+// Examples run against a temp node_modules built only from `dependencies` plus
+// `exampleDependencies`, so an unlisted import fails at run time instead of at parse time.
+// The message names a package, never the config it is missing from; say so once at the end.
+const MISSING_EXAMPLE_DEP = /ERR_MODULE_NOT_FOUND/;
+const missingDepHint = (on: boolean): string[] => [
+  paint(
+    `hint: examples may only import "dependencies" and "exampleDependencies" from ${RC_FILE}`,
+    color.gray,
+    on
+  ),
+  paint(
+    `      jsbt-check --gen-config writes that file if you do not have one yet`,
+    color.gray,
+    on
+  ),
+];
 const checkHead = (name: string | undefined): CheckHead | undefined =>
   name && Object.hasOwn(CHECK_ALIASES, name)
     ? CHECK_ALIASES[name as keyof typeof CHECK_ALIASES]
     : undefined;
+// Aliases resolve here too, so `--ignore=jsdoc` drops the same check `jsbt-check jsdoc` runs.
+const ignoreHeads = (value: string): CheckHead[] => {
+  const names = value.split(',').map((name) => name.trim());
+  if (!names.length || names.some((name) => !name)) err(`expected selectors after --ignore=`);
+  return names.map((name) => checkHead(name) ?? err(`unknown check selector: ${name}`));
+};
 const checkArgs = (argv: string[]) => {
   if (argv.includes('--help') || argv.includes('-h'))
-    return { head: undefined, help: true, pkgArg: '', projectArg: '.' };
+    return { generate: false, head: undefined, help: true, ignore: [] as CheckHead[], pkgArg: '' };
   const rest: string[] = [];
-  let projectArg = '.';
+  const ignore: CheckHead[] = [];
+  let generate = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--project') {
-      const value = argv[++i];
-      if (!value) err('expected directory after --project');
-      projectArg = value;
+    if (arg === '--gen-config') {
+      generate = true;
       continue;
     }
-    if (arg.startsWith('--project=')) {
-      projectArg = arg.slice('--project='.length);
-      if (!projectArg) err('expected directory after --project=');
+    if (arg === '--ignore') {
+      const value = argv[++i];
+      if (!value) err('expected selectors after --ignore');
+      ignore.push(...ignoreHeads(value));
+      continue;
+    }
+    if (arg.startsWith('--ignore=')) {
+      ignore.push(...ignoreHeads(arg.slice('--ignore='.length)));
       continue;
     }
     if (arg.startsWith('-')) err(`unknown check option: ${arg}`);
@@ -401,19 +445,26 @@ const checkArgs = (argv: string[]) => {
   }
   if (rest.some((arg) => arg === 'package.json' || /[/\\]package\.json$/.test(arg)))
     err(
-      'package.json positional argument was removed; use jsbt-check or jsbt-check --project=<directory>'
+      'package.json positional argument was removed; cd into the package directory and run jsbt-check'
     );
-  if (rest.length > 1) err('expected [--project=<directory>] [check-name]');
+  if (rest.length > 1) err('expected [check-name]');
+  // A mode of its own rather than a modifier on a check: it writes .jsbtrc.json and runs no audit.
+  if (generate && rest[0]) err(`--gen-config takes no check selector: got ${rest[0]}`);
+  if (generate && ignore.length) err('--gen-config runs no checks, so --ignore does nothing');
   const head = checkHead(rest[0]);
-  if (head) return { head, help: false, pkgArg: 'package.json', projectArg };
+  if (head) {
+    if (ignore.includes(head)) err(`--ignore=${rest[0]} leaves no checks to run`);
+    return { generate, head, help: false, ignore, pkgArg: 'package.json' };
+  }
   if (rest[0] === 'tests') err(`unknown check selector: ${rest[0]}`);
   if (rest[0]?.startsWith('check-')) err(`unknown check selector: ${rest[0]}`);
   if (rest[0]) err(`unknown check selector: ${rest[0]}`);
   return {
+    generate,
     head: undefined,
     help: false,
+    ignore,
     pkgArg: 'package.json',
-    projectArg,
   };
 };
 const checkTasks = {
@@ -440,13 +491,11 @@ const checkTasks = {
   patterns: (args, opts) => runPatterns([args.pkgArg], opts),
   readme: (args, opts) =>
     runReadme([args.pkgArg], { color: opts.color, cwd: opts.cwd, runDir: opts.runDir }),
-  treeshake: (args, opts, tree) =>
-    runTreeShaking([args.pkgArg], {
+  size: (args, opts, sizeIssues) =>
+    runSizeCheck({
       cwd: opts.cwd,
-      onIssue: (issue) => tree.push(issue),
-      outDir: opts.treeshakeOutDir,
+      onIssue: (issue) => sizeIssues.push(issue),
       quiet: !args.head,
-      runDir: opts.runDir,
     }),
   tsdoc: (args, opts) =>
     runTSDoc([args.pkgArg], {
@@ -458,10 +507,10 @@ const checkTasks = {
   typeimport: (args, opts) => runTypeImport([args.pkgArg], opts),
 } satisfies Record<CheckHead, CheckTask>;
 const runCheckTask = async (head: CheckHead, args: CheckArgs, opts: Opts): Promise<Capture> => {
-  const tree: TreeIssue[] = [];
-  const res = await withQuiet(() => capture(() => checkTasks[head](args, opts, tree)));
-  if (tree.length) res.tree = tree;
-  else if (head === 'treeshake' && !res.ok) res.hard = true;
+  const sizeIssues: SizeIssue[] = [];
+  const res = await withQuiet(() => capture(() => checkTasks[head](args, opts, sizeIssues)));
+  if (sizeIssues.length) res.sizeIssues = sizeIssues;
+  else if (head === 'size' && !res.ok) res.hard = true;
   return res;
 };
 const runCheckTaskTimed = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<TimedCapture> =>
@@ -505,7 +554,6 @@ const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<C
         color: opts.color,
         cwd: opts.cwd,
         runDir: opts.runDir,
-        treeshakeOutDir: opts.treeshakeOutDir,
       },
       self: import.meta.url,
     },
@@ -514,15 +562,12 @@ const runCheckWorker = (head: CheckHead, args: CheckArgs, opts: Opts): Promise<C
 const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   const args = checkArgs(argv);
   if (args.help) return console.log(usage);
+  const projectCwd = resolve(opts.cwd || process.cwd());
+  // A mode of its own, not a check: it measures, writes the rc, and never needs the run dir.
+  if (args.generate) return runGenerateJsbtRc({ cwd: projectCwd });
   const checkTmp = checkTempDir();
   try {
-    const projectCwd = resolve(opts.cwd || process.cwd(), args.projectArg);
-    const taskOpts = {
-      ...opts,
-      cwd: projectCwd,
-      runDir: join(checkTmp, 'build'),
-      treeshakeOutDir: join(checkTmp, 'out-treeshake'),
-    };
+    const taskOpts = { ...opts, cwd: projectCwd, runDir: join(checkTmp, 'build') };
     const colorOn = opts.color ?? wantColor();
     const quiet = checkQuiet();
     const progressStart = (head: string): void => {
@@ -550,14 +595,14 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     const allChecks: CheckRun[] = [
       check('readme', true),
       {
-        head: 'treeshake',
+        head: 'size',
         pick: (res) => {
-          const issues: Issue[] = (res.tree || []).map((item) => treeIssueLog(taskOpts.cwd, item));
+          const issues: Issue[] = (res.sizeIssues || []).map(sizeIssueLog);
           if (issues.length || !res.error) {
             return {
               count: issues.length,
               fatal: !!issues.length,
-              lines: groupIssues('treeshake', issues, colorOn),
+              lines: groupIssues('size', issues, colorOn),
             };
           }
           return {
@@ -567,7 +612,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
             lines: [
               formatIssue(
                 'ERROR',
-                'treeshake',
+                'size',
                 { file: 'unknown', issue: res.error, sym: '0' },
                 colorOn
               ),
@@ -593,9 +638,13 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
         serial: true,
       },
     ];
-    const list = args.head
-      ? allChecks.filter((item) => item.head === args.head)
-      : allChecks.filter((item) => item.head !== 'patterns');
+    const ignored = new Set<CheckHead>(args.ignore);
+    const list = (
+      args.head
+        ? allChecks.filter((item) => item.head === args.head)
+        : allChecks.filter((item) => item.head !== 'patterns')
+    ).filter((item) => !ignored.has(item.head));
+    if (!list.length) err('--ignore leaves no checks to run');
     console.log(checkHeader(list.length, colorOn, quiet));
     if (!quiet) console.log();
     const res: TimedCapture[] = [];
@@ -647,6 +696,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
     let diagnosticGap = false;
     let quietDiagnostics = false;
     const quietShows = (out: Pick): boolean => !!out.lines.length;
+    let missingExampleDep = false;
     const printDiagnostic = (line: string, log: (line?: string) => void): void => {
       if (quiet && !quietDiagnostics) {
         console.log();
@@ -656,6 +706,8 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
         log();
         diagnosticGap = true;
       }
+      // Tracked on the printed line, not the captured one: no hint for a hidden diagnostic.
+      if (MISSING_EXAMPLE_DEP.test(line)) missingExampleDep = true;
       log(line);
     };
     for (let i = 0; i < list.length; i++) {
@@ -669,10 +721,13 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
         if (args.head)
           for (const line of pickLogs(item.head, cur)) printDiagnostic(line, console.log);
       } else {
-        const full = !!args.head && item.head === 'treeshake';
-        for (const line of pickLogs(item.head, cur, full)) printDiagnostic(line, console.log);
+        for (const line of pickLogs(item.head, cur)) printDiagnostic(line, console.log);
         for (const line of out.lines) printDiagnostic(line, console.error);
       }
+    }
+    if (missingExampleDep) {
+      console.error();
+      for (const line of missingDepHint(colorOn)) console.error(line);
     }
     const stats = list.map((item, i) => ({ head: item.head, ms: res[i].ms }));
     const done = checkDone(list.length, totalMs, colorOn, stats);

@@ -135,8 +135,8 @@ const usage = usageText('errors', 'check-errors.ts');
 const TIMEOUT = 120_000;
 const MAX_PROBES_PER_ARG = 12;
 const defaultProbeLimit = (): number => Math.max(1, Math.min(availableParallelism?.() || 4, 16));
-const loadTs = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript compiler API', ['createSourceFile']);
+const loadTs = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript compiler API', ['createSourceFile']);
 };
 const sourceFile = (cwd: string, jsRel: string): string => {
   const tsRel = tsSourceRel(jsRel);
@@ -1615,7 +1615,7 @@ export const runCli = async (
   if (!cli) return;
   const { args, colorOn } = cli;
   const ctx = publicCtx(args.pkgArg, opts.cwd);
-  const ts = loadTs(ctx.pkgFile);
+  const ts = loadTs();
   const entries = runtimeEntries(ctx);
   const specs = specMap(entries);
   const rows = workRows(ctx, ts, entries);

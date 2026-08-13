@@ -159,8 +159,8 @@ const parseReadme = (text: string): Block[] => {
   }
   return out;
 };
-const loadTs = (pkgFile: string): TsCheck => {
-  return loadTypeScriptApi<TsCheck>(pkgFile, 'TypeScript compiler API', ['createProgram']);
+const loadTs = (): TsCheck => {
+  return loadTypeScriptApi<TsCheck>('TypeScript compiler API', ['createProgram']);
 };
 const blockMode = (label: string, kind: Kind): Mode => {
   if (kind === 'ts') return 'ts';

@@ -1,7 +1,7 @@
 import { deepStrictEqual, throws } from 'node:assert';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as ts from 'typescript';
 import { should } from '../../src/test.ts';
@@ -163,7 +163,11 @@ should('runDepNames validates exampleDependencies pins', () => {
   const cleanup = () =>
     rmSync(resolve('test/jsbt/build/jsbtrc-validate'), { force: true, recursive: true });
   try {
-    throws(() => readJsbtRc(seed({ sizeLimits: {} })), { message: /unknown \.jsbtrc\.json key/ });
+    throws(() => readJsbtRc(seed({ treeshakeLimits: {} })), {
+      message: /unknown \.jsbtrc\.json key/,
+    });
+    // sizeLimits is a known key: `jsbt-check size` reads its gzip budgets from it.
+    deepStrictEqual(readJsbtRc(seed({ sizeLimits: {} })), { sizeLimits: {} });
     throws(
       () => runDepNames(seed({ exampleDependencies: { esbuild: '1.0.0' } }), '@jsbt-test/rc'),
       {
@@ -263,22 +267,25 @@ const dyn = import(\`./dyn\`);
   deepStrictEqual(literalText(ts, undefined), '');
 });
 
-should('loadTypeScript loads TypeScript through package-local resolution', () => {
-  const pkgFile = resolve('test/jsbt/vectors/check/pass-root/package.json');
+should('loadTypeScript loads jsbt’s own TypeScript, not the checked project’s', () => {
   const loaded = loadTypeScript<typeof ts>(
-    pkgFile,
     'TypeScript compiler API',
     (mod) => typeof mod.createProgram === 'function'
   );
   deepStrictEqual(typeof loaded.createProgram, 'function');
-  const api = loadTypeScriptApi<typeof ts>(pkgFile, 'TypeScript compiler API', ['createProgram']);
+  const api = loadTypeScriptApi<typeof ts>('TypeScript compiler API', ['createProgram']);
   deepStrictEqual(typeof api.createProgram, 'function');
-  const module = loadModuleApi<typeof ts>(pkgFile, 'typescript', 'TypeScript scanner API', [
+  // Resolution is anchored to jsbt, so a project with no node_modules of its own still works
+  // and a project on a compiler without the JS API (the v7 native port) can never be picked up.
+  const bare = resolve('test/jsbt/vectors/check/pass-root/package.json');
+  deepStrictEqual(existsSync(join(dirname(bare), 'node_modules')), false);
+  deepStrictEqual(api, loadTypeScriptApi<typeof ts>('TypeScript parser API', ['createSourceFile']));
+  const module = loadModuleApi<typeof ts>(bare, 'typescript', 'TypeScript scanner API', [
     'createScanner',
   ]);
   deepStrictEqual(typeof module.createScanner, 'function');
   throws(
-    () => loadTypeScriptApi<typeof ts>(pkgFile, 'TypeScript nope API', ['definitelyMissing']),
+    () => loadTypeScriptApi<typeof ts>('TypeScript nope API', ['definitelyMissing']),
     /expected TypeScript nope API/
   );
 });

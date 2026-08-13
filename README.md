@@ -18,7 +18,7 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 ## 1. test
 
-Small test runner with familiar `describe` / `it`  mocha-like syntax, explicit execution, and
+Small test runner with familiar `describe` / `it` mocha-like syntax, explicit execution, and
 optional parallelism.
 
 API:
@@ -192,26 +192,49 @@ directory. Its `node_modules` is assembled from symlinks — nothing is fetched 
 }
 ```
 
-`esbuild` (used by `treeshake`) is provided automatically and must not be listed: it is
-resolved from the project's `node_modules`, from the copy next to jsbt itself, or from a
-global install. If none is found, run `npm install -g esbuild`.
+An example importing anything else fails at run time with `ERR_MODULE_NOT_FOUND`, naming the
+package but not the list it is missing from. When any check reports one, `jsbt-check` prints
+a reminder about `exampleDependencies` once, after the last check.
+
+`esbuild` (importable by example code) is provided automatically and must not be listed: it
+is resolved from the project's `node_modules`, from the copy next to jsbt itself, or from a
+global install. If none is found, run `npm install -g esbuild`. The `size` selector measures
+through [bismar](https://github.com/paulmillr/bismar), which brings its own pinned esbuild.
+
+The checks always parse and type-check with jsbt's own pinned `typescript`, never with the
+one the checked project installs. The checks drive the JS compiler API directly, and a
+project is free to depend on a TypeScript that does not expose it — the v7 native port is a
+Go rewrite with a different surface. Pinning one compiler also keeps verdicts identical
+across repos, and lets `jsbt-check` run in a project with no `node_modules` of its own.
+
+Checks run against the package in the current directory; in a monorepo, `cd` into the
+package first.
 
 ```
-jsbt-check [--project=<directory>]
-jsbt-check [--project=<directory>] bigint
-jsbt-check [--project=<directory>] bytes
-jsbt-check [--project=<directory>] comments
-jsbt-check [--project=<directory>] errors
-jsbt-check [--project=<directory>] importtime
-jsbt-check [--project=<directory>] jsr
-jsbt-check [--project=<directory>] jsrpublish
-jsbt-check [--project=<directory>] mutate
-jsbt-check [--project=<directory>] patterns
-jsbt-check [--project=<directory>] readme
-jsbt-check [--project=<directory>] treeshake
-jsbt-check [--project=<directory>] tsdoc
-jsbt-check [--project=<directory>] typeimport
+jsbt-check
+jsbt-check bigint
+jsbt-check bytes
+jsbt-check comments
+jsbt-check errors
+jsbt-check importtime
+jsbt-check jsr
+jsbt-check jsrpublish
+jsbt-check mutate
+jsbt-check patterns
+jsbt-check readme
+jsbt-check size
+jsbt-check tsdoc
+jsbt-check typeimport
+
+jsbt-check --ignore=readme,tsdoc
+jsbt-check --gen-config
 ```
+
+`--ignore=<a,b>` skips the listed selectors; it accepts the same names as the selector
+argument and errors if nothing would be left to run.
+
+The one non-check mode is `--gen-config`, which writes size budgets instead of auditing
+— see [size limits](#size-limits) below.
 
 With `"check": "jsbt-check"` in `package.json` scripts, selectors can be run through npm:
 
@@ -226,26 +249,58 @@ npm run check jsrpublish
 npm run check mutate
 npm run check patterns
 npm run check readme
-npm run check treeshake
+npm run check size
 npm run check tsdoc
 npm run check typeimport
 ```
 
 Selector summary for `jsbt-check <selector>`:
 
-* `bigint`: find BigInt compatibility hazards in public runtime files.
-* `bytes`: inspect byte/typed-array API surface and TypeScript-version compatibility.
-* `comments`: enforce comments and release-facing source annotations.
-* `errors`: verify documented thrown errors against runtime probes.
-* `importtime`: measure public entry import time and flag slow imports.
-* `jsr`: validate JSR package metadata, exports, imports, and publish graph.
-* `jsrpublish`: run stricter JSR publish-readiness checks.
-* `mutate`: detect mutation hazards in public runtime behavior.
-* `patterns`: report source patterns that are risky for published packages.
-* `readme`: type-check and run runnable README examples.
-* `treeshake`: bundle public exports and report retained unused code.
-* `tsdoc`: audit public declaration docs and examples.
-* `typeimport`: verify imports that should be type-only.
+- `bigint`: find BigInt compatibility hazards in public runtime files.
+- `bytes`: inspect byte/typed-array API surface and TypeScript-version compatibility.
+- `comments`: enforce comments and release-facing source annotations.
+- `errors`: verify documented thrown errors against runtime probes.
+- `importtime`: measure public entry import time and flag slow imports.
+- `jsr`: validate JSR package metadata, exports, imports, and publish graph.
+- `jsrpublish`: run stricter JSR publish-readiness checks.
+- `mutate`: detect mutation hazards in public runtime behavior.
+- `patterns`: report source patterns that are risky for published packages.
+- `readme`: type-check and run runnable README examples.
+- `size`: audit release bundles for retained unused code and enforce `sizeLimits` budgets.
+- `tsdoc`: audit public declaration docs and examples.
+- `typeimport`: verify imports that should be type-only.
+
+#### size limits
+
+`jsbt-check size` measures release bundles with
+[bismar](https://github.com/paulmillr/bismar) — the same engine behind `bismar --size` and
+`bismar -bs` — then audits them for unused locals that survived bundling and enforces the
+gzip budgets in `sizeLimits`:
+
+```json
+{
+  "sizeLimits": {
+    "index.js": "8kb",
+    "index.js/add": 4096,
+    "index.js/sign index.js/verify": "6kb"
+  }
+}
+```
+
+Keys are `bismar --size` selectors; values are bytes (`4096`) or a kb string (`"4kb"`,
+1kb = 1024). A space-separated key budgets the combined bundle of all its selectors — their
+cost when imported together, with shared code counted once. Only local modules and exports
+can be budgeted.
+
+The check itself prints no stats. To debug an over-budget entry, ask bismar directly:
+`bismar -bs <selector...>` for the numbers, `bismar <selector> > out.js` for the measured
+bundle bytes.
+
+`jsbt-check --gen-config` writes or updates `.jsbtrc.json` with one budget per public
+module at its current size; existing entries are hand-set and never touched, and the rest of
+the file carries over unchanged. It is a mode of its own rather than a flag on `size`: it
+runs no checks, takes no selector, and is the one `jsbt-check` invocation that writes to the
+package directory.
 
 ## 4. Workflows
 
@@ -253,13 +308,13 @@ Secure GitHub CI configs for testing & publishing JS packages.
 
 The files reside in `.github/workflows`:
 
-* `test.yml`: reusable/manual test workflow for Node 22, 24, 26, Bun, and Deno. It runs
+- `test.yml`: reusable/manual test workflow for Node 22, 24, 26, Bun, and Deno. It runs
   `npm run build --if-present`, `npm test`, optional `test:tsc` on Node 26, optional `test:bun`,
   and optional `test:deno`. Inputs: `submodules` and `runs-on`.
-* `test-matrix.yml`: reusable/manual Node matrix across Node 22, 24, 26 on `ubuntu-24.04-arm`,
+- `test-matrix.yml`: reusable/manual Node matrix across Node 22, 24, 26 on `ubuntu-24.04-arm`,
   `macos-latest`, and `windows-latest`.
-* `test-custom.yml`: reusable Node 26 workflow for one custom npm task, defaulting to `test:slow`.
-* `release.yml`: release/reusable/manual publisher for NPM, and JSR when `jsr.json` exists. It
+- `test-custom.yml`: reusable Node 26 workflow for one custom npm task, defaulting to `test:slow`.
+- `release.yml`: release/reusable/manual publisher for NPM, and JSR when `jsr.json` exists. It
   uses OIDC Trusted Publishing, disables package-manager cache, runs `npm ci`, builds when present,
   verifies package/tag versions, dry-runs NPM publish, validates JSR version, and publishes through
   `npm stage publish --access public`.
@@ -307,12 +362,8 @@ Inheritable in the following way:
     "rootDir": "src",
     "outDir": "."
   },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src"],
+  "exclude": ["node_modules"]
 }
 ```
 

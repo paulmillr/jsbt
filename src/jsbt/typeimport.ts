@@ -31,8 +31,8 @@ type TsLike = typeof import('typescript');
 
 const usage = usageText('typeimport', 'check-typeimport.ts');
 
-const loadTS = (pkgFile: string): TsLike => {
-  return loadTypeScriptApi<TsLike>(pkgFile, 'TypeScript parser API', ['createSourceFile']);
+const loadTS = (): TsLike => {
+  return loadTypeScriptApi<TsLike>('TypeScript parser API', ['createSourceFile']);
 };
 const importTypeName = (
   source: import('typescript').SourceFile,
@@ -69,8 +69,8 @@ export const runCli = async (
   if (!cli) return;
   const { args, colorOn } = cli;
   const ctx = publicCtx(args.pkgArg, opts.cwd);
-  const { cwd, pkgFile } = ctx;
-  const ts = loadTS(pkgFile);
+  const { cwd } = ctx;
+  const ts = loadTS();
   const { issues, result } = collectIssues(
     listModules(ctx),
     (mod) => scan(ts, cwd, mod.dtsFile),
