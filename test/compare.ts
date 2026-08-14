@@ -43,9 +43,9 @@ import compare from '../src/benchmark-compare.ts';
   };
   const KB = 1024;
   const MB = 1024 * KB;
-  await compare(
-    'Test',
-    {
+  await compare('Test', ALGOS, {
+    levels: ['algorithm', 'platform', 'library'],
+    inputs: {
       chunkSize: [2, 4, 8, 16, 32, 128, 512, 1024, 10 * 1024],
       buffer: {
         '32B': new Uint8Array(32),
@@ -53,13 +53,7 @@ import compare from '../src/benchmark-compare.ts';
         '8KB': new Uint8Array(8 * KB),
         '1MB': new Uint8Array(1 * MB),
       },
-    }, //
-    ALGOS,
-    {
-      libraryDimensions: ['algorithm', 'platform', 'library'],
-      defaults: {},
-      iterations: 10_000,
-      bytes: ({ args }) => args[0] * args[1].byteLength,
-    }
-  );
+    },
+    bytes: ({ args }) => args[0] * args[1].byteLength,
+  });
 })();

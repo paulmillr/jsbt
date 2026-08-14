@@ -6,236 +6,211 @@
  *
  * @module
  */
-import { readFileSync } from 'node:fs';
-import type { BenchStats } from './benchmark.ts';
-import { utils } from './benchmark.ts';
-const { benchmarkRaw, formatDuration } = utils;
+import type { BenchStats, Env } from './benchmark.ts';
+import {
+  ansi,
+  benchmarkRun,
+  buf,
+  envFlag,
+  formatDuration,
+  formatOps,
+  isCli,
+  paintFormattedDuration as paintFormattedDurationWith,
+  perSecondNumber,
+  printCsvRow,
+  roundRate,
+  stripAnsi,
+  wantColor,
+} from './benchmark.ts';
 
-const _c = String.fromCharCode(27);
-const red = _c + '[31m',
-  green = _c + '[32m',
-  gray = _c + '[2;37m',
-  blue = _c + '[34m',
-  reset = _c + '[0m';
-const NN = `${gray}│${reset}`,
-  CH = `${gray}─${reset}`,
-  LR = `${gray}┼${reset}`,
-  RN = `${gray}├${reset}`,
-  NL = `${gray}┤${reset}`;
+const { green, gray, cyan, reset } = ansi;
 
 type BenchObj = Record<string, any>;
-type Column = { name: string; width: number };
 type DimensionSource = Record<string, unknown> | readonly unknown[];
 type Dimensions = Record<string, DimensionSource>;
+type NormalizedDimensions = Record<string, Map<string, unknown>>;
 type DynamicDimensions = Record<string, string[]>;
 export type CompareArgsContext = {
   obj: BenchObj;
   args: any[];
 };
-export type CompareMetricContext = CompareArgsContext & {
-  stats: BenchStats['stats'];
-  perSec: bigint;
-  iterations: number;
-};
-type CompareAmount = number | ((ctx: CompareArgsContext) => number);
-type CompareIterations = number | ((ctx: CompareArgsContext) => number);
-export type CompareThroughput = {
-  amount: CompareAmount;
-  unit: string;
-  name?: string;
-  width?: number;
-  diff?: boolean;
-  higherIsBetter?: boolean;
-};
-export type CompareMetric = {
-  name: string;
-  unit?: string;
-  width?: number;
-  diff?: boolean;
-  higherIsBetter?: boolean;
-  compute: (ctx: CompareMetricContext) => number;
-};
-type MetricDef = Pick<CompareMetric, 'compute' | 'diff' | 'width'> & {
-  label: string;
-  name: string;
-  higherIsBetter: boolean;
-};
-type PreviousRow = { metricValues?: number[]; stats?: { mean?: bigint } };
-type PreviousData = Record<string, PreviousRow>;
-type RunResult = Pick<BenchStats, 'perItemStr' | 'perSec' | 'perSecStr' | 'stats'>;
+type CompareAmount = number | Uint8Array | ((ctx: CompareArgsContext) => number | Uint8Array);
+type CompareMode = 'normal' | 'time' | 'latency';
+type RunResult = Pick<BenchStats, 'elapsed' | 'iterations' | 'perItemStr' | 'perSecStr' | 'stats'>;
 
 export type CompareOpts = {
-  libraryDimensions?: string[];
+  /**
+   * Names for the nesting levels of the libs tree, outermost first: with
+   * `{ sha256: { noble: fn } }`, `levels: ['algorithm', 'library']`.
+   * Defaults to `['name']` (a flat libs object).
+   */
+  levels?: string[];
   defaults?: BenchObj;
-  dimensions?: string[];
-  filter?: string | string[];
+  /**
+   * Input dimensions: `{ dim: { label: value } }`, or the array shorthand
+   * `{ dim: [value, ...] }` where labels become `String(value)`. Each case's
+   * values are passed to the benched function as arguments, in declaration order.
+   */
+  inputs?: Dimensions;
+  /**
+   * Size labels ('32B', '1KB', '10MB', ...): prepends a `size` dimension of
+   * deterministic pseudo-random buffers (see `buf`). Unless overridden, `bytes`
+   * defaults to the parsed size and `mode` to 'time' below 1KB.
+   */
+  sizes?: string[];
+  /** Dimension precedence; selected dimensions not listed are appended after. */
+  order?: string[];
+  /**
+   * The first declared value of the comparison (last) dimension is painted cyan
+   * (the heading color) in text output, so "our" library stays findable in
+   * speed-sorted rows; `false` disables.
+   */
+  focus?: false;
   filterObj?: (obj: BenchObj) => boolean;
   dryRun?: boolean;
-  loadRun?: string;
   patchArgs?: (args: any[], obj: BenchObj) => any[];
-  printUnchanged?: boolean;
-  iterations?: CompareIterations;
-  skipThreshold?: number;
-  format?: 'csv' | 'table';
   bytes?: CompareAmount;
-  throughput?: CompareThroughput | CompareThroughput[];
-  metrics?: CompareMetric[];
+  /**
+   * 'time' prints aggregate mean duration per op; 'latency' prints p50, p95,
+   * and p100. Display-only (CSV keeps its aggregate schema); may be a function
+   * deciding per case.
+   */
+  mode?: CompareMode | ((ctx: CompareArgsContext) => CompareMode);
+  /**
+   * Dimension names across which results must be identical, e.g. `['library']`.
+   * Before timing, every case runs once; results are deep-compared inside each group of
+   * cases that differ only in these dimensions. Also verifies Uint8Array args are not mutated.
+   * Runs even with dryRun, which allows validation without benchmarking.
+   */
+  crossValidate?: string[];
 };
 
-const isCli = typeof process !== 'undefined';
-const SECOND = 10n ** 9n;
 const MIB = 1024 ** 2;
-const stripAnsi = (str: string): string => str.replace(/\x1b\[\d+(;\d+)*m/g, '');
 const isRecord = (val: unknown): val is Record<string, unknown> =>
   typeof val === 'object' && val !== null;
-const envFlag = (value: string | undefined): boolean => !!Number(value);
-type Env = Record<string, string | undefined>;
-function wantColor(env: Env = {}, tty = false): boolean {
-  if (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== '0') return true;
-  if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
-  if (env.NO_COLOR) return false;
-  if (env.FORCE_COLOR === '0') return false;
-  if (env.CLICOLOR === '0') return false;
-  return tty;
-}
 function colorEnabled(env: Env = isCli ? process.env : {}): boolean {
   return isCli && wantColor(env, !!process.stderr?.isTTY || !!process.stdout?.isTTY);
 }
 const paint = (text: string, code: string): string =>
   colorEnabled() ? `${code}${text}${reset}` : text;
-const headerName = (name: string): string => normalizeLabel(name).toLowerCase();
+// compare's paint re-checks env per call, so pass it through instead of using bench's default
+const paintFormattedDuration = (formatted: string, code: string): string =>
+  paintFormattedDurationWith(formatted, code, paint);
+const paintDuration = (duration: bigint, code: string): string =>
+  paintFormattedDuration(formatDuration(duration), code);
 
-const joinBorders = (str: string): string =>
-  str
-    .replaceAll(`${CH}${NN}${CH}`, `${CH}${LR}${CH}`)
-    .replaceAll(`${CH}${NN}`, `${CH}${NL}`)
-    .replaceAll(`${NN}${CH}`, `${RN}${CH}`);
-const pad = (s: string, len: number, end = true): string => {
-  const diff = len - stripAnsi(s).length;
-  if (diff <= 0) return s;
-  const padding = ' '.repeat(diff);
-  return end ? s + padding : padding + s;
-};
-const csvCell = (val: unknown): string => {
-  const cell = stripAnsi(String(val ?? ''));
-  return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
-};
-const printCsvRow = (values: unknown[]): void => console.log(values.map(csvCell).join(','));
-
-const normalizeLabel = (label: string): string =>
-  label.replace(/\bMiB\/(?:sec|s)\b/g, 'mib/sec').replace(/\bmib\/s\b/g, 'mib/sec');
-const metricLabel = (name: string, unit = ''): string =>
-  normalizeLabel(`${name}${unit ? ` ${unit}` : ''}`);
-const percent = (value: bigint, baseline: bigint, rev = false): string => {
-  if (baseline === 0n) return `${gray}N/A${reset}`;
-  const change = ((value - baseline) * 100n) / baseline;
-  const sign = change > 0n ? '+' : change < 0n ? '' : '';
-  const formatted = `${sign}${change}%`;
-  const code = change > 0n ? (rev ? green : red) : change < 0n ? (rev ? red : green) : gray;
-  return `${code}${formatted}${reset}`;
-};
-const percentNumber = (value: number, baseline: number, rev = true): string =>
-  percent(BigInt(Math.round(value * 1000)), BigInt(Math.round(baseline * 1000)), rev);
-const changePercent = (value: number | bigint, baseline: number | bigint): number => {
-  const prev = Number(baseline);
-  return prev === 0 ? 0 : Math.abs(((Number(value) - prev) / prev) * 100);
-};
-const roundRate = (value: number): number =>
-  value >= 100 ? Math.round(value) : value >= 10 ? +value.toFixed(1) : +value.toFixed(2);
-const parsePositiveFinite = (name: string, value: unknown): number => {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)
-    throw new Error(`bench-compare ${name} must be a positive finite number`);
-  return value;
-};
-const parseIterations = (value: unknown): number => {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0)
-    throw new Error('bench-compare iterations must be a positive safe integer');
-  return value;
-};
-const amountValue = (name: string, amount: CompareAmount, ctx: CompareArgsContext): number =>
-  parsePositiveFinite(name, typeof amount === 'function' ? amount(ctx) : amount);
+// Comparison against the group's fastest row; rows are sorted, so every diff is a
+// slowdown — shown as a signed factor (-1.7x). A gray ≈ marks a tie: either the
+// change sits inside noise (the combined rme of the two runs) or the factor is
+// below 1.1x — too small to bother the reader with.
+function diffText(value: number, best: number, higherIsBetter: boolean, noise: number): string {
+  if (!(value > 0) || !(best > 0)) return `${gray}N/A${reset}`;
+  const ratio = higherIsBetter ? best / value : value / best;
+  if (ratio < 1.1 || (Math.abs(value - best) / best) * 100 <= noise) return `${gray}≈${reset}`;
+  // one decimal below 10x; the decimal stops being informative from 10x on
+  const factor = ratio >= 10 ? Math.round(ratio) : +ratio.toFixed(1);
+  return `${gray}-${factor}x${reset}`;
+}
 const bytesValue = (amount: CompareAmount, ctx: CompareArgsContext): number => {
-  const value = typeof amount === 'function' ? amount(ctx) : amount;
+  const raw = typeof amount === 'function' ? amount(ctx) : amount;
+  const value = raw instanceof Uint8Array ? raw.byteLength : raw;
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new Error('bench-compare bytes must be a positive safe integer');
   return value;
 };
-const perSecond = (mean: bigint, amount: number): number =>
-  mean === 0n ? 0 : (Number(SECOND) * amount) / Number(mean);
+const modeFor = (mode: CompareOpts['mode'], ctx: CompareArgsContext): CompareMode => {
+  const value = (typeof mode === 'function' ? mode(ctx) : mode) ?? 'normal';
+  if (value !== 'normal' && value !== 'time' && value !== 'latency')
+    throw new Error("bench-compare mode must be 'normal', 'time', or 'latency'");
+  return value;
+};
 
-function drawHeader(columns: Column[]): void {
-  console.log(columns.map((col) => `${col.name.padEnd(col.width)} `).join(NN));
+const SIZE_UNITS: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+/**
+ * Parses a size label ('64B', '1KB', '10MB') into its byte count — the same parser
+ * the `sizes` option uses, so `buf(parseSize(label))` reproduces compare's internal
+ * buffer for that label anywhere outside compare (precompute, preallocation, warmup).
+ */
+export function parseSize(label: unknown): number {
+  const match = /^(\d+)(B|KB|MB|GB)$/i.exec(String(label));
+  if (!match) throw new Error(`bench-compare sizes: cannot parse size label: ${label}`);
+  return Number(match[1]) * SIZE_UNITS[match[2].toUpperCase()];
 }
-function drawSeparator(columns: Column[], changed: boolean[]): void {
-  const sep = columns.map((col, i) => (changed[i] ? CH : ' ').repeat(col.width + 1));
-  console.log(joinBorders(sep.join(NN)));
-}
-function printTableRow(
-  values: string[],
-  prev: string[] | undefined,
-  columns: Column[],
-  selectedCount: number
-): string[] {
-  const changed = values.map(() => true);
-  for (let i = 0, parentChanged = false; i < selectedCount; i++) {
-    const cur: boolean = parentChanged || !prev || values[i] !== prev[i];
-    changed[i] = cur;
-    parentChanged ||= cur;
-  }
-  const selected = changed.slice(0, selectedCount);
-  const skipSeparator =
-    selected.length < 2 ||
-    (selected.slice(0, selected.length - 1).every((item) => !item) &&
-      !!selected[selected.length - 1]);
-  if (!skipSeparator) drawSeparator(columns, changed);
-  const row = values.map((val, i) =>
-    pad(!changed[i] ? ' ' : val, columns[i].width + 1, i < selectedCount)
+
+// Array dimension sources become label->value maps keyed by String(value). Maps
+// (unlike records) keep declared order even for integer-like labels such as '8'.
+function normalizeDimensions(dims: Dimensions): NormalizedDimensions {
+  return Object.fromEntries(
+    Object.entries(dims).map(([dim, source]) => [
+      dim,
+      new Map(
+        Array.isArray(source)
+          ? source.map((value) => [String(value), value] as const)
+          : Object.entries(source)
+      ),
+    ])
   );
-  console.log(row.join(NN));
-  return values;
 }
 
-function filterValues(fields: string[], keywords: string | string[] | undefined): boolean {
-  const keys = typeof keywords === 'string' ? keywords.split(',') : keywords;
+// FILTER grammar, always substring-matched against dimension values. With '=':
+// ';'-separated `dim=value,value` terms — every term must match its dimension,
+// comma values are alternatives ('library=awasm,noble;algorithm=sha3_256').
+// Without '=': comma-separated terms that must each match some dimension.
+type FilterTerm = { dim?: string; parts: string[] };
+const parseFilter = (keywords: string | undefined): FilterTerm[] | undefined => {
+  if (!keywords) return undefined;
+  const scoped = keywords.includes('=');
+  return keywords.split(scoped ? ';' : ',').map((term) => {
+    const sep = term.indexOf('=');
+    if (sep === -1) return { parts: scoped ? term.split(',') : [term] };
+    return { dim: term.slice(0, sep), parts: term.slice(sep + 1).split(',') };
+  });
+};
+function filterValues(selected: string[], fields: string[], keywords: string | undefined): boolean {
+  const keys = parseFilter(keywords);
   return (
     !keys ||
-    keys.every((key) => {
-      const parts = key.split('|');
-      return fields.some((field) => parts.some((part) => field.includes(part)));
-    })
+    keys.every(({ dim, parts }) =>
+      fields.some(
+        (field, i) =>
+          (dim === undefined || selected[i] === dim) && parts.some((part) => field.includes(part))
+      )
+    )
   );
 }
-function filterMatchesValue(value: string, keywords: string | string[] | undefined): boolean {
-  const keys = typeof keywords === 'string' ? keywords.split(',') : keywords;
-  return !!keys?.some((key) => key.split('|').some((part) => part !== '' && value.includes(part)));
+function filterMatchesValue(dim: string, value: string, keywords: string | undefined): boolean {
+  const keys = parseFilter(keywords);
+  return !!keys?.some(
+    ({ dim: scope, parts }) =>
+      (scope === undefined || scope === dim) &&
+      parts.some((part) => part !== '' && value.includes(part))
+  );
 }
 
-function matrixOpts(opts: CompareOpts): CompareOpts {
-  const env = isCli ? process.env : {};
-  const csv = envFlag(env.JSBT_CSV) || !colorEnabled(env);
+// filter comes only from the FILTER env var; env order/dryRun are defaults explicit opts override
+function matrixOpts(opts: CompareOpts): CompareOpts & { filter?: string } {
+  const env: Env = isCli ? process.env : {};
   return {
-    filter: env.JSBT_FILTER,
-    dimensions: env.JSBT_BENCHMARK_DIMENSIONS
-      ? env.JSBT_BENCHMARK_DIMENSIONS.split(',')
-      : undefined,
+    filter: env.FILTER,
+    order: env.JSBT_ORDER ? env.JSBT_ORDER.split(',') : undefined,
     dryRun: envFlag(env.JSBT_BENCHMARK_DRY_RUN),
     ...opts,
-    format: csv ? 'csv' : opts.format,
   };
 }
 
 function collectDynamicDimensions(
   libs: Record<string, unknown>,
-  libraryDimensions: string[]
+  levels: string[]
 ): DynamicDimensions {
-  const sets = Object.fromEntries(
-    libraryDimensions.map((dim) => [dim, new Set<string>()])
-  ) as Record<string, Set<string>>;
+  const sets = Object.fromEntries(levels.map((dim) => [dim, new Set<string>()])) as Record<
+    string,
+    Set<string>
+  >;
   const stack = Object.entries(libs).map(([key, value]) => ({ path: [key], value }));
   for (const cur of stack) {
-    const dim = libraryDimensions[cur.path.length - 1];
+    const dim = levels[cur.path.length - 1];
     if (dim) sets[dim].add(cur.path[cur.path.length - 1]);
-    if (!isRecord(cur.value) || cur.path.length >= libraryDimensions.length) continue;
+    if (!isRecord(cur.value) || cur.path.length >= levels.length) continue;
     for (const [key, value] of Object.entries(cur.value)) {
       if (key === 'options') continue;
       stack.push({ path: [...cur.path, key], value });
@@ -245,7 +220,7 @@ function collectDynamicDimensions(
 }
 
 function selectDimensions(
-  dimensions: Dimensions,
+  dimensions: NormalizedDimensions,
   dynamic: DynamicDimensions,
   defaults: BenchObj,
   selectedDimensions: string[] | undefined
@@ -262,174 +237,79 @@ function selectDimensions(
   return selected;
 }
 
-function valuesFor(dim: string, dimensions: Dimensions, dynamic: DynamicDimensions): string[] {
+function valuesFor(
+  dim: string,
+  dimensions: NormalizedDimensions,
+  dynamic: DynamicDimensions
+): string[] {
   const source = dimensions[dim];
-  if (source !== undefined) return Object.keys(source);
+  if (source !== undefined) return [...source.keys()];
   const values = dynamic[dim];
   if (values !== undefined) return values;
   throw new Error(`Unknown dimension: ${dim}`);
 }
 
+// Hashes — 8 cases (FILTER='', JSBT_ORDER='')
+//   size       32B, 10MB
+//   algorithm  sha256, sha512
+//   library    noble, node
 function printMetadata(
-  dimensions: Dimensions,
+  title: string,
+  caseCount: number,
+  dimensions: NormalizedDimensions,
   dynamic: DynamicDimensions,
   defaults: BenchObj,
   selected: string[],
-  loadRun: string | undefined,
-  filter: string | string[] | undefined,
-  explicitDims: string[] | undefined
+  filter: string | undefined,
+  order: string[] | undefined,
+  dryRun: boolean | undefined
 ): void {
-  const allDims = [...new Set([...selected, ...Object.keys(dimensions), ...Object.keys(dynamic)])];
-  const explicit = new Set(explicitDims ?? []);
-  const optionRows = [
-    ['JSBT_FILTER', !!(Array.isArray(filter) ? filter.length : filter)],
-    ['JSBT_BENCHMARK_DIMENSIONS', explicit.size > 0],
-  ] as const;
+  const envVars = [`FILTER='${filter ?? ''}'`, `JSBT_ORDER='${order ? order.join(',') : ''}'`];
+  if (dryRun) envVars.push('JSBT_BENCHMARK_DRY_RUN=1');
+  const env = paint(`(${envVars.join(', ')})`, gray);
+  const sfx = caseCount === 1 ? '' : 's';
+  console.log(`${title} — ${paint(caseCount.toString(), green)} case${sfx} ${env}`);
+  const explicit = new Set(order ?? []);
   const fixed = Object.entries(defaults)
     .filter(([dim]) => !selected.includes(dim))
     .map(([dim, value]) => `${dim}=${value}`);
-  const planRows = [
-    [
-      'varies',
-      selected.length
-        ? selected.map((dim) => (explicit.has(dim) ? paint(dim, blue) : dim)).join(' x ')
-        : 'single case',
-    ],
-    ['fixed', fixed.length ? fixed.join(', ') : 'none'],
-    ['compare', loadRun ? `against ${loadRun}` : 'against first row in each group'],
-    ['env', optionRows.map(([name, active]) => (active ? paint(name, blue) : name)).join(', ')],
-  ];
-  const planWidth = Math.max(...planRows.map(([label]) => label.length));
-  console.log(paint('benchmark plan', gray));
-  for (const [label, value] of planRows)
-    console.log(`  ${paint(label.padEnd(planWidth), gray)}  ${value}`);
-  console.log(paint('dimensions', gray));
-  const dimWidth = Math.max(0, ...allDims.map((dim) => dim.length));
-  for (const dim of allDims) {
-    const name = explicit.has(dim)
-      ? paint(dim.padEnd(dimWidth), blue)
-      : paint(dim.padEnd(dimWidth), gray);
+  const dimWidth = Math.max(
+    fixed.length ? 'fixed'.length : 0,
+    ...selected.map((dim) => dim.length)
+  );
+  for (const dim of selected) {
+    const name = paint(dim.padEnd(dimWidth), explicit.has(dim) ? cyan : gray);
     const values = valuesFor(dim, dimensions, dynamic).map((value) =>
-      filterMatchesValue(value, filter) ? paint(value, blue) : value
+      filterMatchesValue(dim, value, filter) ? paint(value, cyan) : value
     );
-    const details = [
-      values.join(', '),
-      dynamic[dim] !== undefined ? '(from benchmark cases)' : '',
-      fixed.some((item) => item.startsWith(`${dim}=`)) ? `(fixed: ${defaults[dim]})` : '',
-    ].filter(Boolean);
-    console.log(`  ${name}  ${details.join(' ')}`);
+    console.log(`  ${name}  ${values.join(', ')}`);
   }
+  if (fixed.length) console.log(`  ${paint('fixed'.padEnd(dimWidth), gray)}  ${fixed.join(', ')}`);
   console.log('');
 }
 
-function metricDefs(opts: Pick<CompareOpts, 'bytes' | 'metrics' | 'throughput'>): MetricDef[] {
-  const defs: MetricDef[] = [];
-  const bytes = opts.bytes;
-  if (bytes !== undefined) {
-    defs.push({
-      name: 'mib/sec',
-      label: 'mib/sec',
-      width: 7,
-      diff: true,
-      higherIsBetter: true,
-      compute: (ctx) => roundRate(perSecond(ctx.stats.mean, bytesValue(bytes, ctx) / MIB)),
-    });
-  }
-  const throughputs =
-    opts.throughput === undefined
-      ? []
-      : Array.isArray(opts.throughput)
-        ? opts.throughput
-        : [opts.throughput];
-  for (const throughput of throughputs) {
-    if (!throughput || typeof throughput !== 'object')
-      throw new Error('bench-compare throughput must be an object');
-    if (typeof throughput.unit !== 'string' || !throughput.unit)
-      throw new Error('bench-compare throughput unit must be a non-empty string');
-    const name = throughput.name ?? `${throughput.unit}/sec`;
-    defs.push({
-      name,
-      label: metricLabel(name),
-      width: throughput.width,
-      diff: throughput.diff ?? true,
-      higherIsBetter: throughput.higherIsBetter ?? true,
-      compute: (ctx) =>
-        roundRate(
-          perSecond(ctx.stats.mean, amountValue('throughput amount', throughput.amount, ctx))
-        ),
-    });
-  }
-  const metrics = opts.metrics ?? [];
-  for (const metric of metrics) {
-    if (!metric || typeof metric !== 'object')
-      throw new Error('bench-compare metric must be an object');
-    if (typeof metric.name !== 'string' || !metric.name)
-      throw new Error('bench-compare metric name must be a non-empty string');
-    if (typeof metric.compute !== 'function')
-      throw new Error(`Metric '${metric.name}' missing compute function`);
-    defs.push({
-      compute: metric.compute,
-      diff: metric.diff,
-      label: metricLabel(metric.name, metric.unit),
-      name: metric.name,
-      higherIsBetter: metric.higherIsBetter ?? true,
-      width: metric.width,
-    });
-  }
-  return defs;
-}
-
-function columnsFor(
-  selected: string[],
-  values: string[][],
-  metrics: MetricDef[],
-  csv: boolean
-): Column[] {
-  const cols = selected.map((name, i) => ({
-    name: headerName(name),
-    width: Math.max(headerName(name).length, ...values[i].map((value) => value.length)),
-  }));
-  for (const metric of metrics) {
-    const label = headerName(metric.label);
-    cols.push({ name: label, width: Math.max(metric.width ?? metric.name.length, label.length) });
-    if (metric.diff && !csv)
-      cols.push({ name: `${label} %`, width: Math.max(8, label.length + 2) });
-  }
-  cols.push(
-    ...(csv
-      ? [{ name: 'nanoseconds', width: 'nanoseconds'.length }]
-      : [
-          { name: 'ops/sec', width: 10 },
-          { name: 'time', width: 10 },
-          { name: 'diff %', width: 8 },
-        ])
-  );
+function csvColumns(selected: string[], hasBytes: boolean): string[] {
+  const cols = selected.map((name) => name.toLowerCase());
+  if (hasBytes) cols.push('mib/sec');
+  cols.push('nanoseconds', 'rme');
   return cols;
 }
 
-function loadPrevious(file: string | undefined): PreviousData | undefined {
-  if (!file || !isCli) return undefined;
-  const revive = (_key: string, value: unknown): unknown =>
-    isRecord(value) && typeof value.__BigInt__ === 'string' ? BigInt(value.__BigInt__) : value;
-  const data = JSON.parse(readFileSync(file, 'utf8'), revive) as { data?: PreviousData };
-  return data.data;
-}
-
 function caseData(
-  dimensions: Dimensions,
+  dimensions: NormalizedDimensions,
   libs: Record<string, unknown>,
-  libraryDimensions: string[],
+  levels: string[],
   obj: BenchObj
 ): { args: any[]; key: string; lib: unknown } {
   let options: unknown = {};
   let node: unknown = libs;
-  for (const dim of libraryDimensions) {
+  for (const dim of levels) {
     if (!isRecord(node)) break;
     if (node.options !== undefined) options = node.options;
     node = node[String(obj[dim])];
   }
   const args = Object.keys(dimensions)
-    .map((dim) => (dimensions[dim] as Record<string, unknown>)[String(obj[dim])])
+    .map((dim) => dimensions[dim].get(String(obj[dim])))
     .concat(options);
   const key = Object.entries(obj)
     .map(([key, value]) => `${key}=${value}`)
@@ -437,173 +317,322 @@ function caseData(
   return { args, key, lib: node };
 }
 
-function divDuration(value: bigint, iterations: number): bigint {
-  if (value === 0n || iterations === 1) return value;
-  const div = BigInt(iterations);
-  return (value + div - 1n) / div;
-}
-
-function normalizeRun(result: RunResult, iterations: number): RunResult {
-  if (iterations === 1) return result;
-  const stats = {
-    ...result.stats,
-    min: divDuration(result.stats.min, iterations),
-    max: divDuration(result.stats.max, iterations),
-    mean: divDuration(result.stats.mean, iterations),
-    median: divDuration(result.stats.median, iterations),
-  };
-  stats.formatted = `± ${stats.rme.toFixed(2)}% (${formatDuration(stats.min)}..${formatDuration(stats.max)})`;
-  const perSec = stats.mean === 0n ? 0n : SECOND / stats.mean;
-  return { stats, perSec, perSecStr: perSec.toString(), perItemStr: formatDuration(stats.mean) };
-}
-
-function iterationsFor(iterations: CompareIterations | undefined, ctx: CompareArgsContext): number {
-  const source = iterations ?? 1;
-  return parseIterations(typeof source === 'function' ? source(ctx) : source);
-}
-
-function runIterations(fn: (...args: any[]) => any, args: any[], iterations: number): any {
-  let pending: Promise<unknown> | undefined;
-  for (let i = 0; i < iterations; i++) {
-    if (pending) {
-      pending = pending.then(() => fn(...args));
-    } else {
-      const res = fn(...args);
-      if (res instanceof Promise) pending = res;
-    }
-  }
-  return pending;
-}
-
 const DRY_RESULT: RunResult = {
-  stats: { formatted: '', max: 0n, mean: 0n, median: 0n, min: 0n, rme: 0 },
-  perSec: 0n,
+  elapsed: 0n,
+  iterations: 0,
+  stats: { formatted: '', max: 0n, mean: 0n, min: 0n, p50: 0n, p95: 0n, rme: 0 },
   perSecStr: '',
   perItemStr: '0ns',
 };
 
-async function compare(
-  title: string,
-  dimensions: Dimensions,
-  libs: Record<string, unknown>,
-  opts: CompareOpts
-): Promise<void> {
-  const {
-    libraryDimensions = ['name'],
-    defaults = {},
-    dimensions: selectedDimensions,
-    filter,
-    filterObj = () => true,
-    dryRun,
-    loadRun,
-    format = 'table',
-    patchArgs,
-    iterations,
-    skipThreshold = 5,
-    printUnchanged,
-    bytes,
-    throughput,
-    metrics,
-  } = matrixOpts(opts);
-  for (const dim of libraryDimensions) {
-    if (dimensions[dim] !== undefined)
-      throw new Error('Dimensions is static and dynamic at same time: ' + dim);
+function deepEquals(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+    if (!ArrayBuffer.isView(a) || !ArrayBuffer.isView(b) || a.constructor !== b.constructor)
+      return false;
+    if (a.byteLength !== b.byteLength) return false;
+    const ua = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    const ub = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    return true;
   }
-  if (format !== 'csv' && format !== 'table')
-    throw new Error(`Unknown bench-compare format: ${format}`);
-  const csv = format === 'csv';
-  const table = format === 'table';
-  const dynamic = collectDynamicDimensions(libs, libraryDimensions);
-  const selected = selectDimensions(dimensions, dynamic, defaults, selectedDimensions);
-  const values = selected.map((dim) => valuesFor(dim, dimensions, dynamic));
-  const metricList = metricDefs({ bytes, throughput, metrics });
-  const columns = columnsFor(selected, values, metricList, csv);
-  const prevData = loadPrevious(loadRun);
-  if (!csv) {
-    console.log(title);
-    printMetadata(dimensions, dynamic, defaults, selected, loadRun, filter, selectedDimensions);
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => deepEquals(item, b[i]));
   }
-  if (table) drawHeader(columns);
-  if (csv) printCsvRow(columns.map((col) => col.name));
+  if (isRecord(a) && isRecord(b)) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => deepEquals(a[key], b[key]));
+  }
+  return false;
+}
 
-  const indices = selected.map(() => 0);
-  let prevValues: string[] | undefined;
-  let baselineMean: bigint | undefined;
-  let baselineMetrics: number[] | undefined;
+// Odometer over dimension values; newGroup marks a wrap in any dimension above the last one,
+// which is where diff-% baselines reset.
+function* matrixCases(values: string[][]): Generator<{ curValues: string[]; newGroup: boolean }> {
+  const indices = values.map(() => 0);
+  if (indices.length === 0) {
+    yield { curValues: [], newGroup: false };
+    return;
+  }
+  let newGroup = false;
   main: while (true) {
-    const curValues = indices.map((index, dim) => values[dim][index]);
-    if (filterValues(curValues, filter)) {
-      const obj = {
-        ...defaults,
-        ...Object.fromEntries(curValues.map((value, i) => [selected[i], value])),
-      };
-      const data = caseData(dimensions, libs, libraryDimensions, obj);
-      const lib = data.lib;
-      if (lib !== undefined && filterObj(obj)) {
-        if (typeof lib !== 'function')
-          throw new Error(`Benchmark leaf is not a function: ${data.key}`);
-        let args = data.args;
-        if (patchArgs) args = patchArgs(args, obj);
-        const ctx = { obj, args };
-        const iterationCount = iterationsFor(iterations, ctx);
-        const { stats, perSec, perSecStr, perItemStr } = dryRun
-          ? DRY_RESULT
-          : normalizeRun(
-              await benchmarkRaw(() =>
-                runIterations(lib as (...args: any[]) => any, args, iterationCount)
-              ),
-              iterationCount
-            );
-        baselineMean ??= stats.mean;
-        const metricCtx = { ...ctx, stats, perSec, iterations: iterationCount };
-        const metricValues = metricList.map((metric) => metric.compute(metricCtx));
-        baselineMetrics ??= metricValues;
-        const prevRow = prevData?.[data.key];
-        const prevMean = prevData ? (prevRow?.stats?.mean ?? stats.mean) : baselineMean;
-        const prevMetrics = metricValues.map((value, i) =>
-          prevData ? (prevRow?.metricValues?.[i] ?? value) : (baselineMetrics?.[i] ?? value)
-        );
-        const maxChange = Math.max(
-          changePercent(stats.mean, prevMean),
-          ...metricValues.map((value, i) => changePercent(value, prevMetrics[i]))
-        );
-        if (!prevData || printUnchanged || maxChange > skipThreshold) {
-          const metricFields = metricList.flatMap((metric, i) => {
-            const display = table ? `${blue}${metricValues[i]}${reset}` : String(metricValues[i]);
-            return metric.diff && !csv
-              ? [display, percentNumber(metricValues[i], prevMetrics[i], metric.higherIsBetter)]
-              : [display];
-          });
-          const statFields = csv
-            ? [stats.mean.toString()]
-            : [
-                table ? `${green}${perSecStr}${reset}` : perSec.toString(),
-                table ? `${blue}${perItemStr}${reset}` : perItemStr,
-                percent(stats.mean, prevMean),
-              ];
-          const row = curValues.concat(metricFields, statFields);
-          if (table) {
-            prevValues = printTableRow(row, prevValues, columns, selected.length);
-          } else {
-            printCsvRow(row);
-          }
-        }
-      }
-    }
+    yield { curValues: indices.map((index, dim) => values[dim][index]), newGroup };
+    newGroup = false;
     for (let pos = indices.length - 1; pos >= 0; pos--) {
       indices[pos]++;
       if (indices[pos] < values[pos].length) break;
       if (pos <= 0) break main;
       indices[pos] = 0;
-      baselineMean = undefined;
-      baselineMetrics = undefined;
+      newGroup = true;
     }
   }
-  if (table)
-    drawSeparator(
-      columns,
-      columns.map(() => true)
-    );
+}
+
+type CaseContext = {
+  selected: string[];
+  values: string[][];
+  dimensions: NormalizedDimensions;
+  libs: Record<string, unknown>;
+  levels: string[];
+  defaults: BenchObj;
+  filter: string | undefined;
+  filterObj: (obj: BenchObj) => boolean;
+  patchArgs?: (args: any[], obj: BenchObj) => any[];
+};
+type BenchCase = {
+  newGroup: boolean;
+  curValues: string[];
+  obj: BenchObj;
+  key: string;
+  lib: (...args: any[]) => any;
+  args: any[];
+};
+
+// Walks the matrix, applies filters, resolves each case to its function + args.
+function* benchCases(ctx: CaseContext): Generator<BenchCase> {
+  let pendingNewGroup = false;
+  for (const { curValues, newGroup } of matrixCases(ctx.values)) {
+    pendingNewGroup ||= newGroup;
+    if (!filterValues(ctx.selected, curValues, ctx.filter)) continue;
+    const obj = {
+      ...ctx.defaults,
+      ...Object.fromEntries(curValues.map((value, i) => [ctx.selected[i], value])),
+    };
+    const data = caseData(ctx.dimensions, ctx.libs, ctx.levels, obj);
+    if (data.lib === undefined || !ctx.filterObj(obj)) continue;
+    if (typeof data.lib !== 'function')
+      throw new Error(`Benchmark leaf is not a function: ${data.key}`);
+    const args = ctx.patchArgs ? ctx.patchArgs(data.args, obj) : data.args;
+    const lib = data.lib as (...fnArgs: any[]) => any;
+    yield { newGroup: pendingNewGroup, curValues, obj, key: data.key, lib, args };
+    pendingNewGroup = false;
+  }
+}
+
+async function runCrossValidation(ctx: CaseContext, crossDims: string[]): Promise<void> {
+  const groups = new Map<string, { key: string; result: unknown }>();
+  for (const { obj, key, lib, args } of benchCases(ctx)) {
+    const inputs = args.map((arg) => (arg instanceof Uint8Array ? arg.slice() : undefined));
+    const result = await lib(...args);
+    inputs.forEach((before, i) => {
+      if (before !== undefined && !deepEquals(args[i], before))
+        throw new Error(`bench-compare crossValidate: case mutates its Uint8Array input: ${key}`);
+    });
+    const groupKey = Object.entries(obj)
+      .filter(([dim]) => !crossDims.includes(dim))
+      .map(([dim, value]) => `${dim}=${value}`)
+      .join('-');
+    const prev = groups.get(groupKey);
+    if (prev === undefined) groups.set(groupKey, { key, result });
+    else if (!deepEquals(prev.result, result))
+      throw new Error(`bench-compare crossValidate: results differ: ${prev.key} vs ${key}`);
+  }
+}
+
+async function compare(
+  title: string,
+  libs: Record<string, unknown>,
+  opts: CompareOpts = {}
+): Promise<void> {
+  const {
+    levels = ['name'],
+    defaults = {},
+    inputs = {},
+    sizes,
+    order,
+    focus,
+    filter,
+    filterObj = () => true,
+    dryRun,
+    patchArgs,
+    bytes: bytesOpt,
+    mode: modeOpt,
+    crossValidate,
+  } = matrixOpts(opts);
+  let bytes = bytesOpt;
+  let mode = modeOpt;
+  let dimensions = normalizeDimensions(inputs);
+  if (sizes !== undefined) {
+    if (dimensions.size !== undefined)
+      throw new Error("bench-compare sizes reserves the 'size' dimension");
+    const sizeBytes = new Map(sizes.map((label) => [String(label), parseSize(label)]));
+    const sized = new Map([...sizeBytes].map(([label, size]) => [label, buf(size)]));
+    dimensions = { size: sized, ...dimensions };
+    const caseBytes = ({ obj }: CompareArgsContext) =>
+      sizeBytes.get(String(obj.size)) ?? parseSize(obj.size);
+    bytes ??= caseBytes;
+    mode ??= (ctx: CompareArgsContext) => (caseBytes(ctx) < 1024 ? 'time' : 'normal');
+  }
+  for (const dim of levels) {
+    if (dimensions[dim] !== undefined)
+      throw new Error('Dimensions is static and dynamic at same time: ' + dim);
+  }
+  const env: Env = isCli ? process.env : {};
+  const csv = envFlag(env.JSBT_CSV) || !colorEnabled(env);
+  const dynamic = collectDynamicDimensions(libs, levels);
+  const selected = selectDimensions(dimensions, dynamic, defaults, order);
+  const values = selected.map((dim) => valuesFor(dim, dimensions, dynamic));
+  const caseCtx: CaseContext = {
+    selected,
+    values,
+    dimensions,
+    libs,
+    levels,
+    defaults,
+    filter,
+    filterObj,
+    patchArgs,
+  };
+  if (crossValidate !== undefined) {
+    for (const dim of crossValidate) valuesFor(dim, dimensions, dynamic); // throws on unknown name
+    await runCrossValidation(caseCtx, crossValidate);
+  }
+  if (csv) {
+    printCsvRow(csvColumns(selected, bytes !== undefined));
+  } else {
+    // count with patchArgs disabled: it may depend on per-run precompute and must
+    // not run an extra time per case just for the header
+    let caseCount = 0;
+    for (const _ of benchCases({ ...caseCtx, patchArgs: undefined })) caseCount++;
+    printMetadata(title, caseCount, dimensions, dynamic, defaults, selected, filter, order, dryRun);
+  }
+
+  // Last selected dimension varies inside a group; the dimensions above it become
+  // `# dim=value` group headers. Rows buffer per group and print sorted fastest to
+  // slowest, each compared against the fastest. On a live terminal the group block
+  // renders in place as results arrive (JSBT_LIVE=0 disables).
+  const grouped = !csv && selected.length >= 2;
+  const lastValues = values[selected.length - 1] ?? [];
+  const labelWidth = Math.max(0, ...lastValues.map((v) => v.length));
+  const focusLabel = focus === false ? undefined : lastValues[0];
+  const paintLabel = (label: string): string =>
+    label === focusLabel ? `${cyan}${label}${reset}` : label;
+  const live =
+    !csv && (env.JSBT_LIVE !== undefined ? envFlag(env.JSBT_LIVE) : !!process.stdout?.isTTY);
+  type GroupRow = {
+    label: string;
+    mean: bigint;
+    p50: bigint;
+    p95: bigint;
+    p100: bigint;
+    rme: number;
+    rate?: number;
+    mode: CompareMode;
+    perSecStr: string;
+    perItemStr: string;
+  };
+  const primaryValue = (row: GroupRow): bigint => (row.mode === 'latency' ? row.p50 : row.mean);
+  const compareRows = (a: GroupRow, b: GroupRow): number =>
+    a.rate !== undefined && b.rate !== undefined
+      ? b.rate - a.rate
+      : Number(primaryValue(a) - primaryValue(b));
+  const rowLine = (row: GroupRow, fastest: GroupRow): string => {
+    // manual padding: ANSI codes around a focused label would break padEnd
+    const pad = ' '.repeat(labelWidth - row.label.length);
+    const lead = paintLabel(row.label) + pad;
+    // primary metric in green, derived time dimmed, segments split by interpuncts;
+    // mib/sec already implies the time, so no time segment there
+    const segs =
+      row.mode === 'time'
+        ? [paintDuration(row.mean, green)]
+        : row.mode === 'latency'
+          ? [
+              `p50 ${paintDuration(row.p50, green)}`,
+              `p95 ${paintDuration(row.p95, gray)}`,
+              `p100 ${paintDuration(row.p100, gray)}`,
+            ]
+          : row.rate !== undefined
+            ? [`${green}${formatOps(row.rate)}${reset} mib/sec`]
+            : [
+                `${green}${row.perSecStr}${reset} ops/sec`,
+                `${paintFormattedDuration(row.perItemStr, gray)}/op`,
+              ];
+    if (row !== fastest) {
+      const noise =
+        row.mode === 'latency' || fastest.mode === 'latency' ? 0 : Math.hypot(row.rme, fastest.rme);
+      segs.push(
+        row.rate !== undefined && fastest.rate !== undefined
+          ? diffText(row.rate, fastest.rate, true, noise)
+          : diffText(Number(primaryValue(row)), Number(primaryValue(fastest)), false, noise)
+      );
+    }
+    return `${lead}  ${segs.join(` ${gray}·${reset} `)}`;
+  };
+  const rows: GroupRow[] = [];
+  let livePending = false;
+  const eraseBlock = (): string => (livePending ? '\x1b[1A\r\x1b[0J' : '');
+  // a wrapped line would break the cursor-up math of the next rewrite, so live
+  // (non-final) lines are truncated to the terminal width
+  const fitLine = (line: string): string => {
+    const cols = process.stdout?.columns;
+    if (!cols) return line;
+    const plain = stripAnsi(line);
+    return plain.length <= cols ? line : plain.slice(0, cols - 1) + '…';
+  };
+  // one self-replacing status line while the group runs; results stay hidden
+  // until finishGroup prints the sorted block over it
+  const liveRender = (pending: string): void => {
+    if (!live) return;
+    process.stdout.write(eraseBlock() + fitLine(`${gray}… ${pending}${reset}`) + '\n');
+    livePending = true;
+  };
+  const finishGroup = (): void => {
+    if (rows.length === 0) return;
+    const sorted = rows.sort(compareRows);
+    const lines = sorted.map((row) => rowLine(row, sorted[0]));
+    if (live) process.stdout.write(eraseBlock() + lines.join('\n') + '\n');
+    else for (const line of lines) console.log(line);
+    rows.length = 0;
+    livePending = false;
+  };
+
+  let firstCase = true;
+  for (const { newGroup, curValues, obj, lib, args } of benchCases(caseCtx)) {
+    if (grouped && (firstCase || newGroup)) {
+      finishGroup();
+      if (!firstCase) console.log('');
+      const header = curValues
+        .slice(0, -1)
+        .map((value, i) => `${selected[i]}=${value}`)
+        .join(', ');
+      console.log(paint(`# ${header}`, cyan));
+    }
+    firstCase = false;
+    const label = curValues.at(-1) ?? title;
+    const ctx = { obj, args };
+    if (!csv && !dryRun) liveRender(label);
+    const result = dryRun ? DRY_RESULT : await benchmarkRun(() => lib(...args));
+    const { stats, perSecStr, perItemStr } = result;
+    const rate =
+      bytes !== undefined
+        ? roundRate(perSecondNumber(result, bytesValue(bytes, ctx) / MIB))
+        : undefined;
+    if (csv) {
+      const row = [...curValues];
+      if (rate !== undefined) row.push(String(rate));
+      row.push(stats.mean.toString(), stats.rme.toFixed(2));
+      printCsvRow(row);
+    } else if (dryRun) {
+      console.log(paintLabel(label));
+    } else {
+      const caseMode = modeFor(mode, ctx);
+      rows.push({
+        label,
+        mean: stats.mean,
+        p50: stats.p50,
+        p95: stats.p95,
+        p100: stats.max,
+        rme: stats.rme,
+        rate: caseMode === 'normal' ? rate : undefined,
+        mode: caseMode,
+        perSecStr,
+        perItemStr,
+      });
+    }
+  }
+  finishGroup();
 }
 
 export default compare;

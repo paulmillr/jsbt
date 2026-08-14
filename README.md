@@ -109,7 +109,10 @@ Options:
   or `gib/sec`.
 - `throughput`: custom units processed by one iteration, for example `{ amount: 16, unit: 'blocks' }`.
 - `maxRunTimeSec`: per-benchmark runtime, from `0.1` to `60` seconds; defaults to `0.4`.
-- `mode: 'runOnce'`: run one measurement and print only elapsed time.
+  Every measured run first performs an untimed warmup lasting one quarter of this duration.
+- `mode: 'time'`: print aggregate mean duration per operation.
+- `mode: 'latency'`: print p50, p95, and p100 (maximum) latency.
+- `mode: 'once'`: run one measurement and print only elapsed time. `runOnce` remains an alias.
 - `section('math')` named export: print `# math` in text output and prefix CSV names as
   `math; <name>`. `section()` or `section('')` disables the prefix.
 - `JSBT_CSV=1` forces CSV output. CSV prints `name,nanoseconds` by default, or
@@ -119,7 +122,7 @@ Options:
 Example output:
 
 ```
-sqrt x 6,072 ops/sec @ 164μs/op
+sqrt x 6,072 ops/sec @ 164 μs/op
 copy 1MiB x 1,420 mib/sec
 blocks x 92,400 blocks/sec
 ```
@@ -154,6 +157,9 @@ Common options:
 - `dimensions`: explicit dimension order and subset.
 - `filter`: comma-separated match terms; `a|b,c` means `(a or b) and c`.
 - `filterObj`: predicate for filtering generated benchmark cases.
+- `mode`: `normal` for aggregate throughput, `time` for aggregate mean duration, or
+  `latency` for p50/p95/p100 latency; may be selected per case with a function.
+  Every non-dry case is warmed independently for one quarter of its measurement time.
 - `iterations`: repeats one measured operation and reports per-iteration timing.
 - `patchArgs`: rewrites generated benchmark arguments before calling a library function.
 - `bytes`, `throughput`, `metrics`: add throughput or custom metric columns.
@@ -162,7 +168,10 @@ Common options:
 
 ENV variables:
 
-- `JSBT_FILTER=sha256,1MiB` filters cases by dimension values.
+- `FILTER` selects cases by substring-matching dimension values: `FILTER=sha256,1MB`
+  requires every comma term to match some dimension; the scoped form
+  `FILTER='algorithm=sha3_256;library=awasm,noble'` pins terms to a dimension,
+  with commas as alternatives.
 - `JSBT_BENCHMARK_DIMENSIONS=algorithm,size,name` changes dimension order or visible dimensions.
 - `JSBT_BENCHMARK_DRY_RUN=1` prints the selected matrix without measuring.
 - `JSBT_CSV=1` forces CSV output.
