@@ -1,6 +1,6 @@
 {
   "name": "@paulmillr/jsbt",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "description": "JS Build Tools: build, benchmark, test libs and apps",
   "files": [
     "jsbt-check.bin.js",
@@ -19,7 +19,7 @@
     "jsbt-check": "jsbt-check.bin.js"
   },
   "dependencies": {
-    "bismar": "0.1.7",
+    "bismar": "0.1.8",
     "typescript": "6.0.3"
   },
   "devDependencies": {
