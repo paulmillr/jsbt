@@ -1,7 +1,7 @@
 /*! jsbt - MIT License (c) 2019 Paul Miller (paulmillr.com) */
 /**
  * Micro testing framework with familiar syntax for browsers, node and others.
- * Supports fast mode (parallel), quiet mode (dot reporter), tree structures, CLI self-run auto-detection.
+ * Supports fast mode (parallel), quiet mode (dot reporter), CLI self-run auto-detection.
  * @module
  */
 
@@ -12,8 +12,6 @@ export interface StackItem {
   skip?: boolean;
   only?: boolean;
   serial?: boolean;
-  prefix?: string;
-  childPrefix?: string;
   path?: StackItem[];
   beforeAll?: () => Promise<void> | void;
   afterAll?: () => Promise<void> | void;
@@ -22,18 +20,19 @@ export interface StackItem {
   children: StackItem[];
 }
 
-export interface Options {
-  STOP_ON_ERROR: boolean;
-  QUIET: boolean;
-  FAST: number;
-  FILTER: string;
+/** A flattened test/suite with its ancestor chain resolved by stackFlatten. */
+interface Task extends StackItem {
+  path: Task[];
 }
 
-type ReportStyle = {
-  tree: boolean;
-  inline: boolean;
-  pathSep: string;
-};
+export interface Options {
+  BAIL: boolean;
+  QUIET: boolean;
+  WORKERS: number;
+  FILTER: string;
+  DEBUG: boolean;
+  COLOR: boolean;
+}
 
 export interface DescribeFunction {
   (message: string, testFunctions: () => Promise<any> | any): void;
@@ -48,12 +47,12 @@ export interface TestFunction {
   only: (message: string, test: () => Promise<any> | any) => void;
   /** Registers test, but skips it while running. Can be used instead of commenting out the code. */
   skip: (message: string, test: () => Promise<any> | any) => void;
-  /** Registers test that is kept on the primary process even when JSBT_FAST is enabled. */
+  /** Registers test that is kept on a dedicated serial worker lane when tests run in parallel. */
   serial: (message: string, test: () => Promise<any> | any) => void;
   /**
    * Runs all registered tests.
    * After run, allows to run new tests without duplication: old test queue is cleaned up.
-   * @param forceSequential - when `true`, disables automatic parallelization even when JSBT_FAST=1.
+   * @param forceSequential - when `true`, disables automatic parallelization even when JSBT_WORKERS allows more than one worker.
    * @returns resolved promise, after all tests have finished
    */
   run: (forceSequential?: boolean) => Promise<number>;
@@ -77,10 +76,13 @@ declare const console: any;
 
 const stack: StackItem[] = [{ message: '', children: [] }];
 const errorLog: string[] = [];
-let quietPassCount: number | undefined;
-let quietFailCount: number | undefined;
+type TaskTiming = { durationMs: number; path: string };
+const taskTimings: TaskTiming[] = [];
+// Set in parallel workers to batch quiet-mode dots for the primary; undefined = write directly.
+let quietCounter: { pass: number; fail: number } | undefined;
 let onlyStack: StackItem | undefined;
 let isRunning = false;
+let runIndex = 0; // run() calls seen by this process; workers count replayed calls the same way
 const isCli = 'process' in globalThis;
 // Dumb bundlers parse code and assume we have hard dependency on "process". We don't.
 // The trick (also import(mod) below) ensures parsers can't see it.
@@ -125,13 +127,72 @@ function wantColor(env: Env = {}, tty = false): boolean {
   if (env.CLICOLOR === '0') return false;
   return tty;
 }
-const colorOn = isCli && wantColor(proc?.env, !!proc?.stderr?.isTTY || !!proc?.stdout?.isTTY);
 const opts: Options = {
-  STOP_ON_ERROR: isCli ? parseBoolEnv(proc?.env?.JSBT_BAIL, true) : true,
+  BAIL: isCli ? parseBoolEnv(proc?.env?.JSBT_BAIL, true) : true,
   QUIET: isCli && parseBoolEnv(proc?.env?.JSBT_QUIET, false),
-  FAST: defaultFast(proc?.env),
+  WORKERS: defaultWorkers(proc?.env),
   FILTER: isCli ? proc?.env?.JSBT_FILTER || '' : '',
+  DEBUG: isCli && parseBoolEnv(proc?.env?.JSBT_DEBUG, false),
+  COLOR: isCli && wantColor(proc?.env, !!proc?.stderr?.isTTY || !!proc?.stdout?.isTTY),
 };
+// Renamed option: fail loudly instead of silently ignoring stale configs.
+// Non-enumerable, so Object.keys(opts) and spreads stay clean.
+Object.defineProperty(opts, 'STOP_ON_ERROR', {
+  get(): never {
+    throw new Error('opts.STOP_ON_ERROR was renamed to opts.BAIL');
+  },
+  set(_value: unknown) {
+    throw new Error('opts.STOP_ON_ERROR was renamed to opts.BAIL');
+  },
+});
+
+// Web Worker lane (Deno): workers are spawned as `jsbt-worker:<generation>`. The entry
+// URL comes from the worker's own location, which equals the spawned module URL; it lets
+// runWhen distinguish the entry from imported test files, since worker argv is a shim.
+const WEB_WORKER_PREFIX = 'jsbt-worker:';
+const webWorker: { generation: number; mainModule: string } | undefined = (() => {
+  if (typeof (globalThis as any).WorkerGlobalScope === 'undefined') return undefined;
+  const g = globalThis as any;
+  const name = g.name;
+  if (typeof name !== 'string' || !name.startsWith(WEB_WORKER_PREFIX)) return undefined;
+  return {
+    generation: Number(name.slice(WEB_WORKER_PREFIX.length)),
+    mainModule: String(g.location?.href ?? ''),
+  };
+})();
+
+// A Web Worker's argv points at the runtime's shim, not the entry it replays. Point it
+// back at the entry so "am I the CLI entry?" guards — runWhen or hand-rolled argv
+// checks in user entries — behave exactly as they did in the primary.
+if (webWorker !== undefined && isCli && Array.isArray(proc?.argv)) {
+  try {
+    const url = new URL(webWorker.mainModule);
+    let path = decodeURIComponent(url.pathname);
+    if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1); // windows drive letters
+    proc!.argv[1] = path;
+  } catch (_) {
+    // non-file entry URL: leave argv alone, runWhen still matches via webWorker.mainModule
+  }
+}
+
+// Set on forked workers: the run() generation the worker was forked for. Cluster workers
+// get an env var (read-and-delete, so processes spawned inside tests never inherit it);
+// Web Workers carry it in their name.
+const workerGeneration: number | undefined = (() => {
+  const raw = proc?.env?.JSBT_RUN_GENERATION;
+  if (raw !== undefined) {
+    delete proc!.env.JSBT_RUN_GENERATION;
+    return Number(raw);
+  }
+  return webWorker?.generation;
+})();
+
+// How long a forked worker may take to replay the entry script and send its first
+// ready message. Generous: init is imports plus registration, never test bodies.
+const workerInitTimeoutMs: number = (() => {
+  const val = Number(proc?.env?.JSBT_WORKER_INIT_TIMEOUT_MS);
+  return Number.isFinite(val) && val > 0 ? val : 60_000;
+})();
 
 function parseBoolEnv(str: string | undefined, defaultValue: boolean): boolean {
   if (str === undefined) return defaultValue;
@@ -141,27 +202,44 @@ function parseBoolEnv(str: string | undefined, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
-function parseFast(str: string | number): number {
-  if (!isCli) return 0;
-  const raw = String(str || '')
+// `JSBT_WORKERS` is a literal worker count: `1` is serial, `N` is N workers. The other
+// spellings are conveniences — unset/`auto` means all cores, `-N` means cores minus N,
+// `50%` (or `0.5`) a share of cores; machine-relative spellings cap at 10 workers.
+// A spec is `Infinity` for auto, a negative offset, a (0,1) ratio, or a count;
+// `workerCount` resolves it against the machine.
+function parseWorkers(str: string | number): number {
+  if (!isCli) return 1;
+  const raw = String(str ?? '')
     .trim()
     .toLowerCase();
-  if (raw === 'true') return 1;
-  const val = Number.parseFloat(raw);
+  if (raw === '' || raw === 'auto') return Infinity;
+  const percent = raw.endsWith('%');
+  const val = Number.parseFloat(percent ? raw.slice(0, -1) : raw) / (percent ? 100 : 1);
   const ratio = val > 0 && val < 1;
-  if (!Number.isFinite(val) || val === 0 || Math.abs(val) > 256) return 0;
-  if (!ratio && !Number.isSafeInteger(val)) return 0;
-  return val;
+  const valid =
+    Number.isFinite(val) &&
+    val !== 0 &&
+    Math.abs(val) <= 256 &&
+    (ratio || val === 1 || Number.isSafeInteger(val));
+  if (!valid)
+    throw new Error(
+      `invalid JSBT_WORKERS: ${str}; use a count, -N for cores minus N, N% of cores, or auto`
+    );
+  return percent && val === 1 ? Infinity : val;
 }
 
-function defaultFast(env: Env = {}): number {
-  if (!isNode) return 0;
-  return env.JSBT_FAST === undefined ? 1 : parseFast(env.JSBT_FAST);
+function defaultWorkers(env: Env = {}): number {
+  if (!isNode) return 1;
+  return env.JSBT_WORKERS === undefined ? Infinity : parseWorkers(env.JSBT_WORKERS);
 }
 
-function fastWorkerCount(fast: number, max: number): number {
-  const count = fast === 1 ? max : fast < 0 ? max + fast : fast < 1 ? Math.floor(max * fast) : fast;
-  return Math.max(1, Math.min(count, 256));
+function workerCount(spec: number, max: number): number {
+  const count =
+    spec === Infinity ? max : spec < 0 ? max + spec : spec < 1 ? Math.floor(max * spec) : spec;
+  // Relative specs cap at 10: throughput flattens past ~10 workers while per-worker
+  // startup cost keeps growing. Explicit counts are honored as written.
+  const cap = spec === Infinity || spec < 1 ? 10 : 256;
+  return Math.max(1, Math.min(count, cap));
 }
 
 function imp(moduleName: string): any {
@@ -178,23 +256,17 @@ const c = {
   reset: _c + '[0m',
 } as const;
 const PATH_SEP = '/';
-const INDENT = '  ';
 
 // Colorize string for terminal.
 function color(colorName: keyof typeof c, title: string | number) {
-  return colorOn ? `${c[colorName]}${title}${c.reset}` : title.toString();
+  return opts.COLOR ? `${c[colorName]}${title}${c.reset}` : title.toString();
 }
-function parallelPathSep() {
-  return color('gray', ' → ');
-}
-const SEQUENTIAL_STYLE: ReportStyle = { tree: isCli, inline: true, pathSep: PATH_SEP };
-function flatStyle(pathSep: string = PATH_SEP): ReportStyle {
-  return { tree: false, inline: false, pathSep };
-}
+const displaySep = () => color('gray', ' → ');
+// CLI gets the inline reporter (title rewritten in place on finish); browsers get plain lines.
+const SEQUENTIAL_INLINE = isCli;
 
 function log(...args: (string | undefined)[]) {
-  if (opts.QUIET) return logQuiet(false);
-  // @ts-ignore
+  if (opts.QUIET) return; // dots are per finished test (logTaskDone), not per suppressed line
   console.log(...args);
 }
 
@@ -217,144 +289,109 @@ function logInline(line: string, done = false) {
   writeStdout(done ? `\r${line}\n` : line, line);
 }
 function logQuiet(fail = false) {
-  if (fail) {
-    if (quietFailCount !== undefined) return void quietFailCount++;
-    const msg = color('red', '!');
-    writeStderr(msg);
+  if (quietCounter) {
+    if (fail) quietCounter.fail++;
+    else quietCounter.pass++;
+  } else if (fail) {
+    writeStderr(color('red', '!'));
   } else {
-    if (quietPassCount !== undefined) return void quietPassCount++;
-    const msg = '.';
-    writeStdout(msg);
+    writeStdout('.');
   }
 }
 function addToErrorLog(title = '', error: any): void {
   errorLog.push(`${title} ${error?.stack ? error.stack : error}`);
-  // @ts-ignore
   if (!opts.QUIET) console.error(error); // loud = show error now. quiet = show in the end
 }
 
-function formatPrefix(depth: number, prefix: string) {
-  if (depth === 0) return { prefix: '', childPrefix: '' };
-  return { prefix: `${prefix}${INDENT}`, childPrefix: `${prefix}${INDENT}` };
+// Failure banner shared by tests and beforeAll/afterAll hooks. Quiet + bail prints the
+// full line before the throw; quiet without bail emits `!`; loud prints the line
+// (tests override loud rendering via logTaskDone for the inline reporter).
+function logFailLine(line: string, stopAtError: boolean): void {
+  if (!opts.QUIET) return void console.error(line);
+  if (stopAtError) {
+    console.error();
+    console.error(line);
+  } else {
+    logQuiet(true);
+  }
 }
 
-async function runTest(
-  info: StackItem,
-  style: ReportStyle,
-  stopAtError: boolean = true
-): Promise<boolean | undefined> {
-  if (!style.tree && style.inline) log();
-  const title = info.message;
+function timingNow(): number {
+  return typeof globalThis.performance?.now === 'function'
+    ? globalThis.performance.now()
+    : Date.now();
+}
+
+async function runTest(info: Task, inline: boolean, stopAtError: boolean): Promise<boolean> {
+  if (!opts.DEBUG) return runTestInner(info, inline, stopAtError);
+  const start = timingNow();
+  try {
+    return await runTestInner(info, inline, stopAtError);
+  } finally {
+    taskTimings.push({ durationMs: timingNow() - start, path: taskPath(info) });
+  }
+}
+
+async function runTestInner(info: Task, inline: boolean, stopAtError: boolean): Promise<boolean> {
   if (typeof info.test !== 'function') throw new Error('internal test error: invalid info.test');
 
-  const messages: string[] = [];
-  const onlyStackToLog: string[] = [];
-  const beforeEachFns: Function[] = [];
-  const afterEachFns: Function[] = []; // will be reversed
-  for (const parent of info.path!) {
-    if (parent.message) {
-      messages.push(parent.message);
-      if (style.tree && info.only) onlyStackToLog.push(`${parent.prefix}${parent.message}`);
-    }
+  const parts: string[] = [];
+  const beforeEachFns: EmptyFn[] = [];
+  const afterEachFns: EmptyFn[] = []; // will be reversed
+  for (const parent of info.path) {
+    if (parent.message) parts.push(parent.message);
     if (parent.beforeEach) beforeEachFns.push(parent.beforeEach);
     if (parent.afterEach) afterEachFns.push(parent.afterEach);
   }
   afterEachFns.reverse();
-  if (onlyStackToLog.length) onlyStackToLog.forEach((l) => log(l));
+  if (info.message) parts.push(info.message);
 
-  const pathParts = messages.slice().concat(title);
-  const path = pathParts.join(PATH_SEP);
-  const displayPath = pathParts.join(style.pathSep);
+  const sep = displaySep();
+  const path = parts.join(PATH_SEP);
+  const displayPath = parts.join(sep);
+  const isInline = inline && !info.skip && !opts.QUIET;
 
-  const inline = style.inline && !info.skip && !opts.QUIET;
-
-  function formatTaskStart(suffix = '') {
-    const title_ = suffix ? [title, suffix].join(PATH_SEP) : title;
-    const full_ = suffix ? pathParts.concat(suffix).join(style.pathSep) : displayPath;
-    return style.tree ? color('gray', `${info.prefix}${title_}`) : full_;
-  }
-
-  // Skip is always single-line
-  if (inline) {
-    logInline(`${formatTaskStart()} `);
+  if (isInline) {
+    logInline(`${displayPath} `);
   } else if (info.skip) {
-    log(style.tree ? color('gray', `${info.prefix}${title} (skip)`) : `☆ ${displayPath} (skip)`);
+    log(`☆ ${displayPath} (skip)`);
     return true;
   }
 
   function formatTaskDone(fail = false, suffix = '') {
-    const symbol = fail ? '✕' : '✓';
-    const clr = fail ? 'red' : 'green';
-    const title_ = suffix ? [title, suffix].join(PATH_SEP) : title;
-    const full_ = formatTaskStart(suffix);
-    const coloredSymbol = color(clr, symbol);
-    if (inline) return `${full_} ${coloredSymbol}`;
-    return style.tree
-      ? `${color('gray', `${info.childPrefix}${title_}`)}: ${coloredSymbol}`
-      : `${coloredSymbol} ${full_}`;
+    const symbol = color(fail ? 'red' : 'green', fail ? '✕' : '✓');
+    const full = suffix ? `${displayPath}${sep}${suffix}` : displayPath;
+    return `${symbol} ${full}`;
   }
 
   function logTaskDone(fail = false, suffix = '') {
+    if (opts.QUIET) return logQuiet(fail);
     const line = formatTaskDone(fail, suffix);
-    if (inline) logInline(line, true);
+    if (isInline) logInline(line, true);
     else if (fail) console.error(line);
     else log(line);
   }
 
   function logErrorStack(suffix: string) {
-    if (opts.QUIET) {
-      // when quiet, either stop & log trace; or log !
-      if (stopAtError) {
-        // stop, log whole path and trace
-        console.error();
-        console.error(formatTaskDone(true, suffix));
-      } else {
-        // log !, continue
-        logQuiet(true);
-      }
-    } else {
-      // when loud, log (maybe formatted) tree structure
-      logTaskDone(true, suffix);
-    }
+    if (opts.QUIET) logFailLine(formatTaskDone(true, suffix), stopAtError);
+    else logTaskDone(true, suffix);
   }
 
-  // Run beforeEach hooks from parent contexts
-  for (const beforeFn of beforeEachFns) {
+  const runStep = async (fn: () => Promise<any> | any, suffix: string): Promise<boolean> => {
     try {
-      await beforeFn();
+      await fn();
+      return true;
     } catch (cause) {
-      logErrorStack('beforeEach');
-      // @ts-ignore
+      logErrorStack(suffix);
       if (stopAtError) throw cause;
-      else addToErrorLog(`${path}/beforeEach`, cause);
-
+      addToErrorLog(suffix ? `${path}/${suffix}` : path, cause);
       return false;
     }
-  }
+  };
 
-  // Run test task
-  try {
-    await info.test();
-  } catch (cause) {
-    logErrorStack('');
-    // @ts-ignore
-    if (stopAtError) throw cause;
-    else addToErrorLog(`${path}`, cause);
-    return false;
-  }
-
-  // Run afterEach hooks from parent contexts (in reverse order)
-  for (const afterFn of afterEachFns) {
-    try {
-      await afterFn();
-    } catch (cause) {
-      logErrorStack('afterEach');
-      // @ts-ignore
-      if (stopAtError) throw cause;
-      else addToErrorLog(`${path}/afterEach`, cause);
-      return false;
-    }
-  }
+  for (const fn of beforeEachFns) if (!(await runStep(fn, 'beforeEach'))) return false;
+  if (!(await runStep(info.test, ''))) return false;
+  for (const fn of afterEachFns) if (!(await runStep(fn, 'afterEach'))) return false;
   logTaskDone();
   return true;
 }
@@ -363,27 +400,22 @@ function stackTop() {
   return stack[stack.length - 1];
 }
 function stackAdd(info: { message: any; skip?: boolean }) {
-  const c = { ...info, children: [] };
-  stackTop().children.push(c);
-  stack.push(c);
+  const item = { ...info, children: [] };
+  stackTop().children.push(item);
+  stack.push(item);
 }
 
-function stackFlatten(elm: StackItem): StackItem[] {
-  const out: StackItem[] = [];
-  const root: StackItem = { ...elm, prefix: '', childPrefix: '', path: [] };
-  const rootPath =
-    root.beforeAll || root.afterAll || root.beforeEach || root.afterEach ? [root] : [];
-  const walk = (elm: StackItem, depth = 0, prevPrefix = '', path: StackItem[] = []) => {
-    const { prefix, childPrefix } = formatPrefix(depth, prevPrefix);
-    const newElm: StackItem = { ...elm, prefix, childPrefix, path };
-    out.push(newElm);
-    path = path.concat([newElm]); // Save prefixes so we can print path in 'only' case
-
-    const chl = elm.children;
-    for (let i = 0; i < chl.length; i++) walk(chl[i], depth + 1, childPrefix, path);
+function stackFlatten(elm: StackItem): Task[] {
+  const out: Task[] = [];
+  const rootPath: Task[] =
+    elm.beforeAll || elm.afterAll || elm.beforeEach || elm.afterEach ? [{ ...elm, path: [] }] : [];
+  const walk = (elm: StackItem, path: Task[]) => {
+    const newElm: Task = { ...elm, path };
+    if (newElm.test) out.push(newElm); // suites travel via task.path, not as rows
+    for (const child of elm.children) walk(child, path.concat([newElm]));
   };
   // Skip root
-  for (const child of elm.children) walk(child, 0, '', rootPath);
+  for (const child of elm.children) walk(child, rootPath);
   return out;
 }
 
@@ -408,37 +440,19 @@ function describeSkip(message: any, fn: EmptyFn): void {
 }
 describe.skip = describeSkip;
 
-function beforeAll(fn: EmptyFn): void {
-  if (nativeNodeTest) {
-    nativeNodeTest.before(fn);
-    return;
-  }
-  stackTop().beforeAll = fn;
-}
+type AllHookName = 'beforeAll' | 'afterAll';
+type EachHookName = 'beforeEach' | 'afterEach';
 
-function afterAll(fn: EmptyFn): void {
-  if (nativeNodeTest) {
-    nativeNodeTest.after(fn);
-    return;
-  }
-  stackTop().afterAll = fn;
+function makeHook(key: AllHookName | EachHookName, nativeName: string): (fn: EmptyFn) => void {
+  return (fn: EmptyFn): void => {
+    if (nativeNodeTest) nativeNodeTest[nativeName](fn);
+    else stackTop()[key] = fn;
+  };
 }
-
-function beforeEach(fn: EmptyFn): void {
-  if (nativeNodeTest) {
-    nativeNodeTest.beforeEach(fn);
-    return;
-  }
-  stackTop().beforeEach = fn;
-}
-
-function afterEach(fn: EmptyFn): void {
-  if (nativeNodeTest) {
-    nativeNodeTest.afterEach(fn);
-    return;
-  }
-  stackTop().afterEach = fn;
-}
+const beforeAll: (fn: EmptyFn) => void = makeHook('beforeAll', 'before');
+const afterAll: (fn: EmptyFn) => void = makeHook('afterAll', 'after');
+const beforeEach: (fn: EmptyFn) => void = makeHook('beforeEach', 'beforeEach');
+const afterEach: (fn: EmptyFn) => void = makeHook('afterEach', 'afterEach');
 
 function register(info: StackItem) {
   if (nativeNodeTest) {
@@ -455,107 +469,78 @@ function register(info: StackItem) {
   stack.pop(); // remove from stack since there are no children
 }
 
-function taskPath(info: StackItem, pathSep: string = PATH_SEP): string {
-  return (info.path || [])
+function taskPath(info: Task, pathSep: string = PATH_SEP): string {
+  return info.path
     .map((item) => item.message)
     .concat(info.message)
     .filter((item) => item)
     .join(pathSep);
 }
 
-function filterTasks(items: StackItem[]): StackItem[] {
+function filterTasks(tasks: Task[]): Task[] {
   const filter = opts.FILTER;
-  if (!filter) return items;
-  const keep = new Set<StackItem>();
-  for (const item of items) {
-    if (!item.test || !taskPath(item).includes(filter)) continue;
-    keep.add(item);
-    for (const parent of item.path || []) keep.add(parent);
-  }
-  return items.filter((item) => keep.has(item));
+  if (!filter) return tasks;
+  return tasks.filter((task) => taskPath(task).includes(filter));
 }
 
-function cloneAndReset() {
-  let items = stackFlatten(stack[0]).slice();
-  if (onlyStack) items = items.filter((i) => i.test === onlyStack!.test);
-  items = filterTasks(items);
+// Consumes the registration stack; returns the runnable tests.
+function cloneAndReset(): Task[] {
+  let tasks = stackFlatten(stack[0]);
+  if (onlyStack) tasks = tasks.filter((i) => i.test === onlyStack!.test);
+  tasks = filterTasks(tasks);
   stack.splice(0, stack.length);
-  stack.push({ message: '', children: [] } as unknown as StackItem);
+  stack.push({ message: '', children: [] });
   onlyStack = undefined;
-  return items;
+  return tasks;
 }
 
-type AllHookName = 'beforeAll' | 'afterAll';
-
-function commonPathLen(a: StackItem[], b: StackItem[]): number {
+function commonPathLen(a: Task[], b: Task[]): number {
   let i = 0;
   while (i < a.length && i < b.length && a[i] === b[i]) i++;
   return i;
 }
 
-function hookPath(suite: StackItem, hook: AllHookName, pathSep: string = PATH_SEP): string {
-  return (suite.path || [])
+function hookPath(suite: Task, hook: AllHookName, pathSep: string = PATH_SEP): string {
+  return suite.path
     .map((i) => i.message)
     .concat(suite.message, hook)
     .filter((i) => i)
     .join(pathSep);
 }
 
-function formatHookFail(suite: StackItem, hook: AllHookName, style: ReportStyle) {
-  const title = hookPath(suite, hook, style.pathSep);
-  const symbol = color('red', '✕');
-  return style.tree && suite.message
-    ? `${suite.childPrefix}${hook}: ${symbol}`
-    : `${symbol} ${title}`;
-}
-
-async function runAllHook(
-  suite: StackItem,
-  hook: AllHookName,
-  style: ReportStyle,
-  stopAtError: boolean
-): Promise<boolean> {
+async function runAllHook(suite: Task, hook: AllHookName, stopAtError: boolean): Promise<boolean> {
   const fn = suite[hook];
   if (!fn) return true;
   try {
     await fn();
     return true;
   } catch (cause) {
-    if (opts.QUIET) {
-      if (stopAtError) {
-        console.error();
-        console.error(formatHookFail(suite, hook, style));
-      } else {
-        logQuiet(true);
-      }
-    } else {
-      console.error(formatHookFail(suite, hook, style));
-    }
+    logFailLine(`${color('red', '✕')} ${hookPath(suite, hook, displaySep())}`, stopAtError);
     if (stopAtError) throw cause;
     addToErrorLog(hookPath(suite, hook), cause);
     return false;
   }
 }
 
-async function runTaskList(tasks: StackItem[], style: ReportStyle, stopAtError: boolean) {
-  const active: StackItem[] = [];
-  const failedBeforeAll = new Set<StackItem>();
+async function runTaskList(tasks: Task[], inline: boolean, stopAtError: boolean) {
+  const active: Task[] = [];
+  const failedBeforeAll = new Set<Task>();
 
-  const closeInactive = async (path: StackItem[]) => {
+  const closeInactive = async (path: Task[]) => {
     const keep = commonPathLen(active, path);
     for (let i = active.length - 1; i >= keep; i--) {
       const suite = active[i];
-      if (!failedBeforeAll.has(suite)) await runAllHook(suite, 'afterAll', style, stopAtError);
+      if (!failedBeforeAll.has(suite)) await runAllHook(suite, 'afterAll', stopAtError);
       active.pop();
     }
   };
 
-  const openSuites = async (path: StackItem[]) => {
+  const openSuites = async (path: Task[]) => {
     const keep = commonPathLen(active, path);
     for (let i = keep; i < path.length; i++) {
       const suite = path[i];
       active.push(suite);
-      if (!(await runAllHook(suite, 'beforeAll', style, stopAtError))) {
+      if (!(await runAllHook(suite, 'beforeAll', stopAtError))) {
         failedBeforeAll.add(suite);
         return false;
       }
@@ -564,162 +549,411 @@ async function runTaskList(tasks: StackItem[], style: ReportStyle, stopAtError: 
   };
 
   for (const task of tasks) {
-    const path = task.path || [];
-    await closeInactive(path);
-    if (!task.test) {
-      if (style.tree) log(`${task.prefix}${task.message}`);
-      continue;
-    }
-    if (task.skip || (await openSuites(path))) await runTest(task, style, stopAtError);
+    await closeInactive(task.path);
+    if (task.skip || (await openSuites(task.path))) await runTest(task, inline, stopAtError);
   }
   await closeInactive([]);
 }
 
-function hasAllHooks(info: StackItem): boolean {
-  return !!info.path?.some((suite) => suite.beforeAll || suite.afterAll);
+function hasAllHooks(info: Task): boolean {
+  return info.path.some((suite) => suite.beforeAll || suite.afterAll);
 }
 
-function hasDynamicWorkerCount(fast: number): boolean {
-  return fast === 1 || fast < 0 || (fast > 0 && fast < 1);
+type ParallelRuntime =
+  | { kind: 'cluster'; cluster: any; workers: number }
+  | { kind: 'web'; mainModule: string; workers: number };
+
+// Resolves the JSBT_WORKERS spec against the machine; FILTER caps the fleet at 3.
+function resolveWorkerCount(cores: number): number {
+  const workers = workerCount(opts.WORKERS, cores);
+  return opts.FILTER ? Math.min(workers, 3) : workers;
 }
 
-async function resolveParallelRuntime(): Promise<{ cluster?: any; workers: number }> {
+// navigator.hardwareConcurrency (node 21+, deno, bun) respects cgroup CPU quotas and
+// affinity masks; availableParallelism (node 18.14+) has the same semantics. No raw
+// cpus() fallback — it over-forks in containers; ancient node throws here and the
+// caller's catch degrades the run to sequential.
+async function machineParallelism(): Promise<number> {
+  const cores = (globalThis as any).navigator?.hardwareConcurrency;
+  if (cores) return cores;
+  // @ts-ignore
+  return (await imp('node:os')).availableParallelism();
+}
+
+async function resolveParallelRuntime(): Promise<ParallelRuntime | undefined> {
+  if ('deno' in (proc?.versions || {})) {
+    // Deno has no node:cluster; its native Web Workers are real threads.
+    const g = globalThis as any;
+    const mainModule = g['Deno']?.mainModule;
+    if (typeof mainModule !== 'string' || typeof g.Worker !== 'function') return undefined;
+    return { kind: 'web', mainModule, workers: resolveWorkerCount(await machineParallelism()) };
+  }
   try {
     // @ts-ignore
     const cluster = (await imp('node:cluster')).default;
-    let workers = opts.FAST;
-    if (hasDynamicWorkerCount(workers)) {
-      // @ts-ignore
-      workers = fastWorkerCount(workers, (await imp('node:os')).cpus().length);
-    }
-    if (opts.FILTER) workers = Math.min(workers, 3);
-    return { cluster, workers: parseFast(workers) ? workers : 0 };
+    return { kind: 'cluster', cluster, workers: resolveWorkerCount(await machineParallelism()) };
   } catch (_) {
-    return { workers: 0 };
+    return undefined;
   }
 }
 
-function splitParallelTasks(tasks: StackItem[]) {
-  const parallelTasks: StackItem[] = [];
-  const serialTasks: StackItem[] = [];
+function splitParallelTasks(tasks: Task[]) {
+  const parallelTasks: Task[] = [];
+  const serialTasks: Task[] = [];
   for (const task of tasks) {
     (task.serial || hasAllHooks(task) ? serialTasks : parallelTasks).push(task);
   }
   return { parallelTasks, serialTasks };
 }
 
-async function runSequentialFallback(items: StackItem[], total: number, startTime: number) {
+// FNV-1a over the task paths. Assignments cross the IPC channel as bare indices,
+// so a worker whose replayed task list diverges from the primary's would silently
+// run the wrong tests; the primary compares fingerprints and fails loudly instead.
+function taskFingerprint(parallelTasks: Task[], serialTasks: Task[]): string {
+  let hash = 0x811c9dc5;
+  const mix = (text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+  };
+  for (const tasks of [parallelTasks, serialTasks]) {
+    for (const task of tasks) {
+      mix(taskPath(task));
+      mix('\n');
+    }
+    mix('--\n');
+  }
+  return `${(hash >>> 0).toString(16)}:${parallelTasks.length}:${serialTasks.length}`;
+}
+
+async function runSequentialFallback(items: Task[], total: number, startTime: number) {
   isRunning = true;
   begin(total);
-  await runTaskList(items, SEQUENTIAL_STYLE, opts.STOP_ON_ERROR);
+  await runTaskList(items, SEQUENTIAL_INLINE, opts.BAIL);
   return finalize(total, startTime);
 }
 
-type ParallelMessage = {
-  name: string;
-  tasksDone: number;
-  errorLog: string[];
+type ParallelReadyMessage = {
+  name: 'parallelReady';
+  fingerprint: string;
   quietPassCount?: number;
   quietFailCount?: number;
 };
 
-async function runParallelWorker(
-  cluster: any,
-  totalW: number,
-  parallelTasks: StackItem[],
-  style: ReportStyle
-) {
-  proc!.on('error', (err: any) => console.log('internal error:', 'child crashed?', err));
-  let tasksDone = 0;
-  const workerIndex = Number.parseInt(proc!.env.JSBT_WORKER_INDEX || '', 10);
-  const id =
-    Number.isSafeInteger(workerIndex) && workerIndex >= 0 && workerIndex < totalW
-      ? workerIndex
-      : cluster.worker.id - 1;
-  if (opts.QUIET) {
-    quietPassCount = 0;
-    quietFailCount = 0;
-  }
-  for (let i = id; i < parallelTasks.length; i += totalW) {
-    await runTest(parallelTasks[i], style, opts.STOP_ON_ERROR);
-    tasksDone++;
-  }
-  proc!.send({
-    name: 'parallelTests',
-    tasksDone,
-    errorLog,
-    quietPassCount,
-    quietFailCount,
-  });
-  proc!.exit();
+type ParallelTaskMessage =
+  | { name: 'parallelTask'; taskIndex: number | null }
+  | { name: 'parallelSerial' };
+
+type ParallelTestsMessage = {
+  name: 'parallelTests';
+  tasksDone: number;
+  serialTasksDone: number;
+  quietPassCount?: number;
+  quietFailCount?: number;
+  errorLog: string[];
+  taskTimings: TaskTiming[];
+};
+
+type ParallelWorkerMessage = ParallelReadyMessage | ParallelTestsMessage;
+
+function isTaskCommand(msg: any): msg is ParallelTaskMessage {
+  return !!msg && (msg.name === 'parallelTask' || msg.name === 'parallelSerial');
 }
 
-function logParallelQuietCounts(msg: ParallelMessage) {
+// Worker-side counterpart of SpawnedWorker: one object owns the transport dialect.
+type WorkerChannel = {
+  send: (msg: ParallelWorkerMessage) => Promise<void>;
+  receiveTask: () => Promise<ParallelTaskMessage>;
+  exit: () => void;
+};
+
+function makeWebWorkerChannel(): WorkerChannel {
+  const g = globalThis as any;
+  let pending: ((msg: ParallelTaskMessage) => void) | undefined;
+  const queue: ParallelTaskMessage[] = [];
+  // One persistent listener; per-task subscribe/unsubscribe would churn on large suites.
+  g.addEventListener('message', (event: any) => {
+    if (!isTaskCommand(event.data)) return;
+    if (pending) {
+      const resolve = pending;
+      pending = undefined;
+      resolve(event.data);
+    } else {
+      queue.push(event.data);
+    }
+  });
+  return {
+    send: (msg) => {
+      g.postMessage(msg);
+      return Promise.resolve();
+    },
+    receiveTask: () =>
+      queue.length
+        ? Promise.resolve(queue.shift()!)
+        : new Promise((resolve) => {
+            pending = resolve;
+          }),
+    exit: () => g.close(),
+  };
+}
+
+function makeClusterChannel(): WorkerChannel {
+  proc!.on('error', (err: any) => console.log('internal error:', 'child crashed?', err));
+  return {
+    send: (msg) =>
+      new Promise((resolve, reject) => {
+        proc!.send(msg, (error: Error | null) => (error ? reject(error) : resolve()));
+      }),
+    receiveTask: () =>
+      new Promise((resolve, reject) => {
+        const cleanup = () => {
+          proc!.off('message', onMessage);
+          proc!.off('error', onError);
+          proc!.off('disconnect', onDisconnect);
+        };
+        const onMessage = (msg: ParallelTaskMessage) => {
+          if (!isTaskCommand(msg)) return;
+          cleanup();
+          resolve(msg);
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const onDisconnect = () => onError(new Error('primary process disconnected'));
+        proc!.on('message', onMessage);
+        proc!.once('error', onError);
+        proc!.once('disconnect', onDisconnect);
+      }),
+    exit: () => proc!.exit(),
+  };
+}
+
+async function requestParallelTask(
+  channel: WorkerChannel,
+  fingerprint: string
+): Promise<ParallelTaskMessage> {
+  const response = channel.receiveTask();
+  const msg: ParallelReadyMessage = { name: 'parallelReady', fingerprint };
+  if (quietCounter) {
+    msg.quietPassCount = quietCounter.pass;
+    msg.quietFailCount = quietCounter.fail;
+    quietCounter.pass = 0;
+    quietCounter.fail = 0;
+  }
+  await channel.send(msg);
+  return response;
+}
+
+async function runParallelWorker(parallelTasks: Task[], serialTasks: Task[]) {
+  const channel = webWorker !== undefined ? makeWebWorkerChannel() : makeClusterChannel();
+  const fingerprint = taskFingerprint(parallelTasks, serialTasks);
+  let tasksDone = 0;
+  let serialTasksDone = 0;
+  if (opts.QUIET) quietCounter = { pass: 0, fail: 0 };
+  for (;;) {
+    const command = await requestParallelTask(channel, fingerprint);
+    if (command.name === 'parallelSerial') {
+      await runTaskList(serialTasks, false, opts.BAIL);
+      serialTasksDone = serialTasks.length;
+      continue; // rejoin the parallel pool instead of idling until the run ends
+    }
+    const taskIndex = command.taskIndex;
+    if (taskIndex === null) break;
+    const task = parallelTasks[taskIndex];
+    if (!task) throw new Error(`internal error: invalid parallel task index: ${taskIndex}`);
+    await runTest(task, false, opts.BAIL);
+    tasksDone++;
+  }
+  await channel.send({
+    name: 'parallelTests',
+    tasksDone,
+    serialTasksDone,
+    quietPassCount: quietCounter?.pass,
+    quietFailCount: quietCounter?.fail,
+    errorLog,
+    taskTimings,
+  });
+  channel.exit();
+}
+
+function logParallelQuietCounts(msg: { quietPassCount?: number; quietFailCount?: number }) {
   if (!opts.QUIET) return;
   if (msg.quietPassCount) writeStdout('.'.repeat(msg.quietPassCount));
   if (msg.quietFailCount) writeStderr(color('red', '!'.repeat(msg.quietFailCount)));
 }
 
+// Runtime-neutral worker handle: cluster children and Web Workers speak different
+// dialects (EventEmitter vs EventTarget, exit codes vs nothing); the primary loop
+// only sees this shape.
+type SpawnedWorker = {
+  label: string;
+  send: (msg: ParallelTaskMessage, onError: (err: Error) => void) => void;
+  onMessage: (fn: (msg: ParallelWorkerMessage) => void) => void;
+  onError: (fn: (err: Error) => void) => void;
+  /** Web Workers cannot observe exits; their implementation never fires. */
+  onExit: (fn: (cause: string) => void) => void;
+  kill: () => void;
+};
+
+function spawnClusterWorker(cluster: any, generation: number): SpawnedWorker {
+  const worker = cluster.fork({ JSBT_RUN_GENERATION: String(generation) });
+  return {
+    label: `W${worker.id} (pid: ${worker.process.pid})`,
+    send: (msg, onError) =>
+      worker.send(msg, (err: Error | null) => {
+        if (err) onError(err);
+      }),
+    onMessage: (fn) => worker.on('message', fn),
+    onError: (fn) => worker.on('error', fn),
+    onExit: (fn) =>
+      worker.on('exit', (code: number | null, signal: string | null) =>
+        fn(signal ? `signal: ${signal}` : `code: ${code}`)
+      ),
+    kill: () => worker.kill(),
+  };
+}
+
+function spawnWebWorker(mainModule: string, generation: number, index: number): SpawnedWorker {
+  const worker = new (globalThis as any).Worker(mainModule, {
+    type: 'module',
+    name: WEB_WORKER_PREFIX + generation,
+  });
+  return {
+    label: `W${index + 1}`,
+    send: (msg, _onError) => worker.postMessage(msg),
+    onMessage: (fn) => worker.addEventListener('message', (event: any) => fn(event.data)),
+    onError: (fn) =>
+      worker.addEventListener('error', (event: any) => {
+        event.preventDefault?.(); // an unhandled worker error would kill this process too
+        fn(new Error(event.message || 'worker crashed'));
+      }),
+    onExit: () => {},
+    kill: () => worker.terminate(),
+  };
+}
+
 async function runPrimaryParallel(
-  cluster: any,
+  spawnWorker: (index: number) => SpawnedWorker,
   totalW: number,
   total: number,
   startTime: number,
-  parallelTasks: StackItem[],
-  serialTasks: StackItem[],
-  style: ReportStyle
+  parallelTasks: Task[],
+  serialTasks: Task[]
 ): Promise<number> {
-  return new Promise((resolve, reject) => {
-    begin(total, totalW);
-    if (!opts.QUIET) console.log();
-    const workers: any[] = [];
-    let tasksDone = 0;
+  begin(total, totalW);
+  if (!opts.QUIET) console.log();
+  const expectedFingerprint = taskFingerprint(parallelTasks, serialTasks);
+  const workers: SpawnedWorker[] = [];
+  let nextTask = 0;
+  let tasksDone = 0;
+  let serialTasksDone = 0;
+  const claimTask = () => (nextTask < parallelTasks.length ? nextTask++ : null);
+  // The serial lane goes to the first worker that reports ready — once. That worker
+  // rejoins the parallel pool afterwards, so a 2-worker run is not 1 serial + 1 parallel.
+  let serialAssigned = serialTasks.length === 0;
+  const workerRun = new Promise<void>((resolve, reject) => {
     let workersDone = 0;
 
-    cluster.on('exit', (worker: { id: any; process: { pid: any } }, code: any) => {
-      if (!code) return;
-      const msg = `Worker W${worker.id} (pid: ${worker.process.pid}) crashed with code: ${code}`;
-      workers.forEach((w) => w.kill()); // Shutdown other workers
-      reject(new Error(msg));
-    });
     for (let i = 0; i < totalW; i++) {
-      const worker = cluster.fork({ JSBT_WORKER_INDEX: String(i) });
+      const worker = spawnWorker(i);
       workers.push(worker);
-      worker.on('error', (err: any) => reject(err));
-      worker.on('message', (msg: ParallelMessage) => {
-        if (!msg || msg.name !== 'parallelTests') return;
+      let reportedResults = false;
+      // A worker stuck before its first ready message would stall the run forever;
+      // unlike slow tests, init has no excuse to take this long.
+      const initTimer = setTimeout(() => {
+        const secs = workerInitTimeoutMs / 1000;
+        reject(new Error(`Worker ${worker.label} did not initialize within ${secs} sec`));
+      }, workerInitTimeoutMs);
+      (initTimer as any).unref?.();
+      worker.onError((err) => reject(err));
+      // Any exit before the results message loses that worker's claimed tasks —
+      // crash (nonzero), signal death (OOM kill), or a test calling process.exit(0).
+      // After a reject, cleanup kills land here too; the settled promise ignores them.
+      worker.onExit((cause) => {
+        clearTimeout(initTimer);
+        if (reportedResults) return;
+        reject(new Error(`Worker ${worker.label} exited before reporting results (${cause})`));
+      });
+      worker.onMessage((msg) => {
+        if (!msg) return;
+        if (msg.name === 'parallelReady') {
+          clearTimeout(initTimer);
+          if (msg.fingerprint !== expectedFingerprint) {
+            const detail = `worker ${worker.label} task list differs from primary`;
+            return reject(new Error(`${detail}; test registration must be deterministic`));
+          }
+          logParallelQuietCounts(msg);
+          const command: ParallelTaskMessage = serialAssigned
+            ? { name: 'parallelTask', taskIndex: claimTask() }
+            : { name: 'parallelSerial' };
+          serialAssigned = true;
+          worker.send(command, reject);
+          return;
+        }
+        if (msg.name !== 'parallelTests') return;
+        reportedResults = true;
+        logParallelQuietCounts(msg);
         workersDone++;
         tasksDone += msg.tasksDone;
-        logParallelQuietCounts(msg);
+        serialTasksDone += msg.serialTasksDone;
         msg.errorLog.forEach((item) => errorLog.push(item));
+        taskTimings.push(...msg.taskTimings);
         if (workersDone !== totalW) return;
-        if (tasksDone !== parallelTasks.length)
-          return reject(new Error('internal error: not all tasks have been completed'));
-        // @ts-ignore
-        globalThis.setTimeout(async () => {
-          try {
-            await runTaskList(serialTasks, style, opts.STOP_ON_ERROR);
-            resolve(finalize(total, startTime));
-          } catch (error) {
-            reject(error);
-          }
-        }, 0);
+        resolve();
       });
     }
   });
+  try {
+    await workerRun;
+    if (tasksDone !== parallelTasks.length)
+      throw new Error('internal error: not all tasks have been completed');
+    if (serialTasksDone !== serialTasks.length)
+      throw new Error('internal error: not all serial tasks have been completed');
+    return finalize(total, startTime);
+  } catch (error) {
+    workers.forEach((worker) => worker.kill());
+    throw error;
+  }
 }
 
-// 123 tests started (JSBT_QUIET=1, JSBT_FAST=8, JSBT_FILTER='hash')
+// 123 tests started (JSBT_QUIET=1, JSBT_WORKERS=8, JSBT_FILTER='hash')
 function begin(total: number, workers?: number | undefined) {
   const quiet = opts.QUIET ? 1 : 0;
-  const fast = workers || 0;
-  const envVars = [`JSBT_QUIET=${quiet}`, `JSBT_FAST=${fast}`, `JSBT_FILTER='${opts.FILTER}'`];
-  if (isCli && proc?.env?.JSBT_BAIL !== undefined) {
-    envVars.push(`JSBT_BAIL=${opts.STOP_ON_ERROR ? 1 : 0}`);
-  }
+  const count = workers || 1;
+  const envVars = [`JSBT_QUIET=${quiet}`, `JSBT_WORKERS=${count}`, `JSBT_FILTER='${opts.FILTER}'`];
+  if (!opts.BAIL) envVars.push('JSBT_BAIL=0');
+  if (opts.DEBUG) envVars.push('JSBT_DEBUG=1');
   const env = color('gray', `(${envVars.join(', ')})`);
   const sfx = total > 1 ? 's' : '';
   console.log(`${color('green', total.toString())} test${sfx} started ${env}`);
+}
+
+function formatTestDuration(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(1)}ms`;
+}
+
+function logLongTestReport(): void {
+  if (!opts.DEBUG || !taskTimings.length) return;
+  const durationsAsc = taskTimings.map((timing) => timing.durationMs).sort((a, b) => a - b);
+  const middle = Math.floor(durationsAsc.length / 2);
+  const median =
+    durationsAsc.length % 2
+      ? durationsAsc[middle]
+      : (durationsAsc[middle - 1] + durationsAsc[middle]) / 2;
+  const slowest = taskTimings
+    .slice()
+    .sort((a, b) => b.durationMs - a.durationMs || a.path.localeCompare(b.path))
+    .slice(0, 10);
+  const durations = slowest.map((timing) => formatTestDuration(timing.durationMs));
+  const width = Math.max(...durations.map((duration) => duration.length));
+  console.log('Long test report:');
+  console.log(`  Median test time: ${formatTestDuration(median)}`);
+  console.log(`  Slowest ${slowest.length} test${slowest.length === 1 ? '' : 's'}:`);
+  for (let i = 0; i < slowest.length; i++) {
+    console.log(`    ${durations[i].padStart(width)}  ${slowest[i].path}`);
+  }
 }
 
 function finalize(total: number, startTime: number) {
@@ -737,68 +971,75 @@ function finalize(total: number, startTime: number) {
   } else {
     console.log(`${color('green', total)} tests passed ${tdiff}`);
   }
+  logLongTestReport();
   return total;
 }
 
 async function runTests(forceSequential = false) {
   if (nativeNodeTest) return nativeTestCount;
+  const generation = runIndex++;
+  // Workers replay the whole entry script: run() calls before this worker's
+  // generation belong to batches it does not own — consume their registrations, skip.
+  if (workerGeneration !== undefined && generation < workerGeneration) {
+    return cloneAndReset().length;
+  }
   if (isRunning) throw new Error('it.run() has already been called, wait for end');
   errorLog.splice(0, errorLog.length);
-  if (!forceSequential && opts.FAST) return runTestsInParallel();
-  isRunning = true;
+  taskTimings.splice(0, taskTimings.length);
+  // A replay worker always takes the parallel path: its own opts may differ from
+  // the primary's (e.g. a Web Worker without inherited env), but its role does not.
+  const parallel = workerGeneration !== undefined || (!forceSequential && opts.WORKERS !== 1);
+  if (parallel) return runTestsInParallel(generation);
   const tasks = cloneAndReset();
-  const total = tasks.filter((i) => !!i.test).length;
-  begin(total);
-  const startTime = Date.now();
-  await runTaskList(tasks, SEQUENTIAL_STYLE, opts.STOP_ON_ERROR);
-  return finalize(total, startTime);
+  return runSequentialFallback(tasks, tasks.length, Date.now());
 }
 
 async function runTestsWhen(importMetaUrl: string) {
   if (nativeNodeTest) return;
   if (!isCli) return; // Ignore in browser
+  // A Web Worker's argv does not point at the entry; compare against the URL it
+  // was spawned with, so imported test files' runWhen calls stay no-ops.
+  if (webWorker !== undefined)
+    return importMetaUrl === webWorker.mainModule ? runTests() : undefined;
   // @ts-ignore
   const { pathToFileURL } = await imp('node:url');
   return importMetaUrl === pathToFileURL(proc!.argv[1]).href ? runTests() : undefined;
 }
 
-// Doesn't support tree and inline start/end output
-async function runTestsInParallel(): Promise<number> {
+// Workers never render inline start/end output
+async function runTestsInParallel(generation: number): Promise<number> {
   if (!isCli) throw new Error('must run in cli');
-  errorLog.splice(0, errorLog.length);
-  if ('deno' in (proc?.versions || {})) return runTests(true);
-  const items = cloneAndReset();
-  const tasks = items.filter((i) => !!i.test); // Filter describe elements
+  const tasks = cloneAndReset();
   const total = tasks.length;
   const startTime = Date.now();
 
-  const { cluster, workers: totalW } = await resolveParallelRuntime();
-  if (!cluster || !totalW) return runSequentialFallback(items, total, startTime);
-
-  const { parallelTasks, serialTasks } = splitParallelTasks(tasks);
-  const pathSep = parallelPathSep();
-  if (!parallelTasks.length) {
-    begin(total);
-    await runTaskList(serialTasks, SEQUENTIAL_STYLE, opts.STOP_ON_ERROR);
-    return finalize(total, startTime);
-  }
-  const style = flatStyle(pathSep);
-
-  // the code is ran in workers
-  if (!cluster.isPrimary) {
-    await runParallelWorker(cluster, totalW, parallelTasks, style);
+  // Replay workers (cluster env or Web Worker name) know their role before any
+  // runtime resolution — a cluster child never needs to import node:cluster.
+  if (workerGeneration !== undefined) {
+    const { parallelTasks, serialTasks } = splitParallelTasks(tasks);
+    await runParallelWorker(parallelTasks, serialTasks);
     return total;
   }
 
+  const runtime = await resolveParallelRuntime();
+  if (!runtime || runtime.workers <= 1) return runSequentialFallback(tasks, total, startTime);
+
+  const { parallelTasks, serialTasks } = splitParallelTasks(tasks);
+  if (!parallelTasks.length) return runSequentialFallback(serialTasks, total, startTime);
+
+  const spawnWorker =
+    runtime.kind === 'cluster'
+      ? (_index: number) => spawnClusterWorker(runtime.cluster, generation)
+      : (index: number) => spawnWebWorker(runtime.mainModule, generation, index);
+
   // the code is ran in primary proc
   return runPrimaryParallel(
-    cluster,
-    totalW,
+    spawnWorker,
+    runtime.workers,
     total,
     startTime,
     parallelTasks,
-    serialTasks,
-    style
+    serialTasks
   ).catch((err: Error) => {
     console.error();
     console.error(color('red', 'Tests failed: ' + err.message));

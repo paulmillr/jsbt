@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, type Dirent } from 'node:fs';
 import { createRequire } from 'node:module';
-import { cpus } from 'node:os';
+import { availableParallelism } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -150,28 +150,40 @@ export const stripAnsi = (line: string): string => line.replace(/\x1b\[\d+(;\d+)
 export const err = (msg: string): never => {
   throw new Error(msg);
 };
-export const parseFast = (str: string | number | undefined): number => {
-  const raw = String(str || '')
+// `JSBT_WORKERS` is a literal worker count: `1` is serial, `N` is N workers. The other
+// spellings are conveniences — unset/`auto` means all cores, `-N` means cores minus N,
+// `50%` (or `0.5`) a share of cores; machine-relative spellings cap at 10 workers.
+// A spec is `Infinity` for auto, a negative offset, a (0,1) ratio, or a count;
+// `workerCount` resolves it against the machine.
+export const parseWorkers = (str: string | number | undefined): number => {
+  const raw = String(str ?? '')
     .trim()
     .toLowerCase();
-  if (raw === 'true') return 1;
-  const val = Number.parseFloat(raw);
+  if (raw === '' || raw === 'auto') return Infinity;
+  const percent = raw.endsWith('%');
+  const val = Number.parseFloat(percent ? raw.slice(0, -1) : raw) / (percent ? 100 : 1);
   const ratio = val > 0 && val < 1;
-  if (!Number.isFinite(val) || val === 0 || Math.abs(val) > 256) return 0;
-  if (!ratio && !Number.isSafeInteger(val)) return 0;
-  return val;
+  const valid =
+    Number.isFinite(val) &&
+    val !== 0 &&
+    Math.abs(val) <= 256 &&
+    (ratio || val === 1 || Number.isSafeInteger(val));
+  if (!valid)
+    err(`invalid JSBT_WORKERS: ${str}; use a count, -N for cores minus N, N% of cores, or auto`);
+  return percent && val === 1 ? Infinity : val;
 };
-export const defaultFast = (env: NodeJS.ProcessEnv = process.env): number =>
-  env.JSBT_FAST === undefined ? 1 : parseFast(env.JSBT_FAST);
-export const fastWorkerCount = (fast: number, max: number = cpus().length): number => {
-  const count = fast === 1 ? max : fast < 0 ? max + fast : fast < 1 ? Math.floor(max * fast) : fast;
-  return Math.max(1, Math.min(count, 256));
+export const defaultWorkers = (env: NodeJS.ProcessEnv = process.env): number =>
+  parseWorkers(env.JSBT_WORKERS);
+// availableParallelism respects cgroup CPU quotas and affinity masks.
+export const workerCount = (spec: number, max: number = availableParallelism()): number => {
+  const count =
+    spec === Infinity ? max : spec < 0 ? max + spec : spec < 1 ? Math.floor(max * spec) : spec;
+  // Relative specs cap at 10: throughput flattens past ~10 workers while per-worker
+  // startup cost keeps growing. Explicit counts are honored as written.
+  const cap = spec === Infinity || spec < 1 ? 10 : 256;
+  return Math.max(1, Math.min(count, cap));
 };
-export const jsbtWorkerLimit = (_defaultCount: number): number => {
-  const fast = defaultFast();
-  if (!fast) return 1;
-  return fastWorkerCount(fast);
-};
+export const jsbtWorkerLimit = (_defaultCount: number): number => workerCount(defaultWorkers());
 export const camelParts = (parts: string[]): string =>
   parts.map((part, i) => (i ? part[0].toUpperCase() + part.slice(1) : part)).join('');
 export const fileUrl = (file: string): string => pathToFileURL(file).href;

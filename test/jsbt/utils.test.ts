@@ -1,6 +1,6 @@
 import { deepStrictEqual, throws } from 'node:assert';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { cpus } from 'node:os';
+import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as ts from 'typescript';
@@ -8,11 +8,11 @@ import { should } from '../../src/test.ts';
 import {
   compact,
   collectIssues,
-  defaultFast,
+  defaultWorkers,
   docCommentLines,
   emptyResult,
   execText,
-  fastWorkerCount,
+  workerCount,
   fileUrl,
   firstText,
   importTypeText,
@@ -25,7 +25,7 @@ import {
   nodeLine,
   nodeStart,
   nodeText,
-  parseFast,
+  parseWorkers,
   pkgArgs,
   pkgTarget,
   prepareRunDir,
@@ -87,46 +87,53 @@ should('pkgTarget resolves package paths under cwd', () => {
   throws(() => pkgTarget('../package.json', cwd), /refusing unsafe package path/);
 });
 
-should('parseFast accepts worker offsets and ratios', () => {
-  deepStrictEqual(parseFast('true'), 1);
-  deepStrictEqual(parseFast('3'), 3);
-  deepStrictEqual(parseFast('-1'), -1);
-  deepStrictEqual(parseFast('-2'), -2);
-  deepStrictEqual(parseFast('0.5'), 0.5);
-  deepStrictEqual(parseFast('0.25'), 0.25);
-  deepStrictEqual(parseFast('half'), 0);
-  deepStrictEqual(parseFast('quarter'), 0);
-  deepStrictEqual(parseFast('0'), 0);
-  deepStrictEqual(parseFast('1.5'), 0);
-  deepStrictEqual(parseFast('-0.5'), 0);
-  deepStrictEqual(parseFast('-257'), 0);
+should('parseWorkers accepts counts, offsets, ratios, and auto', () => {
+  deepStrictEqual(parseWorkers(undefined), Infinity);
+  deepStrictEqual(parseWorkers(''), Infinity);
+  deepStrictEqual(parseWorkers('auto'), Infinity);
+  deepStrictEqual(parseWorkers('1'), 1);
+  deepStrictEqual(parseWorkers('3'), 3);
+  deepStrictEqual(parseWorkers('-1'), -1);
+  deepStrictEqual(parseWorkers('-2'), -2);
+  deepStrictEqual(parseWorkers('0.5'), 0.5);
+  deepStrictEqual(parseWorkers('0.25'), 0.25);
+  deepStrictEqual(parseWorkers('50%'), 0.5);
+  deepStrictEqual(parseWorkers('100%'), Infinity);
+  for (const bad of ['true', 'half', 'quarter', '0', '1.5', '-0.5', '-257', '300', '0%'])
+    throws(() => parseWorkers(bad), /invalid JSBT_WORKERS/, bad);
 });
 
-should('jsbtWorkerLimit resolves fast offsets and ratios from max cores', () => {
-  const prevFast = process.env.JSBT_FAST;
+should('jsbtWorkerLimit resolves JSBT_WORKERS specs from max cores', () => {
+  const prev = process.env.JSBT_WORKERS;
   const expectedRatio = (ratio: number) =>
-    Math.max(1, Math.min(Math.floor(cpus().length * ratio), 256));
+    Math.max(1, Math.min(Math.floor(availableParallelism() * ratio), 10));
   try {
-    deepStrictEqual(defaultFast({}), 1);
-    deepStrictEqual(defaultFast({ JSBT_FAST: '' }), 0);
-    deepStrictEqual(fastWorkerCount(1, 12), 12);
-    deepStrictEqual(fastWorkerCount(-1, 12), 11);
-    deepStrictEqual(fastWorkerCount(0.5, 12), 6);
-    delete process.env.JSBT_FAST;
-    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length, 256)));
-    process.env.JSBT_FAST = '';
+    deepStrictEqual(defaultWorkers({}), Infinity);
+    deepStrictEqual(defaultWorkers({ JSBT_WORKERS: '' }), Infinity);
+    deepStrictEqual(defaultWorkers({ JSBT_WORKERS: '1' }), 1);
+    deepStrictEqual(workerCount(Infinity, 12), 10); // relative specs cap at 10
+    deepStrictEqual(workerCount(Infinity, 8), 8);
+    deepStrictEqual(workerCount(1, 12), 1);
+    deepStrictEqual(workerCount(3, 12), 3);
+    deepStrictEqual(workerCount(16, 24), 16); // explicit counts are honored
+    deepStrictEqual(workerCount(-1, 12), 10);
+    deepStrictEqual(workerCount(-4, 12), 8);
+    deepStrictEqual(workerCount(0.5, 12), 6);
+    delete process.env.JSBT_WORKERS;
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(availableParallelism(), 10)));
+    process.env.JSBT_WORKERS = '1';
     deepStrictEqual(jsbtWorkerLimit(2), 1);
-    process.env.JSBT_FAST = '-1';
-    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length - 1, 256)));
-    process.env.JSBT_FAST = '-2';
-    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(cpus().length - 2, 256)));
-    process.env.JSBT_FAST = '0.5';
+    process.env.JSBT_WORKERS = '-1';
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(availableParallelism() - 1, 10)));
+    process.env.JSBT_WORKERS = '-2';
+    deepStrictEqual(jsbtWorkerLimit(2), Math.max(1, Math.min(availableParallelism() - 2, 10)));
+    process.env.JSBT_WORKERS = '0.5';
     deepStrictEqual(jsbtWorkerLimit(2), expectedRatio(0.5));
-    process.env.JSBT_FAST = '0.25';
+    process.env.JSBT_WORKERS = '25%';
     deepStrictEqual(jsbtWorkerLimit(2), expectedRatio(0.25));
   } finally {
-    if (prevFast === undefined) delete process.env.JSBT_FAST;
-    else process.env.JSBT_FAST = prevFast;
+    if (prev === undefined) delete process.env.JSBT_WORKERS;
+    else process.env.JSBT_WORKERS = prev;
   }
 });
 

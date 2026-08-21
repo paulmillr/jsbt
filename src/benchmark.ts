@@ -329,6 +329,13 @@ let defaultMaxRunTime = DEFAULT_MAX_RUN_TIME;
 const SAMPLES_MAX = 2 ** 22;
 let sampleBuf = new Float64Array(0);
 let benchmarkActive = false;
+/**
+ * True while `benchmarkRaw` measures the callback; untimed warmup calls observe `false`.
+ * Lets a benched function distinguish measured calls from warmup deterministically.
+ */
+export function isBenchmarkMeasuring(): boolean {
+  return benchmarkActive;
+}
 export async function benchmarkRaw(
   callback: CbFn,
   maxRunTime: bigint = defaultMaxRunTime

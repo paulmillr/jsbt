@@ -40,13 +40,14 @@ import { runCli as runJsrPublish } from './jsrpublish.ts';
 import { runCli as runMutate } from './mutate.ts';
 import { runCli as runPatterns } from './patterns.ts';
 import { runCli as runReadme } from './readme.ts';
-import { runGenerateJsbtRc, runSizeCheck, sizeIssueLog, type SizeIssue } from './size.ts';
+import { runGenerateJsbtRc } from './genconfig.ts';
+import { runSizeCheck, sizeIssueLog, type SizeIssue } from './size.ts';
 import { runCli as runTypeImport } from './typeimport.ts';
 import {
   color,
-  defaultFast,
+  defaultWorkers,
   err,
-  fastWorkerCount,
+  workerCount,
   formatIssue,
   groupIssues,
   paint,
@@ -129,7 +130,7 @@ const usage = `usage:
 
 options:
   --ignore=<a,b>   skip the listed selectors
-  --gen-config     write size budgets to .jsbtrc.json instead of running checks
+  --gen-config     add missing exampleDependencies to .jsbtrc.json instead of running checks
 
 examples:
   npx --no jsbt-check
@@ -147,8 +148,11 @@ size limits:
   (their cost when imported together, shared code counted once).
   debug over-budget entries with bismar -bs <selector...> (stats) and
   bismar <selector> > out.js (the measured bundle bytes).
-  jsbt-check --gen-config produces or updates .jsbtrc.json with
-  per-module budgets at current sizes (existing entries are kept)`;
+
+gen config:
+  jsbt-check --gen-config scans runnable README fences and TSDoc @example blocks
+  and adds their missing imports to "exampleDependencies" in .jsbtrc.json,
+  pinned to exact installed versions (existing entries are kept)`;
 const CHECK_WORKER = 'jsbt-check-worker';
 const WORKER = `import { workerData } from 'node:worker_threads';
 process.argv[1] = workerData.entry;
@@ -254,17 +258,14 @@ const checkDone = (
   const base = `${count} ${noun} finished in ${secondsDuration(ms)}`;
   return `${base}${slowCheckStats(stats, on)}`;
 };
-const checkFastWorkers = (): number => {
-  const fast = defaultFast();
-  return fast ? fastWorkerCount(fast) : 0;
-};
+const checkWorkers = (): number => workerCount(defaultWorkers());
 const checkQuiet = (): boolean => {
   const value = process.env.JSBT_QUIET;
   return value === '1' || value === 'true';
 };
 const checkHeader = (total: number, on: boolean, quiet: boolean): string => {
   const env = paint(
-    `(JSBT_QUIET=${quiet ? 1 : 0}, JSBT_FAST=${checkFastWorkers()})`,
+    `(JSBT_QUIET=${quiet ? 1 : 0}, JSBT_WORKERS=${checkWorkers()})`,
     color.gray,
     on
   );
@@ -403,7 +404,7 @@ const missingDepHint = (on: boolean): string[] => [
     on
   ),
   paint(
-    `      jsbt-check --gen-config writes that file if you do not have one yet`,
+    `      jsbt-check --gen-config adds the missing packages to that file`,
     color.gray,
     on
   ),
@@ -563,7 +564,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
   const args = checkArgs(argv);
   if (args.help) return console.log(usage);
   const projectCwd = resolve(opts.cwd || process.cwd());
-  // A mode of its own, not a check: it measures, writes the rc, and never needs the run dir.
+  // A mode of its own, not a check: it scans examples, writes the rc, and never needs the run dir.
   if (args.generate) return runGenerateJsbtRc({ cwd: projectCwd });
   const checkTmp = checkTempDir();
   try {
@@ -653,7 +654,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
       res[i] = await timed(fn);
       progressDone(head, HARD_ERROR_CHECKS.has(head) || res[i].hard ? res[i].ok : true, res[i].ms);
     };
-    const workers = checkFastWorkers();
+    const workers = checkWorkers();
     const saveParallel = async (jobs: CheckJob[]): Promise<void> => {
       if (workers < 2 || jobs.length < 2) {
         for (const { i, item } of jobs)

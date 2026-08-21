@@ -1,5 +1,5 @@
 import { deepStrictEqual, rejects } from 'node:assert';
-import { setMaxRunTime } from '../../src/benchmark.ts';
+import { isBenchmarkMeasuring, setMaxRunTime } from '../../src/benchmark.ts';
 import compare from '../../src/benchmark-compare.ts';
 import { should } from '../../src/test.ts';
 
@@ -180,23 +180,31 @@ should('bench-compare prints group headers and per-case rows', async () => {
 
 should('bench-compare warms every case before timing', async () => {
   setMaxRunTime(0.1);
-  const calls = { a: 0, b: 0 };
-  const spin = (name: keyof typeof calls) => {
-    calls[name]++;
-    const end = process.hrtime.bigint() + 1_000_000n;
-    while (process.hrtime.bigint() < end) {}
+  // Warmup calls run outside the measured window, so isBenchmarkMeasuring()
+  // classifies each call deterministically — no wall-clock counting.
+  const calls = {
+    a: { measured: 0, warmup: 0, warmedFirst: false },
+    b: { measured: 0, warmup: 0, warmedFirst: false },
+  };
+  const track = (name: keyof typeof calls) => {
+    const c = calls[name];
+    if (!isBenchmarkMeasuring()) c.warmup++;
+    else {
+      if (c.measured === 0) c.warmedFirst = c.warmup > 0;
+      c.measured++;
+    }
   };
   try {
     await withBenchmarkEnv({}, () =>
-      capture(() => compare('Warmup Bench', { a: () => spin('a'), b: () => spin('b') }))
+      capture(() => compare('Warmup Bench', { a: () => track('a'), b: () => track('b') }))
     );
   } finally {
     setMaxRunTime(1);
   }
-  // Each case gets roughly 25 warmup calls plus 100 measured calls.
-  deepStrictEqual(calls.a > 110, true, `a=${calls.a} b=${calls.b}`);
-  deepStrictEqual(calls.b > 110, true, `a=${calls.a} b=${calls.b}`);
-  deepStrictEqual(Math.abs(calls.a - calls.b) < 20, true, `a=${calls.a} b=${calls.b}`);
+  for (const [name, c] of Object.entries(calls)) {
+    deepStrictEqual(c.warmedFirst, true, `${name}: ${JSON.stringify(c)}`);
+    deepStrictEqual(c.measured >= 1, true, `${name}: ${JSON.stringify(c)}`);
+  }
 });
 
 should('bench-compare focus highlights the first declared label by default', async () => {

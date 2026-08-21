@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { cpus, tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -196,7 +196,7 @@ const withEnv = async <T>(key: string, value: string | undefined, fn: () => Prom
   }
 };
 const checkJsbt = (argv: string[], cwd: string, extra: Record<string, unknown> = {}) =>
-  withEnv('JSBT_FAST', '', () =>
+  withEnv('JSBT_WORKERS', '1', () =>
     withEnv('JSBT_QUIET', '', () =>
       runJsbt(argv, { color: false, cwd, runJsrPublish: okJsrPublish, ...extra })
     )
@@ -460,35 +460,59 @@ should('size rejects invalid sizeLimits entries before measuring', async () => {
   }
 });
 
-should('check --gen-config produces and updates .jsbtrc.json', async () => {
+should('check --gen-config populates exampleDependencies from examples', async () => {
   const root = resolve('test/jsbt/build/genrc');
   rmSync(root, { force: true, recursive: true });
   const cwd = join(root, 'pkg');
-  cpSync(fixture('pass-size-limit'), cwd, { recursive: true });
+  cpSync(fixture('pass-readme-deps'), cwd, { recursive: true });
   rmSync(join(cwd, '.jsbtrc.json'));
   const readRc = () => JSON.parse(readFileSync(join(cwd, '.jsbtrc.json'), 'utf8'));
   try {
+    // README imports the package itself, a runtime dependency, and @jsbt-test/dep;
+    // only the last one lands, pinned to the installed version. No sizeLimits appear.
     const first = await genRun(cwd);
     deepStrictEqual(first.ok, true, all(first));
-    const rc = readRc();
-    deepStrictEqual(/^0\.\d+kb$/.test(rc.sizeLimits['index.js']), true, JSON.stringify(rc));
+    deepStrictEqual(readRc(), { exampleDependencies: { '@jsbt-test/dep': '1.2.3' } });
     // The generated config immediately passes the check it feeds.
-    const size = await sizeRun(cwd);
-    deepStrictEqual(size.ok, true, all(size));
-    // Regeneration keeps hand-set budgets and every other section untouched.
+    const readme = await run(cwd, () => checkJsbt(['readme'], cwd));
+    deepStrictEqual(readme.ok, true, all(readme));
+    // Regeneration keeps hand-set pins and every other section untouched.
     writeFileSync(
       join(cwd, '.jsbtrc.json'),
       JSON.stringify({
-        exampleDependencies: { '@jsbt-test/dep': '1.0.0' },
+        exampleDependencies: { '@jsbt-test/dep': '9.9.9' },
         sizeLimits: { 'index.js': '9kb' },
       })
     );
     const second = await genRun(cwd);
     deepStrictEqual(second.ok, true, all(second));
     deepStrictEqual(readRc(), {
-      exampleDependencies: { '@jsbt-test/dep': '1.0.0' },
+      exampleDependencies: { '@jsbt-test/dep': '9.9.9' },
       sizeLimits: { 'index.js': '9kb' },
     });
+    // TSDoc @example blocks are scanned too: the .d.mts example alone still finds the dep.
+    rmSync(join(cwd, '.jsbtrc.json'));
+    rmSync(join(cwd, 'README.md'));
+    const tsdocOnly = await genRun(cwd);
+    deepStrictEqual(tsdocOnly.ok, true, all(tsdocOnly));
+    deepStrictEqual(readRc(), { exampleDependencies: { '@jsbt-test/dep': '1.2.3' } });
+    // An example import that is not installed cannot be pinned: the pinnable entries
+    // are still written, then the run fails naming every missing package.
+    rmSync(join(cwd, '.jsbtrc.json'));
+    writeFileSync(
+      join(cwd, 'README.md'),
+      '# x\n\n```js\nimport { nope } from "@jsbt-test/missing";\n```\n'
+    );
+    const missing = await genRun(cwd);
+    deepStrictEqual(missing.ok, false, all(missing));
+    deepStrictEqual(
+      /not installed and could not be pinned: @jsbt-test\/missing; run npm install -D @jsbt-test\/missing/.test(
+        all(missing)
+      ),
+      true,
+      all(missing)
+    );
+    deepStrictEqual(readRc(), { exampleDependencies: { '@jsbt-test/dep': '1.2.3' } });
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -644,9 +668,9 @@ should('check passes on root-entry fixture with default out dir', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '', () => run(cwd, () => checkJsbt([], cwd)));
   deepStrictEqual(res.ok, true, all(res));
-  deepStrictEqual(/^12 checks started \(JSBT_QUIET=0, JSBT_FAST=0\)/.test(plain(res)), true);
+  deepStrictEqual(/^12 checks started \(JSBT_QUIET=0, JSBT_WORKERS=1\)/.test(plain(res)), true);
   deepStrictEqual(
-    /^12 checks started \(JSBT_QUIET=0, JSBT_FAST=0\)\n\n☆ readme/.test(plain(res)),
+    /^12 checks started \(JSBT_QUIET=0, JSBT_WORKERS=1\)\n\n☆ readme/.test(plain(res)),
     true
   );
   deepStrictEqual(/preparing summary/.test(plain(res)), false);
@@ -669,45 +693,49 @@ should('check passes on root-entry fixture with default out dir', async () => {
   );
 });
 
-should('check defaults JSBT_FAST like the test runner', async () => {
+should('check defaults JSBT_WORKERS like the test runner', async () => {
   const cwd = fixture('pass-root');
-  const workers = Math.max(1, Math.min(cpus().length, 256));
+  const workers = Math.max(1, Math.min(availableParallelism(), 10));
   const res = await withEnv('JSBT_QUIET', '', () =>
-    withEnv('JSBT_FAST', undefined, () =>
+    withEnv('JSBT_WORKERS', undefined, () =>
       run(cwd, () => runJsbt(['comments'], { color: false, cwd }))
     )
   );
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${workers}\\)`).test(plain(res)),
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_WORKERS=${workers}\\)`).test(plain(res)),
     true
   );
 });
 
-should('check parses JSBT_FAST offsets and ratios like the test runner', async () => {
+should('check parses JSBT_WORKERS offsets and ratios like the test runner', async () => {
   const cwd = fixture('pass-root');
-  const max = cpus().length;
+  const max = availableParallelism();
   const expected = {
-    negative: Math.max(1, Math.min(max - 1, 256)),
-    ratio: Math.max(1, Math.min(Math.floor(max * 0.5), 256)),
+    negative: Math.max(1, Math.min(max - 1, 10)),
+    ratio: Math.max(1, Math.min(Math.floor(max * 0.5), 10)),
   };
   const negative = await withEnv('JSBT_QUIET', '', () =>
-    withEnv('JSBT_FAST', '-1', () => run(cwd, () => runJsbt(['comments'], { color: false, cwd })))
+    withEnv('JSBT_WORKERS', '-1', () =>
+      run(cwd, () => runJsbt(['comments'], { color: false, cwd }))
+    )
   );
   deepStrictEqual(negative.ok, true, all(negative));
   deepStrictEqual(
-    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${expected.negative}\\)`).test(
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_WORKERS=${expected.negative}\\)`).test(
       plain(negative)
     ),
     true
   );
 
   const ratio = await withEnv('JSBT_QUIET', '', () =>
-    withEnv('JSBT_FAST', '0.5', () => run(cwd, () => runJsbt(['comments'], { color: false, cwd })))
+    withEnv('JSBT_WORKERS', '0.5', () =>
+      run(cwd, () => runJsbt(['comments'], { color: false, cwd }))
+    )
   );
   deepStrictEqual(ratio.ok, true, all(ratio));
   deepStrictEqual(
-    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_FAST=${expected.ratio}\\)`).test(
+    new RegExp(`^1 check started \\(JSBT_QUIET=0, JSBT_WORKERS=${expected.ratio}\\)`).test(
       plain(ratio)
     ),
     true
@@ -721,14 +749,14 @@ should('check reports timing stats only for selectors over ten seconds', async (
   Date.now = () => (now += 11_000);
   try {
     const res = await withEnv('JSBT_QUIET', '', () =>
-      withEnv('JSBT_FAST', '', () =>
+      withEnv('JSBT_WORKERS', '1', () =>
         run(cwd, () => runJsbt(['comments'], { color: true, cwd, runJsrPublish: okJsrPublish }))
       )
     );
     const out = plain(res);
     deepStrictEqual(res.ok, true, all(res));
     deepStrictEqual(
-      /^\x1b\[32m1\x1b\[0m check started \x1b\[90m\(JSBT_QUIET=0, JSBT_FAST=0\)\x1b\[0m\n/.test(
+      /^\x1b\[32m1\x1b\[0m check started \x1b\[90m\(JSBT_QUIET=0, JSBT_WORKERS=1\)\x1b\[0m\n/.test(
         all(res)
       ),
       true
@@ -752,14 +780,14 @@ should('check reports timing stats only for selectors over ten seconds', async (
 should('check uses dot reporter when JSBT_QUIET is set', async () => {
   const cwd = fixture('pass-root');
   const res = await withEnv('JSBT_QUIET', '1', () =>
-    withEnv('JSBT_FAST', '', () =>
+    withEnv('JSBT_WORKERS', '1', () =>
       runProcess(cwd, () => runJsbt([], { color: false, cwd, runJsrPublish: okJsrPublish }))
     )
   );
   const out = plain(res);
   deepStrictEqual(res.ok, true, all(res));
   deepStrictEqual(
-    /^12 checks started \(JSBT_QUIET=1, JSBT_FAST=0\)\n\.{12}\n12 checks finished in \d+ sec/.test(
+    /^12 checks started \(JSBT_QUIET=1, JSBT_WORKERS=1\)\n\.{12}\n12 checks finished in \d+ sec/.test(
       out
     ),
     true
@@ -772,7 +800,7 @@ should('check uses dot reporter when JSBT_QUIET is set', async () => {
 should('check shows warnings when JSBT_QUIET is set', async () => {
   const cwd = fixture('fail-src');
   const res = await withEnv('JSBT_QUIET', '1', () =>
-    withEnv('JSBT_FAST', '', () =>
+    withEnv('JSBT_WORKERS', '1', () =>
       runProcess(cwd, () => runJsbt([], { color: false, cwd, runJsrPublish: okJsrPublish }))
     )
   );
@@ -1226,7 +1254,7 @@ should('bundled importtime does not run imported subcommands', async () => {
   const env = {
     CLICOLOR_FORCE: '0',
     FORCE_COLOR: '0',
-    JSBT_FAST: '',
+    JSBT_WORKERS: '1',
     JSBT_LOG_LEVEL: '0',
     NO_COLOR: '1',
     npm_config_audit: 'false',

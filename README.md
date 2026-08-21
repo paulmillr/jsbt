@@ -26,7 +26,7 @@ API:
 - `it(title, fn)` register sync or async tests.
 - `describe(title, fn)` groups tests and scopes `beforeEach` / `afterEach`.
 - `it.only(title, fn)` runs one test; `should.skip(title, fn)` reports a skipped test.
-- `it.serial(title, fn)` keeps a test on the main process when fast mode is enabled.
+- `it.serial(title, fn)` keeps a test on a dedicated serial worker lane when tests run in parallel.
 - `it.run()` runs the current file's registered tests.
 - `it.runWhen(import.meta.url)` runs only when the file was launched directly, which keeps
   imported subtests from running twice in aggregate test files.
@@ -34,12 +34,13 @@ API:
 ENV variables:
 
 - `JSBT_BAIL=0` disables stopping after the first failed test (`1` by default).
-- `JSBT_FAST=1` enables parallel execution with all available cores.
-- `JSBT_FAST=3` uses three workers.
-- `JSBT_FAST=-1` uses all cores minus one.
-- `JSBT_FAST=0.5` uses half of available cores.
+- `JSBT_WORKERS=3` uses three workers; unset (or `auto`) uses all available cores.
+- `JSBT_WORKERS=1` disables parallelism.
+- `JSBT_WORKERS=-1` uses all cores minus one.
+- `JSBT_WORKERS=50%` uses half of available cores (`0.5` works too).
 - `JSBT_QUIET=1` enables the quiet (dot) reporter.
 - `JSBT_FILTER=math/adds` runs tests whose full path contains the value.
+- `JSBT_DEBUG=1` prints the median test time and the ten slowest tests after the summary.
 
 ```js
 import { deepStrictEqual } from 'node:assert';
@@ -72,7 +73,7 @@ Run a project test entrypoint with node:
 
 ```
 node test/index.ts
-JSBT_FAST=1 node test/index.ts
+JSBT_WORKERS=1 node test/index.ts
 JSBT_QUIET=1 node test/index.ts
 JSBT_FILTER=math/adds node test/index.ts
 ```
@@ -204,6 +205,7 @@ directory. Its `node_modules` is assembled from symlinks — nothing is fetched 
 An example importing anything else fails at run time with `ERR_MODULE_NOT_FOUND`, naming the
 package but not the list it is missing from. When any check reports one, `jsbt-check` prints
 a reminder about `exampleDependencies` once, after the last check.
+`jsbt-check --gen-config` fills the list in automatically from what the examples import.
 
 `esbuild` (importable by example code) is provided automatically and must not be listed: it
 is resolved from the project's `node_modules`, from the copy next to jsbt itself, or from a
@@ -242,8 +244,13 @@ jsbt-check --gen-config
 `--ignore=<a,b>` skips the listed selectors; it accepts the same names as the selector
 argument and errors if nothing would be left to run.
 
-The one non-check mode is `--gen-config`, which writes size budgets instead of auditing
-— see [size limits](#size-limits) below.
+The one non-check mode is `--gen-config`, which writes `.jsbtrc.json` instead of auditing:
+it scans runnable README fences and TSDoc `@example` blocks for imports that neither
+`dependencies` nor `exampleDependencies` allow yet, and adds them to `exampleDependencies`
+pinned to the exact installed versions. Existing entries are hand-set and never touched, and
+the rest of the file carries over unchanged. It is a mode of its own rather than a flag on a
+check: it runs no checks, takes no selector, and is the one `jsbt-check` invocation that
+writes to the package directory.
 
 With `"check": "jsbt-check"` in `package.json` scripts, selectors can be run through npm:
 
@@ -304,12 +311,6 @@ can be budgeted.
 The check itself prints no stats. To debug an over-budget entry, ask bismar directly:
 `bismar -bs <selector...>` for the numbers, `bismar <selector> > out.js` for the measured
 bundle bytes.
-
-`jsbt-check --gen-config` writes or updates `.jsbtrc.json` with one budget per public
-module at its current size; existing entries are hand-set and never touched, and the rest of
-the file carries over unchanged. It is a mode of its own rather than a flag on `size`: it
-runs no checks, takes no selector, and is the one `jsbt-check` invocation that writes to the
-package directory.
 
 ## 4. Workflows
 

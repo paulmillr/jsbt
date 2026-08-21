@@ -22,8 +22,7 @@
  */
 import { join, resolve } from 'node:path';
 import { foreignSelector } from 'bismar/refs.js';
-import { measureRows, runSize, type RowData } from 'bismar/size.js';
-import { writeJsbtRc } from '../fs-modify.ts';
+import { measureRows, runSize } from 'bismar/size.js';
 import { readPkg, type Pkg } from './public.ts';
 import {
   err,
@@ -35,7 +34,6 @@ import {
   readJsbtRc,
   wantColor,
   type Issue as LogIssue,
-  type JsbtRc,
 } from './utils.ts';
 
 type TsLike = {
@@ -229,44 +227,4 @@ export const runSizeCheck = async (
       over ? `found ${over} bundle${over === 1 ? '' : 's'} over sizeLimits budget` : '',
     ].filter(Boolean);
     err(parts.join('; '));
-  });
-
-// `--gen-config`: one `sizeLimits` entry per public module, budgeted at the current
-// gzip size rounded up to the next 0.01kb. Existing entries are hand-set budgets and are
-// never touched; the rest of `.jsbtrc.json` carries over untouched.
-const budgetValue = (gz: number): string => `${(Math.ceil((gz / 1024) * 100) / 100).toFixed(2)}kb`;
-const generateSizeLimits = async (
-  ctx: Ctx,
-  existing: Record<string, unknown>
-): Promise<{ added: number; limits: Record<string, unknown> }> => {
-  const byModule = new Map<string, RowData[]>();
-  // Rows, not bundles: the sizes come measured, and every row already knows the two
-  // spellings this needs — the key to write (`moduleLabel`) and which row it belongs to.
-  for (const row of await measureRows({ cwd: ctx.cwd })) {
-    // The package-wide row is a measurement, not a module anyone can import.
-    if (row.module === ctx.pkg.name) continue;
-    byModule.set(row.moduleLabel, [...(byModule.get(row.moduleLabel) || []), row]);
-  }
-  const limits: Record<string, unknown> = { ...existing };
-  let added = 0;
-  for (const [label, rows] of byModule) {
-    // The whole-module row when present; single-export modules have no `all` row, and
-    // their sole export bundle is byte-identical to the module bundle.
-    const row = rows.find((item) => item.export === 'all') ?? (rows.length === 1 ? rows[0] : null);
-    if (!row || label in limits) continue;
-    limits[label] = budgetValue(row.gzBytes);
-    added += 1;
-  }
-  return { added, limits };
-};
-
-export const runGenerateJsbtRc = async (opts: { cwd?: string } = {}): Promise<void> =>
-  withCtx(opts.cwd, async (ctx) => {
-    const rc = readJsbtRc(ctx.cwd);
-    const { added, limits } = await generateSizeLimits(ctx, rc.sizeLimits || {});
-    // Every other section carries over byte-for-byte: this command owns `sizeLimits` alone.
-    const out: JsbtRc = { ...rc, sizeLimits: limits };
-    if (!Object.keys(limits).length) delete out.sizeLimits;
-    writeJsbtRc(ctx.cwd, `${JSON.stringify(out, null, 2)}\n`);
-    console.log(`${RC_FILE}: ${Object.keys(limits).length} size limits (${added} new)`);
   });

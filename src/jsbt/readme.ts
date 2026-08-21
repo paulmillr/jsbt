@@ -45,7 +45,7 @@ type Pkg = { name: string };
 type Ctx = { cwd: string; pkg: Pkg; pkgFile: string; readmeFile: string; runDir: string };
 type Kind = 'js' | 'ts';
 type Mode = 'cjs' | 'js' | 'mjs' | 'ts';
-type Block = {
+export type Block = {
   code: string;
   endLine: number;
   head: string;
@@ -109,7 +109,7 @@ const decide = (label: string): Pick<Block, 'issue' | 'kind' | 'runnable'> => {
   if (SKIP.has(label)) return { issue: '', kind: '', runnable: false };
   return { issue: '', kind: '', runnable: false };
 };
-const parseReadme = (text: string): Block[] => {
+export const parseReadme = (text: string): Block[] => {
   const lines = text.split(/\r?\n/);
   const out: Block[] = [];
   let headRaw = '';
