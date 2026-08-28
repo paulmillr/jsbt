@@ -8,6 +8,7 @@
  *
  * @module
  */
+import { pseudoRandomBytes } from './random.ts';
 export type BenchStats = {
   stats: {
     rme: number;
@@ -80,69 +81,6 @@ const csvCell = (val: unknown): string => {
   return /[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
 };
 export const printCsvRow = (values: unknown[]): void => printOutput(values.map(csvCell).join(','));
-// FNV-1a, for deriving numeric seeds from strings.
-function hashString(str: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-function parseSeed(seed: number | string): number {
-  if (typeof seed === 'string') return hashString(seed);
-  if (!Number.isSafeInteger(seed)) throw new Error('seed must be a safe integer or string');
-  return seed >>> 0;
-}
-// mulberry32 core behind every rng here: every 32-bit seed is valid (including 0)
-// and nearby seeds diverge immediately.
-function makeU32(seed: number): () => number {
-  let state = seed | 0;
-  return () => {
-    let t = (state = (state + 0x6d2b79f5) | 0);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return (t ^ (t >>> 14)) >>> 0;
-  };
-}
-/**
- * Deterministic PRNG (mulberry32): returns floats in [0, 1).
- * Seed with a number or a string (hashed internally): `makeRng('glare')`.
- * Use separate rngs with separate seeds for independent purposes.
- */
-export function makeRng(seed: number | string = 0): () => number {
-  const next = makeU32(parseSeed(seed));
-  return () => next() / 0x100000000;
-}
-/** Deterministic Fisher–Yates shuffle; returns a new array. */
-export function shuffled<T>(items: readonly T[], seed: number | string): T[] {
-  const rng = makeRng(seed);
-  const out = [...items];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
-/**
- * Deterministic pseudo-random bytes over the same PRNG as makeRng.
- * Constant or sequential data can bias benchmarks: AES table & cache access patterns,
- * branch prediction, memcmp fast paths. Same seed always produces the same bytes,
- * keeping runs comparable across libraries and versions.
- */
-export function pseudoRandomBytes(length: number, seed: number | string = 0x9e3779b9): Uint8Array {
-  if (!Number.isSafeInteger(length) || length < 0)
-    throw new Error('pseudoRandomBytes length must be a non-negative safe integer');
-  const next = makeU32(parseSeed(seed));
-  const out = new Uint8Array(length);
-  let x = 0;
-  for (let i = 0; i < length; i++) {
-    if ((i & 3) === 0) x = next();
-    out[i] = x & 0xff;
-    x >>>= 8;
-  }
-  return out;
-}
 /** Deterministic benchmark buffer; content depends on size, so `buf(32)` differs from `buf(64)`. */
 export function buf(size: number): Uint8Array {
   return pseudoRandomBytes(size, size);
