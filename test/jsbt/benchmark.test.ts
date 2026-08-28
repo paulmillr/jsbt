@@ -1,6 +1,7 @@
 import { deepStrictEqual, rejects, throws } from 'node:assert';
 import { should } from '../../src/test.ts';
 
+import * as random from '../../src/random.ts';
 type BenchModule = typeof import('../../src/benchmark.ts');
 
 const capture = async (fn: () => Promise<void>) => {
@@ -338,19 +339,19 @@ should('bench pseudoRandomBytes and buf are deterministic', async () => {
   const bench = await loadBench({ NO_COLOR: '1' });
   const differs = (x: Uint8Array, y: Uint8Array) =>
     x.length !== y.length || x.some((value, i) => value !== y[i]);
-  const a = bench.pseudoRandomBytes(64, 1);
-  deepStrictEqual(a, bench.pseudoRandomBytes(64, 1));
+  const a = random.pseudoRandomBytes(64, 1);
+  deepStrictEqual(a, random.pseudoRandomBytes(64, 1));
   deepStrictEqual(a.length, 64);
-  deepStrictEqual(differs(a, bench.pseudoRandomBytes(64, 2)), true);
+  deepStrictEqual(differs(a, random.pseudoRandomBytes(64, 2)), true);
   deepStrictEqual(new Set(a).size > 16, true, 'content should not be constant');
-  deepStrictEqual(bench.pseudoRandomBytes(0).length, 0);
-  // seed 0 is a valid mulberry32 seed, not a degenerate all-zero stream
-  deepStrictEqual(new Set(bench.pseudoRandomBytes(64, 0)).size > 16, true);
-  throws(() => bench.pseudoRandomBytes(-1), /non-negative safe integer/);
-  throws(() => bench.pseudoRandomBytes(1.5), /non-negative safe integer/);
-  throws(() => bench.pseudoRandomBytes(1, 0.5), /seed must be a safe integer/);
+  deepStrictEqual(random.pseudoRandomBytes(0).length, 0);
+  // seed 0 is a valid seed, not a degenerate all-zero stream
+  deepStrictEqual(new Set(random.pseudoRandomBytes(64, 0)).size > 16, true);
+  throws(() => random.pseudoRandomBytes(-1), /non-negative safe integer/);
+  throws(() => random.pseudoRandomBytes(1.5), /non-negative safe integer/);
+  throws(() => random.pseudoRandomBytes(1, 0.5), /seed must be a safe integer/);
 
-  deepStrictEqual(bench.buf(32), bench.pseudoRandomBytes(32, 32));
+  deepStrictEqual(bench.buf(32), random.pseudoRandomBytes(32, 32));
   deepStrictEqual(differs(bench.buf(32), bench.buf(33).subarray(0, 32)), true);
 });
 
@@ -386,9 +387,8 @@ should('bench observeGc counts gc events under allocation churn', async () => {
 });
 
 should('bench makeRng and shuffled are deterministic and seed-flexible', async () => {
-  const bench = await loadBench({ NO_COLOR: '1' });
   const seq = (seed: number | string, n = 8) => {
-    const rng = bench.makeRng(seed);
+    const rng = random.makeRng(seed);
     return Array.from({ length: n }, () => rng());
   };
   deepStrictEqual(seq(1), seq(1));
@@ -404,11 +404,11 @@ should('bench makeRng and shuffled are deterministic and seed-flexible', async (
     seq(42, 1000).every((value) => value >= 0 && value < 1),
     true
   );
-  throws(() => bench.makeRng(1.5), /seed must be a safe integer or string/);
+  throws(() => random.makeRng(1.5), /seed must be a safe integer or string/);
 
   const items = Array.from({ length: 16 }, (_, i) => i);
-  const a = bench.shuffled(items, 1);
-  deepStrictEqual(a, bench.shuffled(items, 1));
+  const a = random.shuffled(items, 1);
+  deepStrictEqual(a, random.shuffled(items, 1));
   deepStrictEqual(
     [...a].sort((x, y) => x - y),
     items,
@@ -419,11 +419,11 @@ should('bench makeRng and shuffled are deterministic and seed-flexible', async (
     Array.from({ length: 16 }, (_, i) => i),
     'must not mutate input'
   );
-  deepStrictEqual(a.join() === bench.shuffled(items, 2).join(), false);
-  deepStrictEqual(bench.shuffled(items, 'seed'), bench.shuffled(items, 'seed'));
+  deepStrictEqual(a.join() === random.shuffled(items, 2).join(), false);
+  deepStrictEqual(random.shuffled(items, 'seed'), random.shuffled(items, 'seed'));
 
   // pseudoRandomBytes shares the same core: string seeds work there too
-  deepStrictEqual(bench.pseudoRandomBytes(16, 'seed'), bench.pseudoRandomBytes(16, 'seed'));
+  deepStrictEqual(random.pseudoRandomBytes(16, 'seed'), random.pseudoRandomBytes(16, 'seed'));
 });
 
 should('bench warmup runs sync and async callbacks until its deadline', async () => {

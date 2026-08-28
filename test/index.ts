@@ -24,5 +24,6 @@ import './jsbt/spec-constraints.test.ts';
 import './jsbt/tests.test.ts';
 import './jsbt/ts-source-rel.test.ts';
 import './jsbt/utils.test.ts';
+import './random.test.ts';
 
 should.runWhen(import.meta.url);

@@ -11,6 +11,8 @@
     "benchmark-compare.d.ts",
     "test.js",
     "test.d.ts",
+    "random.js",
+    "random.d.ts",
     "tsconfig.json",
     "tsconfig.cjs.json",
     "tsconfig.test.json"
