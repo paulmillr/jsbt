@@ -6,9 +6,10 @@ Zero-dependency helpers for secure JS apps, used by [noble cryptography](https:/
 
 1. [test](#test) 500-line simplicity with mocha-like syntax and parallelism
 2. [benchmark](#benchmark) with nanosecond resolution
-3. [CLI](#cli) to check project for common mistakes
-4. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
-5. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
+3. [random](#random) micro property-based testing with shrinking and replayable failures
+4. [CLI](#cli) to check project for common mistakes
+5. [workflows](#workflows) for GitHub CI actions for test / npm+jsr publish
+6. [tsconfig](#tsconfig) with strict, doc-friendly, with type stripping
 
 ## Usage
 
@@ -177,7 +178,67 @@ ENV variables:
 - `JSBT_BENCHMARK_DRY_RUN=1` prints the selected matrix without measuring.
 - `JSBT_CSV=1` forces CSV output.
 
-## 3. CLI
+## 3. random
+
+Micro property-based testing: seeded generators with edge-case bias, counterexample
+shrinking, and replayable failures. Also exports deterministic PRNG helpers for benchmarks.
+
+```js
+import * as random from '@paulmillr/jsbt/random.js';
+
+const mod = (n) => ((n % 13n) + 13n) % 13n;
+random.assert(
+  random.property(random.bigint(1n, 12n), random.bigint(1n, 12n), (a, b) => {
+    return mod(a * b) === mod(b * a);
+  })
+);
+```
+
+Each `assert` runs the predicate `numRuns` times (default 100) with fresh random inputs.
+A predicate fails by returning `false` or throwing. On failure, the inputs are shrunk to a
+minimal counterexample and an error is thrown with a replayable `{ seed, path }`:
+
+```
+Property failed after 5 runs and 12 shrinks { seed: "0x92b21f0e5830f4c7", path: 4 }
+Counterexample: [0n, 3n]
+Predicate returned false
+```
+
+Replay just the failing run with `random.assert(prop, { seed: '0x92b21f0e5830f4c7', path: 4 })`.
+
+Arbitraries (value generators):
+
+- `int({ min, max })` integer; defaults to signed 32-bit range. Shrinks toward 0.
+- `bigint(min, max)` or `bigint({ min, max })` bigint; defaults to ±2^256. Shrinks toward 0.
+- `array(item, { minLength, maxLength })` array of values from `item`; length defaults to [0, 10].
+- `bytes({ minLength, maxLength })` Uint8Array; length defaults to [0, 64].
+- `string({ unit, minLength, maxLength })` string of `unit`s; default unit is a printable ASCII char.
+- `tuple(...arbitraries)` fixed-length tuple, one arbitrary per position.
+- `arb.map(fn)` transforms generated values; shrinking happens in the source domain.
+- `arb.filter(predicate)` keeps matching values; throws if <1% of values match.
+
+Every fourth run is biased toward edge cases: range bounds, zero, empty and constant-filled
+arrays — inputs uniform sampling rarely hits.
+
+Runner:
+
+- `property(...arbitraries, predicate)` declares "for all values, the predicate holds".
+- `asyncProperty(...arbitraries, asyncPredicate)` same, for async predicates; run with `await assert(...)`.
+- `assert(prop, { numRuns, seed, path })` runs a property; options override the global config.
+- `config({ numRuns, seed })` merges options into the global config and returns a snapshot.
+
+`integer`, `bigInt`, `uint8Array`, and `configureGlobal` are aliases matching
+[fast-check](https://fast-check.dev) names, easing migration of `import * as fc` call sites.
+
+Deterministic helpers, seeded by a number or a string label:
+
+- `makeRng(seed)` returns a `() => number` producing floats in [0, 1).
+- `shuffled(items, seed)` deterministic Fisher–Yates shuffle; returns a new array.
+- `pseudoRandomBytes(length, seed)` deterministic pseudo-random bytes. Constant or sequential
+  data can bias benchmarks (cache access patterns, branch prediction, memcmp fast paths);
+  same seed always produces the same bytes, keeping runs comparable across libraries.
+
+## 4. CLI
 
 `jsbt-check` CLI executes audit helpers.
 
@@ -312,7 +373,7 @@ The check itself prints no stats. To debug an over-budget entry, ask bismar dire
 `bismar -bs <selector...>` for the numbers, `bismar <selector> > out.js` for the measured
 bundle bytes.
 
-## 4. Workflows
+## 5. Workflows
 
 Secure GitHub CI configs for testing & publishing JS packages.
 
@@ -356,7 +417,7 @@ jobs:
       id-token: write
 ```
 
-## 5. tsconfig
+## 6. tsconfig
 
 Strict typescript v6+ configs, friendly to type stripping. Uses `isolatedDeclarations` and `verbatimModuleSyntax`
 to ensure node.js is able to natively run typescript files without compilation.
