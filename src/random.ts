@@ -66,8 +66,7 @@ function createRng(seed: bigint): Rng {
     return min + (r % span);
   };
   const big = (span: bigint): bigint => {
-    let bits = 0;
-    for (let s = span - 1n; s > 0n; s >>= 1n) bits++;
+    const bits = span > 1n ? (span - 1n).toString(2).length : 0;
     const mask = (1n << BigInt(bits)) - 1n;
     for (;;) {
       let v = 0n;
@@ -97,47 +96,54 @@ function leaf<T>(value: T): Shrinkable<T> {
   return { value, shrink: () => [] };
 }
 
-function towardNum(value: number, target: number): Shrinkable<number>[] {
-  const out: Shrinkable<number>[] = [];
-  for (let d = value - target; d !== 0; d = Math.trunc(d / 2)) {
+// Halving steps from value toward target, simplest candidates first.
+function toward<T extends number | bigint>(value: T, target: T, half: (d: T) => T): Shrinkable<T>[];
+function toward(value: any, target: any, half: (d: any) => any): Shrinkable<any>[] {
+  const out: Shrinkable<any>[] = [];
+  for (let d = value - target; d; d = half(d)) {
     const c = value - d;
-    out.push({ value: c, shrink: () => towardNum(c, target) });
+    out.push({ value: c, shrink: () => toward(c, target, half) });
   }
   return out;
 }
+const halfNum = (d: number): number => Math.trunc(d / 2);
+const halfBig = (d: bigint): bigint => d / 2n;
 
-function towardBig(value: bigint, target: bigint): Shrinkable<bigint>[] {
-  const out: Shrinkable<bigint>[] = [];
-  for (let d = value - target; d !== 0n; d /= 2n) {
-    const c = value - d;
-    out.push({ value: c, shrink: () => towardBig(c, target) });
-  }
-  return out;
-}
-
-function arrayNode<T>(items: Shrinkable<T>[], minLength: number): Shrinkable<T[]> {
+function arrayNode<T>(items: Shrinkable<T>[], minLength: number, itemShrinks = 3): Shrinkable<T[]> {
   return {
     value: items.map((i) => i.value),
     shrink: () => {
       const out: Shrinkable<T[]>[] = [];
       const n = items.length;
       if (n > minLength) {
-        out.push(arrayNode(items.slice(0, minLength), minLength)); // minimal prefix
+        out.push(arrayNode(items.slice(0, minLength), minLength, itemShrinks)); // minimal prefix
         const half = Math.max(minLength, Math.floor(n / 2));
-        if (half < n && half > minLength) out.push(arrayNode(items.slice(0, half), minLength));
+        if (half < n && half > minLength)
+          out.push(arrayNode(items.slice(0, half), minLength, itemShrinks));
         for (let i = 0; i < n && out.length < 16; i++)
-          out.push(arrayNode(items.slice(0, i).concat(items.slice(i + 1)), minLength));
+          out.push(
+            arrayNode(
+              items.filter((_, j) => j !== i),
+              minLength,
+              itemShrinks
+            )
+          );
       }
       for (let i = 0; i < n; i++) {
-        for (const s of items[i].shrink().slice(0, 3)) {
+        for (const s of items[i].shrink().slice(0, itemShrinks)) {
           const copy = items.slice();
           copy[i] = s;
-          out.push(arrayNode(copy, minLength));
+          out.push(arrayNode(copy, minLength, itemShrinks));
         }
       }
       return out;
     },
   };
+}
+
+// A tuple is an array that never changes length; positions shrink without a per-item cap.
+function tupleNode(nodes: Shrinkable<unknown>[]): Shrinkable<unknown[]> {
+  return arrayNode(nodes, nodes.length, Infinity);
 }
 
 function mapNode<T, U>(node: Shrinkable<T>, fn: (value: T) => U): Shrinkable<U> {
@@ -186,6 +192,19 @@ export interface IntOptions {
   max?: number;
 }
 
+// Shared int/bigint shape: 25% edge-case picks when biased, halving shrinks toward target.
+function ranged<T extends number | bigint>(
+  target: T,
+  edges: T[],
+  uniform: (rng: Rng) => T,
+  half: (d: T) => T
+): Arbitrary<T> {
+  return new Arbitrary((rng, biased) => {
+    const v = biased && rng.chance(0.25) ? rng.pick(edges) : uniform(rng);
+    return { value: v, shrink: () => toward(v, target, half) };
+  });
+}
+
 /** Integer in [min, max]; defaults to signed 32-bit range. Shrinks toward 0. */
 export function int(options: IntOptions = {}): Arbitrary<number> {
   const { min = -0x80000000, max = 0x7fffffff } = options;
@@ -195,10 +214,7 @@ export function int(options: IntOptions = {}): Arbitrary<number> {
   const edges = [...new Set([target, min, max, min + 1, max - 1])].filter(
     (v) => v >= min && v <= max
   );
-  return new Arbitrary((rng, biased) => {
-    const v = biased && rng.chance(0.25) ? rng.pick(edges) : rng.int(min, max);
-    return { value: v, shrink: () => towardNum(v, target) };
-  });
+  return ranged(target, edges, (rng) => rng.int(min, max), halfNum);
 }
 
 /** Constraints for {@link bigint}. */
@@ -222,10 +238,7 @@ export function bigint(min?: bigint | BigintOptions, max?: bigint): Arbitrary<bi
   if (lo > hi) throw new Error('random.bigint: expected min <= max');
   const target = lo > 0n ? lo : hi < 0n ? hi : 0n;
   const edges = [...new Set([target, lo, hi, lo + 1n, hi - 1n])].filter((v) => v >= lo && v <= hi);
-  return new Arbitrary((rng, biased) => {
-    const v = biased && rng.chance(0.25) ? rng.pick(edges) : lo + rng.big(hi - lo + 1n);
-    return { value: v, shrink: () => towardBig(v, target) };
-  });
+  return ranged(target, edges, (rng) => lo + rng.big(hi - lo + 1n), halfBig);
 }
 
 /** Constraints for length-bounded arbitraries. */
@@ -256,10 +269,8 @@ export function array<T>(item: Arbitrary<T>, options: LengthOptions = {}): Arbit
 
 /** Uint8Array with length in [minLength, maxLength], default [0, 64]. */
 export function bytes(options: LengthOptions = {}): Arbitrary<Uint8Array> {
-  const { minLength = 0, maxLength = 64 } = options;
-  return array(int({ min: 0, max: 0xff }), { minLength, maxLength }).map((a) =>
-    Uint8Array.from(a)
-  );
+  const { minLength, maxLength = 64 } = options;
+  return array(int({ min: 0, max: 0xff }), { minLength, maxLength }).map((a) => Uint8Array.from(a));
 }
 
 /** Constraints for {@link string}. */
@@ -278,6 +289,18 @@ export function string(options: StringOptions = {}): Arbitrary<string> {
   return array(unit, { minLength, maxLength }).map((units) => units.join(''));
 }
 
+/** One of the given constant values, uniformly; shrinks toward earlier values. */
+export function constantFrom<T>(...values: T[]): Arbitrary<T> {
+  if (values.length === 0) throw new Error('random.constantFrom: expected at least one value');
+  return int({ min: 0, max: values.length - 1 }).map((i) => values[i]);
+}
+
+/** Draws from one of the given arbitraries, chosen uniformly per sample. */
+export function oneof<T>(...arbitraries: Arbitrary<T>[]): Arbitrary<T> {
+  if (arbitraries.length === 0) throw new Error('random.oneof: expected at least one arbitrary');
+  return new Arbitrary((rng, biased) => rng.pick(arbitraries).sample(rng, biased));
+}
+
 /** Maps a value tuple to the matching tuple of arbitraries. */
 export type ArbitraryTuple<T extends unknown[]> = { [K in keyof T]: Arbitrary<T[K]> };
 
@@ -287,23 +310,6 @@ export function tuple<T extends unknown[]>(...items: ArbitraryTuple<T>): Arbitra
     const nodes = items.map((a) => a.sample(rng, biased));
     return tupleNode(nodes) as Shrinkable<T>;
   });
-}
-
-function tupleNode(nodes: Shrinkable<unknown>[]): Shrinkable<unknown[]> {
-  return {
-    value: nodes.map((n) => n.value),
-    shrink: () => {
-      const out: Shrinkable<unknown[]>[] = [];
-      for (let i = 0; i < nodes.length; i++) {
-        for (const s of nodes[i].shrink()) {
-          const copy = nodes.slice();
-          copy[i] = s;
-          out.push(tupleNode(copy));
-        }
-      }
-      return out;
-    },
-  };
 }
 
 // ---------------------------------------------------------------- runner
@@ -329,18 +335,18 @@ export interface AsyncProperty<T extends unknown[]> {
 export function property<T extends unknown[]>(
   ...args: [...arbitraries: ArbitraryTuple<T>, predicate: (...values: T) => boolean | void]
 ): Property<T> {
-  const predicate = args[args.length - 1] as (...values: T) => boolean | void;
-  const arbitraries = args.slice(0, -1) as unknown as Arbitrary<unknown>[];
-  return { arbitraries, predicate, isAsync: false };
+  return makeProperty(args, false);
 }
 
 /** Like {@link property}, for async predicates. */
 export function asyncProperty<T extends unknown[]>(
   ...args: [...arbitraries: ArbitraryTuple<T>, predicate: (...values: T) => Promise<boolean | void>]
 ): AsyncProperty<T> {
-  const predicate = args[args.length - 1] as (...values: T) => Promise<boolean | void>;
-  const arbitraries = args.slice(0, -1) as unknown as Arbitrary<unknown>[];
-  return { arbitraries, predicate, isAsync: true };
+  return makeProperty(args, true);
+}
+
+function makeProperty(args: unknown[], isAsync: boolean): any {
+  return { arbitraries: args.slice(0, -1), predicate: args[args.length - 1], isAsync };
 }
 
 /** Global and per-assert run configuration. */
@@ -368,16 +374,6 @@ export interface AssertOptions extends Partial<Config> {
   path?: number;
 }
 
-// fast-check-compatible aliases, easing migration of `import * as fc` call sites.
-/** Alias of {@link int} (fast-check name). */
-export const integer: typeof int = int;
-/** Alias of {@link bigint} (fast-check name). */
-export const bigInt: typeof bigint = bigint;
-/** Alias of {@link bytes} (fast-check name). */
-export const uint8Array: typeof bytes = bytes;
-/** Alias of {@link config} (fast-check name). */
-export const configureGlobal: typeof config = config;
-
 // ------------------------------------------------- deterministic helpers
 
 /**
@@ -392,10 +388,10 @@ export function makeRng(seed: number | string = 0): () => number {
 
 /** Deterministic Fisher–Yates shuffle; returns a new array. */
 export function shuffled<T>(items: readonly T[], seed: number | string): T[] {
-  const rng = makeRng(seed);
+  const rng = createRng(normalizeSeed(seed));
   const out = [...items];
   for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
+    const j = rng.int(0, i);
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
@@ -497,6 +493,39 @@ function sampleRun(arbitraries: Arbitrary<unknown>[], rng: Rng, biased: boolean)
   return tupleNode(arbitraries.map((a) => a.sample(rng, biased)));
 }
 
+// Sample/shrink engine shared by the sync and async assert paths: yields value
+// tuples to evaluate and receives each Outcome back through next().
+function* runner(
+  prop: Property<unknown[]> | AsyncProperty<unknown[]>,
+  seed: bigint,
+  first: number,
+  last: number
+): Generator<unknown[], void, Outcome> {
+  for (let run = first; run <= last; run++) {
+    const node = sampleRun(prop.arbitraries, runSeed(seed, run), run % 4 === 0);
+    const out = yield node.value;
+    if (out.ok) continue;
+    let cur = node;
+    let lastError = out.error;
+    let shrinks = 0;
+    let evals = 0;
+    shrinking: while (evals < SHRINK_EVALS_MAX) {
+      for (const cand of cur.shrink()) {
+        if (++evals > SHRINK_EVALS_MAX) break shrinking;
+        const res = yield cand.value;
+        if (!res.ok) {
+          cur = cand;
+          lastError = res.error;
+          shrinks++;
+          continue shrinking;
+        }
+      }
+      break;
+    }
+    throw failure(cur.value, seed, run, run - first + 1, shrinks, lastError);
+  }
+}
+
 /**
  * Run a property `numRuns` times with fresh random inputs; on failure, shrink
  * to a minimal counterexample and throw with a replayable `{ seed, path }`.
@@ -516,6 +545,7 @@ export function assert(
   const seed = seedInput === undefined ? randomSeed() : normalizeSeed(seedInput);
   const first = options.path ?? 0;
   const last = options.path ?? numRuns - 1;
+  const gen = runner(prop, seed, first, last);
 
   if (prop.isAsync) {
     const check = async (values: unknown[]): Promise<Outcome> => {
@@ -526,29 +556,8 @@ export function assert(
       }
     };
     return (async () => {
-      for (let run = first; run <= last; run++) {
-        const node = sampleRun(prop.arbitraries, runSeed(seed, run), run % 4 === 0);
-        const out = await check(node.value);
-        if (out.ok) continue;
-        let cur = node;
-        let lastError = out.error;
-        let shrinks = 0;
-        let evals = 0;
-        shrinking: while (evals < SHRINK_EVALS_MAX) {
-          for (const cand of cur.shrink()) {
-            if (++evals > SHRINK_EVALS_MAX) break shrinking;
-            const res = await check(cand.value);
-            if (!res.ok) {
-              cur = cand;
-              lastError = res.error;
-              shrinks++;
-              continue shrinking;
-            }
-          }
-          break;
-        }
-        throw failure(cur.value, seed, run, run - first + 1, shrinks, lastError);
-      }
+      let step = gen.next();
+      while (!step.done) step = gen.next(await check(step.value));
     })();
   }
 
@@ -563,27 +572,19 @@ export function assert(
       throw new Error('random.assert: predicate returned a promise; use asyncProperty');
     return { ok: res !== false };
   };
-  for (let run = first; run <= last; run++) {
-    const node = sampleRun(prop.arbitraries, runSeed(seed, run), run % 4 === 0);
-    const out = check(node.value);
-    if (out.ok) continue;
-    let cur = node;
-    let lastError = out.error;
-    let shrinks = 0;
-    let evals = 0;
-    shrinking: while (evals < SHRINK_EVALS_MAX) {
-      for (const cand of cur.shrink()) {
-        if (++evals > SHRINK_EVALS_MAX) break shrinking;
-        const res = check(cand.value);
-        if (!res.ok) {
-          cur = cand;
-          lastError = res.error;
-          shrinks++;
-          continue shrinking;
-        }
-      }
-      break;
-    }
-    throw failure(cur.value, seed, run, run - first + 1, shrinks, lastError);
-  }
+  let step = gen.next();
+  while (!step.done) step = gen.next(check(step.value));
 }
+
+// ----------------------------------------------------- fast-check compat
+// Aliases easing migration of `import * as fc` call sites; safe to drop once
+// no consumer spells the fast-check names.
+
+/** Alias of {@link int} (fast-check name). */
+export const integer: typeof int = int;
+/** Alias of {@link bigint} (fast-check name). */
+export const bigInt: typeof bigint = bigint;
+/** Alias of {@link bytes} (fast-check name). */
+export const uint8Array: typeof bytes = bytes;
+/** Alias of {@link config} (fast-check name). */
+export const configureGlobal: typeof config = config;
