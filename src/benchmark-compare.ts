@@ -104,6 +104,8 @@ const paintDuration = (duration: bigint, code: string): string =>
 // change sits inside noise (the combined rme of the two runs) or the factor is
 // below 1.1x — too small to bother the reader with.
 function diffText(value: number, best: number, higherIsBetter: boolean, noise: number): string {
+  // equal values are a tie even at 0 — sub-resolution timers round p50 to 0 ns
+  if (value === best) return `${gray}≈${reset}`;
   if (!(value > 0) || !(best > 0)) return `${gray}N/A${reset}`;
   const ratio = higherIsBetter ? best / value : value / best;
   if (ratio < 1.1 || (Math.abs(value - best) / best) * 100 <= noise) return `${gray}≈${reset}`;

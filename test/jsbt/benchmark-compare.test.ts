@@ -432,7 +432,7 @@ should('bench-compare mode time prints formatted mean duration', async () => {
     const plain = lines.map((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, ''));
     // bytes is set, but time mode displays duration instead of mib/sec
     const rows = plain.filter((line) =>
-      /^[ab]  [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x))?$/.test(line)
+      /^[ab]  [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x|N\/A))?$/.test(line)
     );
     deepStrictEqual(rows.length, 2);
     deepStrictEqual(
@@ -463,7 +463,7 @@ should('bench-compare mode latency prints p50, p95, and p100', async () => {
     );
     const plain = lines.map((line) => line.replace(/\x1b\[\d+(;\d+)*m/g, ''));
     const rows = plain.filter((line) =>
-      /^[ab]  p50 [\d.]+ (?:ns|μs|ms|s|min) · p95 [\d.]+ (?:ns|μs|ms|s|min) · p100 [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x))?$/.test(
+      /^[ab]  p50 [\d.]+ (?:ns|μs|ms|s|min) · p95 [\d.]+ (?:ns|μs|ms|s|min) · p100 [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x|N\/A))?$/.test(
         line
       )
     );
@@ -515,7 +515,7 @@ should('bench-compare sizes shorthand generates buffers, bytes and mode', async 
     // auto mode: below 1KB rows print duration, from 1KB on mib/sec
     const small = plain.slice(plain.indexOf('# size=32B') + 1, plain.indexOf('# size=32B') + 3);
     deepStrictEqual(
-      small.every((line) => /^[ab]  [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x))?$/.test(line)),
+      small.every((line) => /^[ab]  [\d.]+ (?:ns|μs|ms|s|min)( · (≈|-[\d.]+x|N\/A))?$/.test(line)),
       true,
       small.join('|')
     );
