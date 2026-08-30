@@ -379,12 +379,12 @@ const runRepeatedFastRunModule = () => {
   const text = `${res.stdout || ''}${res.stderr || ''}${error ? `\n${error.message}` : ''}`;
   return { errorCode: error?.code, status: res.status, text };
 };
-const runNondeterministicModule = () => {
+const runNondeterministicModule = (name = 'nondeterministic-registration.ts') => {
   const env = { ...process.env, JSBT_WORKERS: '2', NO_COLOR: '1' };
   delete env.JSBT_BAIL;
   delete env.JSBT_QUIET;
   delete env.JSBT_FILTER;
-  const res = spawnSync(process.execPath, [fixture('nondeterministic-registration.ts')], {
+  const res = spawnSync(process.execPath, [fixture(name)], {
     cwd: BASE,
     encoding: 'utf8',
     env,
@@ -887,6 +887,14 @@ should('test parallel runner bounds worker initialization time', () => {
 
 should('test parallel runner rejects diverging worker task lists', () => {
   const res = runNondeterministicModule();
+  if (res.errorCode === 'EPERM') return;
+  deepStrictEqual(res.status, 0, res.text);
+  deepStrictEqual(/RESULT: resolved/.test(res.text), false, res.text);
+  deepStrictEqual(/task list differs from primary/.test(res.text), true, res.text);
+});
+
+should('test parallel runner rejects diverging worker task metadata', () => {
+  const res = runNondeterministicModule('nondeterministic-metadata.ts');
   if (res.errorCode === 'EPERM') return;
   deepStrictEqual(res.status, 0, res.text);
   deepStrictEqual(/RESULT: resolved/.test(res.text), false, res.text);

@@ -606,25 +606,37 @@ function splitParallelTasks(tasks: Task[]) {
   return { parallelTasks, serialTasks };
 }
 
-// FNV-1a over the task paths. Assignments cross the IPC channel as bare indices,
-// so a worker whose replayed task list diverges from the primary's would silently
-// run the wrong tests; the primary compares fingerprints and fails loudly instead.
-function taskFingerprint(parallelTasks: Task[], serialTasks: Task[]): string {
-  let hash = 0x811c9dc5;
-  const mix = (text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193);
-    }
-  };
-  for (const tasks of [parallelTasks, serialTasks]) {
-    for (const task of tasks) {
-      mix(taskPath(task));
-      mix('\n');
-    }
-    mix('--\n');
-  }
-  return `${(hash >>> 0).toString(16)}:${parallelTasks.length}:${serialTasks.length}`;
+// Assignments cross the IPC channel as bare indices, so a worker whose replayed task
+// manifest diverges from the primary's would silently run the wrong tests. Bind the
+// complete structural manifest with SHA-256: path-only/non-cryptographic hashes can
+// miss skip/hook changes and permit practical collisions.
+const fnToString = Function.prototype.toString;
+function manifestItem(item: StackItem): unknown[] {
+  const source = (fn: unknown): string => (typeof fn === 'function' ? fnToString.call(fn) : '');
+  return [
+    String(item.message),
+    !!item.skip,
+    !!item.only,
+    !!item.serial,
+    source(item.test),
+    source(item.beforeAll),
+    source(item.afterAll),
+    source(item.beforeEach),
+    source(item.afterEach),
+  ];
+}
+
+async function taskFingerprint(parallelTasks: Task[], serialTasks: Task[]): Promise<string> {
+  const manifest = JSON.stringify(
+    [parallelTasks, serialTasks].map((tasks) =>
+      tasks.map((task) => [task.path.map(manifestItem), manifestItem(task)])
+    )
+  );
+  let subtle = globalThis.crypto?.subtle;
+  if (!subtle && isNode) subtle = (await imp('node:crypto')).webcrypto.subtle;
+  if (!subtle) throw new Error('parallel tests require Web Crypto SHA-256 support');
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(manifest));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function runSequentialFallback(items: Task[], total: number, startTime: number) {
@@ -748,7 +760,7 @@ async function requestParallelTask(
 
 async function runParallelWorker(parallelTasks: Task[], serialTasks: Task[]) {
   const channel = webWorker !== undefined ? makeWebWorkerChannel() : makeClusterChannel();
-  const fingerprint = taskFingerprint(parallelTasks, serialTasks);
+  const fingerprint = await taskFingerprint(parallelTasks, serialTasks);
   let tasksDone = 0;
   let serialTasksDone = 0;
   if (opts.QUIET) quietCounter = { pass: 0, fail: 0 };
@@ -844,7 +856,7 @@ async function runPrimaryParallel(
 ): Promise<number> {
   begin(total, totalW);
   if (!opts.QUIET) console.log();
-  const expectedFingerprint = taskFingerprint(parallelTasks, serialTasks);
+  const expectedFingerprint = await taskFingerprint(parallelTasks, serialTasks);
   const workers: SpawnedWorker[] = [];
   let nextTask = 0;
   let tasksDone = 0;
