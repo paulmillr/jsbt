@@ -649,7 +649,7 @@ export const runWorker = <T>(code: string, opts: WorkerOpts<T>): Promise<T> =>
     if (opts.timeout)
       timer = setTimeout(() => finish(opts.timeout!.result(), false, true), opts.timeout.ms);
     worker.once('message', (msg) => finish(msg as T));
-    worker.once('error', (error) => finish(opts.error(error.message)));
+    worker.once('error', (error) => finish(opts.error((error as Error).message)));
     worker.once('exit', (code) => {
       if (done) return;
       finish(
@@ -699,7 +699,7 @@ export const runWorkerExec = (code: string, opts: WorkerExecOpts): Promise<ExecR
     });
     worker.once(
       'error',
-      (error) => void stop({ error, ok: false, status: null, stderr: '', stdout: '' })
+      (error) => void stop({ error: error as Error, ok: false, status: null, stderr: '', stdout: '' })
     );
     worker.once('exit', (code) => {
       if (done) return;
