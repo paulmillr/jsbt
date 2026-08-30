@@ -403,11 +403,7 @@ const missingDepHint = (on: boolean): string[] => [
     color.gray,
     on
   ),
-  paint(
-    `      jsbt-check --gen-config adds the missing packages to that file`,
-    color.gray,
-    on
-  ),
+  paint(`      jsbt-check --gen-config adds the missing packages to that file`, color.gray, on),
 ];
 const checkHead = (name: string | undefined): CheckHead | undefined =>
   name && Object.hasOwn(CHECK_ALIASES, name)
@@ -679,7 +675,7 @@ const runCheck = async (argv: string[], opts: Opts = {}): Promise<void> => {
           res[i].ms
         );
     };
-    for (let i = 0; i < list.length; ) {
+    for (let i = 0; i < list.length;) {
       const item = list[i];
       if (item.serial) {
         await save(i++, item.head, () => runCheckTask(item.head, args, taskOpts));

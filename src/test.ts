@@ -654,8 +654,7 @@ type ParallelReadyMessage = {
 };
 
 type ParallelTaskMessage =
-  | { name: 'parallelTask'; taskIndex: number | null }
-  | { name: 'parallelSerial' };
+  { name: 'parallelTask'; taskIndex: number | null } | { name: 'parallelSerial' };
 
 type ParallelTestsMessage = {
   name: 'parallelTests';

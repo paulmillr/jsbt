@@ -699,7 +699,8 @@ export const runWorkerExec = (code: string, opts: WorkerExecOpts): Promise<ExecR
     });
     worker.once(
       'error',
-      (error) => void stop({ error: error as Error, ok: false, status: null, stderr: '', stdout: '' })
+      (error) =>
+        void stop({ error: error as Error, ok: false, status: null, stderr: '', stdout: '' })
     );
     worker.once('exit', (code) => {
       if (done) return;
