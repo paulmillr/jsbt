@@ -21,7 +21,7 @@
     "jsbt-check": "jsbt-check.bin.js"
   },
   "dependencies": {
-    "bismar": "0.1.8",
+    "bismar": "0.1.9",
     "typescript": "6.0.3"
   },
   "devDependencies": {
